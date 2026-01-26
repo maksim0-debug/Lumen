@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Свет 2.1</string>
+    <string name="widget_description">График отключений света для группы 2.1</string>
+</resources>

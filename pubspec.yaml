@@ -1,0 +1,73 @@
+name: vikl
+description: A new Flutter project.
+publish_to: 'none'
+version: 2.3.5+11
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  http: ^1.2.0
+  html: ^0.15.4
+  intl: ^0.20.2
+  
+  flutter_local_notifications: 19.5.0
+  timezone: 0.10.1
+  # workmanager несовместим с Android v2 embedding, убран
+  # Для Android используем android_alarm_manager_plus или встроенный WorkManager напрямую
+
+  home_widget: ^0.6.0
+
+  # --- Windows ---
+  launch_at_startup: ^0.5.1
+  package_info_plus: ^8.0.0
+  window_manager: ^0.4.3
+  tray_manager: ^0.2.4
+  workmanager: ^0.9.0+3
+  flutter_inappwebview: ^6.0.0 
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.5
+  win32: ^5.15.0
+  msix: ^3.16.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+  # Генератор иконок
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+     - assets/icon.png
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: false
+  image_path: "assets/icon.png"
+  min_sdk_android: 21
+  windows:
+    generate: true
+    image_path: "assets/icon.png"
+    icon_size: 48
+
+msix_config:
+  display_name: Lumen
+  publisher_display_name: Vikl
+  identity_name: Vikl.Lumen.App
+  msix_version: 2.3.2.7
+  logo_path: assets/icon_msix_transparent.png
+  store_logo_path: assets/icon.png
+  capabilities: internetClient
+  execution_alias: lumen
+  extensions:
+    - |
+      <desktop:Extension Category="windows.startupTask" Executable="vikl.exe" EntryPoint="Windows.FullTrustApplication">
+        <desktop:StartupTask TaskId="LumenStartup" Enabled="true" DisplayName="Lumen" />
+      </desktop:Extension>
