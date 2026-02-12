@@ -1,12 +1,13 @@
 import 'dart:io';
-import 'package:flutter/services.dart'; 
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:path_provider/path_provider.dart'; 
+import 'package:path_provider/path_provider.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/schedule_status.dart';
 import 'parser_service.dart';
+import 'preferences_helper.dart';
 
 class NotificationService {
   static NotificationService? _instance;
@@ -27,7 +28,7 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
 
   bool _isInitialized = false;
-  String? _windowsIconPath; 
+  String? _windowsIconPath;
 
   Future<void> init() async {
     if (_isInitialized) {
@@ -38,7 +39,6 @@ class NotificationService {
     print("[NotificationService] ========== ІНІЦІАЛІЗАЦІЯ ==========");
 
     try {
-      
       print("[NotificationService] Ініціалізація timezone...");
       tz.initializeTimeZones();
       try {
@@ -49,19 +49,14 @@ class NotificationService {
         print("[NotificationService] ⚠️ Timezone: local");
       }
 
-      
-      
       const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/launcher_icon');
 
-      
-      
       final WindowsInitializationSettings windowsSettings =
           WindowsInitializationSettings(
               appName: 'Lumen',
               appUserModelId: 'Vikl.Lumen.App',
-              guid: '27042046-8148-4367-9d7a-757877477430' 
-              );
+              guid: '27042046-8148-4367-9d7a-757877477430');
 
       final InitializationSettings settings = InitializationSettings(
         android: androidSettings,
@@ -72,15 +67,14 @@ class NotificationService {
       bool? result = await _notificationsPlugin.initialize(
         settings,
         onDidReceiveNotificationResponse: (details) {
-          print(
-              "[NotificationService] Клік по сповіщенню: ${details.payload}");
+          print("[NotificationService] Клік по сповіщенню: ${details.payload}");
         },
       );
       print("[NotificationService] initialize() повернув: $result");
 
-      
       if (Platform.isAndroid) {
-        print("[NotificationService] Платформа: Android. Налаштування каналів...");
+        print(
+            "[NotificationService] Платформа: Android. Налаштування каналів...");
         await _createNotificationChannels();
         await _requestPermissions();
       } else if (Platform.isWindows) {
@@ -96,17 +90,13 @@ class NotificationService {
     }
   }
 
-  
   Future<void> _prepareWindowsIcon() async {
     try {
       final directory = await getTemporaryDirectory();
-      
-      
+
       String assetIcon = 'assets/icon.png';
 
-      
       try {
-        
         final byteData = await rootBundle.load(assetIcon);
 
         final iconFile =
@@ -133,7 +123,6 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin>();
 
     if (androidImpl != null) {
-      
       const immediateChannel = AndroidNotificationChannel(
         'immediate_channel',
         'Миттєві сповіщення',
@@ -143,7 +132,6 @@ class NotificationService {
         enableVibration: true,
       );
 
-      
       const testChannel = AndroidNotificationChannel(
         'test_channel',
         'Тестові сповіщення',
@@ -153,7 +141,6 @@ class NotificationService {
         enableVibration: true,
       );
 
-      
       const scheduleChannel = AndroidNotificationChannel(
         'schedule_channel',
         'Заплановані сповіщення',
@@ -181,17 +168,14 @@ class NotificationService {
               AndroidFlutterLocalNotificationsPlugin>();
 
       if (androidImpl != null) {
-        
         try {
           final notifPerm = await androidImpl.requestNotificationsPermission();
-          print(
-              "[NotificationService] Дозвіл на сповіщення (13+): $notifPerm");
+          print("[NotificationService] Дозвіл на сповіщення (13+): $notifPerm");
         } catch (e) {
           print(
               "[NotificationService] requestNotificationsPermission не підтримується (Android <13): $e");
         }
 
-        
         try {
           final alarmPerm = await androidImpl.requestExactAlarmsPermission();
           print(
@@ -201,7 +185,6 @@ class NotificationService {
               "[NotificationService] requestExactAlarmsPermission помилка: $e");
         }
 
-        
         try {
           final canSchedule = await androidImpl.canScheduleExactNotifications();
           print(
@@ -220,7 +203,6 @@ class NotificationService {
     }
   }
 
-  
   Future<void> showImmediate(String title, String body,
       {String? groupName}) async {
     print("[NotificationService] ========== showImmediate ==========");
@@ -233,9 +215,14 @@ class NotificationService {
     }
 
     try {
-      final prefs = await SharedPreferences.getInstance();
+      SharedPreferences? prefs;
+      try {
+        prefs = await PreferencesHelper.getSafeInstance();
+      } catch (e) {
+        print("Error getting SharedPreferences in showImmediate: $e");
+      }
       final List<String> notificationGroups =
-          prefs.getStringList('notification_groups') ?? [];
+          prefs?.getStringList('notification_groups') ?? [];
 
       String finalTitle = title;
       if (groupName != null && notificationGroups.length > 1) {
@@ -244,7 +231,6 @@ class NotificationService {
 
       print("[NotificationService] Створення Platform-specific details...");
 
-      
       const AndroidNotificationDetails androidDetails =
           AndroidNotificationDetails(
         'immediate_channel',
@@ -255,17 +241,14 @@ class NotificationService {
         icon: '@mipmap/launcher_icon',
       );
 
-      
-      final WindowsNotificationDetails windowsDetails = WindowsNotificationDetails(
-          
-          );
+      final WindowsNotificationDetails windowsDetails =
+          WindowsNotificationDetails();
 
       final NotificationDetails details = NotificationDetails(
         android: androidDetails,
         windows: windowsDetails,
       );
 
-      
       final uniqueGroupFactor = (groupName?.hashCode ?? 0) % 1000;
       final timeFactor = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final notificationId = timeFactor + uniqueGroupFactor;
@@ -286,23 +269,27 @@ class NotificationService {
     }
   }
 
-  
   Future<void> scheduleNotificationsForToday(FullSchedule fullSchedule,
       {String? groupName, bool cancelExisting = true}) async {
     if (!_isInitialized) await init();
 
-    
     if (!Platform.isAndroid && !Platform.isWindows) return;
 
-    
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final bool notify1hOff = prefs.getBool('notify_1h_before_off') ?? true;
-    final bool notify30mOff = prefs.getBool('notify_30m_before_off') ?? true;
-    final bool notify5mOff = prefs.getBool('notify_5m_before_off') ?? true;
-    final bool notify1hOn = prefs.getBool('notify_1h_before_on') ?? true;
-    final bool notify30mOn = prefs.getBool('notify_30m_before_on') ?? true;
+    SharedPreferences? prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (e) {
+      print(
+          "Error getting SharedPreferences in scheduleNotificationsForToday: $e");
+    }
+
+    final bool notify1hOff = prefs?.getBool('notify_1h_before_off') ?? true;
+    final bool notify30mOff = prefs?.getBool('notify_30m_before_off') ?? true;
+    final bool notify5mOff = prefs?.getBool('notify_5m_before_off') ?? true;
+    final bool notify1hOn = prefs?.getBool('notify_1h_before_on') ?? true;
+    final bool notify30mOn = prefs?.getBool('notify_30m_before_on') ?? true;
     final List<String> notificationGroups =
-        prefs.getStringList('notification_groups') ?? [];
+        prefs?.getStringList('notification_groups') ?? [];
 
     print(
         "[NotificationService] ========== ПЛАНУВАННЯ НА ДЕНЬ ($groupName) ==========");
@@ -322,7 +309,6 @@ class NotificationService {
           await _notificationsPlugin.cancelAll();
         }
       } else {
-        
         await _notificationsPlugin.cancelAll();
       }
     }
@@ -330,7 +316,6 @@ class NotificationService {
     final now = tz.TZDateTime.now(tz.local);
     print("[NotificationService] Поточний час: $now");
 
-    
     final periods = _calculateOutagePeriods(fullSchedule.today,
         nextDaySchedule: fullSchedule.tomorrow);
     print(
@@ -348,7 +333,6 @@ class NotificationService {
       final startTimeStr =
           "${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')}";
 
-      
       String endTimeStr;
       if (endHour >= 24) {
         final nextDayHour = endHour - 24;
@@ -364,9 +348,6 @@ class NotificationService {
         titlePrefix = "${groupName.replaceAll("GPV", "Гр. ")}: ";
       }
 
-      
-
-      
       if (notify1hOff) {
         var dueTime1h = tz.TZDateTime(
                 tz.local, now.year, now.month, now.day, startHour, startMinute)
@@ -382,7 +363,6 @@ class NotificationService {
         }
       }
 
-      
       if (notify30mOff) {
         var dueTime30m = tz.TZDateTime(
                 tz.local, now.year, now.month, now.day, startHour, startMinute)
@@ -399,7 +379,6 @@ class NotificationService {
         }
       }
 
-      
       if (notify5mOff) {
         var dueTime5m = tz.TZDateTime(
                 tz.local, now.year, now.month, now.day, startHour, startMinute)
@@ -415,39 +394,29 @@ class NotificationService {
         }
       }
 
-      
-
       var endDateTime =
           tz.TZDateTime(tz.local, now.year, now.month, now.day, 0, 0)
               .add(Duration(hours: endHour, minutes: endMinute));
-      
-      
-      
-      
-      
+
       String onUntilStr = "";
       for (var p in periods) {
-         
-         
-         
-         
-         
-         
-         if (p['startHour']! > endHour || (p['startHour'] == endHour && p['startMinute']! > endMinute)) {
-             final nextStartHour = p['startHour']!;
-             final nextStartMinute = p['startMinute']!;
-             
-             if (nextStartHour >= 24) {
-                 final h = nextStartHour - 24;
-                 onUntilStr = " (до $h:${nextStartMinute.toString().padLeft(2, '0')} завтра)";
-             } else {
-                 onUntilStr = " (до $nextStartHour:${nextStartMinute.toString().padLeft(2, '0')})";
-             }
-             break;
-         }
+        if (p['startHour']! > endHour ||
+            (p['startHour'] == endHour && p['startMinute']! > endMinute)) {
+          final nextStartHour = p['startHour']!;
+          final nextStartMinute = p['startMinute']!;
+
+          if (nextStartHour >= 24) {
+            final h = nextStartHour - 24;
+            onUntilStr =
+                " (до $h:${nextStartMinute.toString().padLeft(2, '0')} завтра)";
+          } else {
+            onUntilStr =
+                " (до $nextStartHour:${nextStartMinute.toString().padLeft(2, '0')})";
+          }
+          break;
+        }
       }
 
-      
       if (notify1hOn) {
         try {
           var dueTimeOn1h = endDateTime.subtract(const Duration(hours: 1));
@@ -460,12 +429,10 @@ class NotificationService {
             );
           }
         } catch (e) {
-          print(
-              "[NotificationService] ⚠️ Помилка планування включення 1h: $e");
+          print("[NotificationService] ⚠️ Помилка планування включення 1h: $e");
         }
       }
 
-      
       if (notify30mOn) {
         try {
           var dueTimeOn30m = endDateTime.subtract(const Duration(minutes: 30));
@@ -473,7 +440,8 @@ class NotificationService {
             await _scheduleOne(
               id: idPrefix + endHour * 1000 + endMinute * 10 + 5,
               title: "${titlePrefix}Скоро ввімкнення",
-              body: "Через 30 хвилин ($endTimeStr) світло мають увімкнути${onUntilStr}",
+              body:
+                  "Через 30 хвилин ($endTimeStr) світло мають увімкнути${onUntilStr}",
               time: dueTimeOn30m,
             );
           }
@@ -492,15 +460,12 @@ class NotificationService {
     return idx >= 0 ? idx : 0;
   }
 
-  
-  
   List<Map<String, int>> _calculateOutagePeriods(DailySchedule schedule,
       {DailySchedule? nextDaySchedule}) {
     final periods = <Map<String, int>>[];
     bool inOutage = false;
     int startIndex = -1;
 
-    
     for (int i = 0; i < 48; i++) {
       int hour = i ~/ 2;
       bool isSecondHalf = (i % 2) == 1;
@@ -533,11 +498,9 @@ class NotificationService {
       }
     }
 
-    
     if (inOutage) {
-      int endSlot = 48; 
+      int endSlot = 48;
 
-      
       if (nextDaySchedule != null) {
         for (int j = 0; j < 48; j++) {
           int hour = j ~/ 2;
@@ -557,7 +520,7 @@ class NotificationService {
           if (isContinuity) {
             endSlot++;
           } else {
-            break; 
+            break;
           }
         }
       }
@@ -573,7 +536,6 @@ class NotificationService {
     return periods;
   }
 
-  
   bool _isOff(LightStatus status) {
     return status == LightStatus.off || status == LightStatus.semiOff;
   }
@@ -632,7 +594,6 @@ class NotificationService {
     }
   }
 
-  
   Future<void> testNotifications() async {
     print("[NotificationService] ========================================");
     print("[NotificationService] ========== ТЕСТ СПОВІЩЕНЬ ==========");
@@ -645,32 +606,26 @@ class NotificationService {
 
     print("[NotificationService] Статус ініціалізації: $_isInitialized");
 
-    
     print("[NotificationService] [1/4] Відправка миттєвого сповіщення...");
     await showImmediate("Тест", "Миттєве сповіщення працює!");
     print("[NotificationService] [1/4] ✅ Миттєве відправлено");
 
     if (Platform.isWindows) {
-      
       print("[NotificationService] Windows: тест запланованих...");
     }
 
-    
     if (Platform.isAndroid || Platform.isWindows) {
       print("[NotificationService] [2/4] Очистка старих тестових сповіщень...");
-      
-      
+
       print("[NotificationService] [2/4] ✅ Очищено");
 
       final now = tz.TZDateTime.now(tz.local);
       print("[NotificationService] Поточний час: $now");
 
-      
       print("[NotificationService] [3/4] Планування: через 10 сек...");
       final in10sec = now.add(const Duration(seconds: 10));
       await _scheduleTest(99991, "Тест 10 сек", "Минуло 10 секунд!", in10sec);
 
-      
       print("[NotificationService] [3/4] Планування: через 1 мин...");
       final in1min = now.add(const Duration(minutes: 1));
       await _scheduleTest(99993, "Тест 1 хв", "Минула 1 хвилина!", in1min);
@@ -678,7 +633,6 @@ class NotificationService {
       print("[NotificationService] [3/4] ✅ Все заплановано");
     }
 
-    
     print("[NotificationService] [4/4] Перевірка списку запланованих...");
     try {
       final pending = await _notificationsPlugin.pendingNotificationRequests();

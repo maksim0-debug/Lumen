@@ -122,16 +122,9 @@ class ScheduleVersion {
   DailySchedule toSchedule() => DailySchedule.fromEncodedString(hash);
 
   String get timeString {
-    final now = DateTime.now();
-    bool isDifferentDay =
-        savedAt.year != now.year || savedAt.month != now.month || savedAt.day != now.day;
-
     final timeStr = "${savedAt.hour.toString().padLeft(2, '0')}:${savedAt.minute.toString().padLeft(2, '0')}";
-    
-    if (isDifferentDay) {
-       return "${savedAt.day.toString().padLeft(2, '0')}.${savedAt.month.toString().padLeft(2, '0')} $timeStr";
-    }
-    return timeStr;
+    final dateStr = "${savedAt.day.toString().padLeft(2, '0')}.${savedAt.month.toString().padLeft(2, '0')}";
+    return "$dateStr $timeStr";
   }
 
   String get outageString {

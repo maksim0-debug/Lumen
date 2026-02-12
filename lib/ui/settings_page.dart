@@ -1,11 +1,17 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
 import '../services/parser_service.dart';
 
+import '../services/backup_service.dart';
+import '../services/power_monitor_service.dart';
+import '../services/preferences_helper.dart';
+import 'logs_page.dart';
+
 class SettingsPage extends StatefulWidget {
-  final VoidCallback? onThemeChanged; 
+  final VoidCallback? onThemeChanged;
 
   const SettingsPage({super.key, this.onThemeChanged});
 
@@ -20,9 +26,11 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _notify1hBeforeOn = true;
   bool _notify30mBeforeOn = true;
   bool _notifyScheduleChange = true;
-  bool _isDarkMode = true; 
+  bool _isDarkMode = true;
   bool _launchAtStartup = false;
   bool _isLoading = true;
+  bool _enableLogging = true;
+  bool _powerMonitorEnabled = false;
   List<String> _notificationGroups = [];
 
   @override
@@ -32,45 +40,79 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      SharedPreferences? prefs;
+      try {
+        prefs = await PreferencesHelper.getSafeInstance();
+      } catch (e) {
+        print("Error getting SharedPreferences in _loadSettings: $e");
+      }
 
-    bool launchOnStart = false;
-    if (Platform.isWindows) {
-      launchOnStart = await launchAtStartup.isEnabled();
-    }
+      // If prefs is null, we can't load settings, but we should not crash.
+      // We will just use defaults initialized in the fields.
 
-    if (!mounted) return;
-
-    setState(() {
-      _launchAtStartup = launchOnStart;
-      _notify1hBeforeOff = prefs.getBool('notify_1h_before_off') ?? true;
-      _notify30mBeforeOff = prefs.getBool('notify_30m_before_off') ?? true;
-      _notify5mBeforeOff = prefs.getBool('notify_5m_before_off') ?? true;
-      _notify1hBeforeOn = prefs.getBool('notify_1h_before_on') ?? true;
-      _notify30mBeforeOn = prefs.getBool('notify_30m_before_on') ?? true;
-      _notifyScheduleChange = prefs.getBool('notify_schedule_change') ?? true;
-      _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
-      _notificationGroups = prefs.getStringList('notification_groups') ?? [];
-
-      if (_notificationGroups.isEmpty) {
-        String? currentGroup = prefs.getString('selected_group');
-        if (currentGroup != null) {
-          _notificationGroups = [currentGroup];
+      bool launchOnStart = false;
+      if (Platform.isWindows) {
+        try {
+          launchOnStart = await launchAtStartup.isEnabled();
+        } catch (e) {
+          print("Error checking launchAtStartup: $e");
         }
       }
 
-      _isLoading = false;
-    });
+      if (!mounted) return;
+
+      setState(() {
+        _launchAtStartup = launchOnStart;
+        if (prefs != null) {
+          _notify1hBeforeOff = prefs.getBool('notify_1h_before_off') ?? true;
+          _notify30mBeforeOff = prefs.getBool('notify_30m_before_off') ?? true;
+          _notify5mBeforeOff = prefs.getBool('notify_5m_before_off') ?? true;
+          _notify1hBeforeOn = prefs.getBool('notify_1h_before_on') ?? true;
+          _notify30mBeforeOn = prefs.getBool('notify_30m_before_on') ?? true;
+          _notifyScheduleChange =
+              prefs.getBool('notify_schedule_change') ?? true;
+          _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
+          _enableLogging = prefs.getBool('enable_logging') ?? true;
+          _powerMonitorEnabled =
+              prefs.getBool('power_monitor_enabled') ?? false;
+          _notificationGroups =
+              prefs.getStringList('notification_groups') ?? [];
+
+          if (_notificationGroups.isEmpty) {
+            String? currentGroup = prefs.getString('selected_group');
+            if (currentGroup != null) {
+              _notificationGroups = [currentGroup];
+            }
+          }
+        }
+
+        _isLoading = false;
+      });
+    } catch (e) {
+      print("Error loading settings: $e");
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   Future<void> _saveSetting(String key, bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(key, value);
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      await prefs.setBool(key, value);
+    } catch (e) {
+      print("Error saving setting $key: $e");
+    }
   }
 
   Future<void> _saveGroups() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('notification_groups', _notificationGroups);
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      await prefs.setStringList('notification_groups', _notificationGroups);
+    } catch (e) {
+      print("Error saving groups: $e");
+    }
   }
 
   @override
@@ -197,6 +239,152 @@ class _SettingsPageState extends State<SettingsPage> {
                     _saveSetting('notify_schedule_change', val);
                   },
                 ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    "Моніторинг 220В",
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.amber,
+                    ),
+                  ),
+                ),
+                _buildSwitchTile(
+                  "Реальний моніторинг",
+                  "Статус електроенергії через сенсор (Firebase)",
+                  _powerMonitorEnabled,
+                  (val) async {
+                    setState(() => _powerMonitorEnabled = val);
+                    await _saveSetting('power_monitor_enabled', val);
+                    await PowerMonitorService().setEnabled(val);
+                  },
+                ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    "Резервне копіювання (Beta)",
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.download),
+                  title: const Text("Створити резервну копію"),
+                  subtitle: const Text("Зберегти базу даних у файл"),
+                  onTap: () async {
+                    try {
+                      setState(() => _isLoading = true);
+                      final path = await BackupService().exportDatabase();
+                      if (mounted) {
+                        if (path != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Збережено в: $path")));
+                        } else {
+                          // Share sheet opened, no specific success message needed usually
+                        }
+                      }
+                    } catch (e) {
+                      if (mounted)
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Помилка експорту: $e")));
+                    } finally {
+                      if (mounted) setState(() => _isLoading = false);
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.upload),
+                  title: const Text("Відновити з файлу"),
+                  subtitle: const Text("Замінити поточну базу даних"),
+                  onTap: () async {
+                    // Show confirmation dialog
+                    bool? confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                              title: const Text("Відновлення даних"),
+                              content: const Text(
+                                  "УВАГА! Всі поточні дані будуть замінені даними з файлу. Це неможливо скасувати.\n\nПродовжити?"),
+                              actions: [
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text("Скасувати")),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text("Відновити",
+                                        style: TextStyle(color: Colors.red))),
+                              ],
+                            ));
+
+                    if (confirm != true) return;
+
+                    try {
+                      setState(() => _isLoading = true);
+                      await BackupService().importDatabase();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                            content: Text(
+                                "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних.")));
+                      }
+                    } catch (e) {
+                      if (mounted)
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Помилка відновлення: $e")));
+                    } finally {
+                      if (mounted) setState(() => _isLoading = false);
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.data_object),
+                  title: const Text("Імпорт історії з JSON"),
+                  subtitle:
+                      const Text("Додати графіки з парсера (smart_parser)"),
+                  onTap: () async {
+                    try {
+                      setState(() => _isLoading = true);
+                      final count = await BackupService().importHistoryJson();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(
+                                "Успішно імпортовано: $count записів. Перезапустіть, щоб побачити зміни.")));
+                      }
+                    } catch (e) {
+                      if (mounted)
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Помилка імпорту: $e")));
+                    } finally {
+                      if (mounted) setState(() => _isLoading = false);
+                    }
+                  },
+                ),
+                const Divider(),
+                ListTile(
+                  title: const Text("Переглянути логи"),
+                  subtitle: const Text("Історія роботи фонових завдань"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                  onTap: () {
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const LogsPage()));
+                  },
+                ),
+                _buildSwitchTile(
+                  "Увімкнути логування",
+                  "Записувати детальну інформацію про роботу",
+                  _enableLogging,
+                  (val) {
+                    setState(() => _enableLogging = val);
+                    _saveSetting('enable_logging', val);
+                  },
+                ),
+                const SizedBox(height: 20),
               ],
             ),
     );

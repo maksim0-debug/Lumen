@@ -1,163 +1,486 @@
+import 'dart:io';
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path/path.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../models/schedule_status.dart';
+import 'preferences_helper.dart';
 
 class HistoryService {
   static final HistoryService _instance = HistoryService._internal();
   factory HistoryService() => _instance;
   HistoryService._internal();
 
-  
-  static const int _maxVersionsPerDay = 50;
+  Database? _database;
 
-  
-  
-  Future<void> saveHistory(Map<String, FullSchedule> allSchedules) async {
+  Future<Database> get database async {
+    if (_database != null && _database!.isOpen) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  Future<String> get dbPath async {
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    return join(documentsDirectory.path, 'schedule_history.db');
+  }
+
+  Future<void> close() async {
+    if (_database != null && _database!.isOpen) {
+      await _database!.close();
+      _database = null;
+      print("[HistoryService] Database closed");
+    }
+  }
+
+  Future<Database> _initDatabase() async {
+    if (Platform.isWindows || Platform.isLinux) {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    }
+
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    final path = join(documentsDirectory.path, 'schedule_history.db');
+
+    return await openDatabase(
+      path,
+      version: 4,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS schedule_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_key TEXT,
+            target_date TEXT,
+            schedule_code TEXT,
+            dtek_updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS app_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            level TEXT,
+            message TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS power_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firebase_key TEXT UNIQUE,
+            status TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            device TEXT,
+            synced_at TEXT,
+            is_manual INTEGER DEFAULT 0
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+          CREATE TABLE IF NOT EXISTS app_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            level TEXT,
+            message TEXT
+          )
+        ''');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+          CREATE TABLE IF NOT EXISTS power_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firebase_key TEXT UNIQUE,
+            status TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            device TEXT,
+            synced_at TEXT
+          )
+        ''');
+        }
+        if (oldVersion < 4) {
+          // Check if column already exists to prevent crash
+          final List<Map<String, dynamic>> columns =
+              await db.rawQuery('PRAGMA table_info(power_events)');
+          final hasIsManual =
+              columns.any((column) => column['name'] == 'is_manual');
+          if (!hasIsManual) {
+            await db.execute(
+                'ALTER TABLE power_events ADD COLUMN is_manual INTEGER DEFAULT 0');
+          }
+        }
+      },
+    );
+  }
+
+  Future<void> logAction(String message, {String level = 'INFO'}) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final now = DateTime.now();
-      final dateKey =
-          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final prefs = await PreferencesHelper.getSafeInstance();
+      final enabled = prefs.getBool('enable_logging') ?? true;
+      if (!enabled && level != 'ERROR') return; // Always log errors
 
-      for (var entry in allSchedules.entries) {
-        final group = entry.key;
-        final schedule = entry.value;
+      final db = await database;
+      await db.insert('app_logs', {
+        'timestamp': DateTime.now().toIso8601String(),
+        'level': level,
+        'message': message,
+      });
+      print("[HistoryService LOG] $message");
+    } catch (e) {
+      print("[HistoryService] Failed to log: $e");
+    }
+  }
 
-        
-        final key = "history_v2_${dateKey}_$group";
+  Future<List<Map<String, dynamic>>> getLogs({int limit = 100}) async {
+    final db = await database;
+    return await db.query('app_logs', orderBy: 'id DESC', limit: limit);
+  }
 
-        
-        List<ScheduleVersion> versions = await _loadVersions(prefs, key);
+  Future<void> clearLogs() async {
+    final db = await database;
+    await db.delete('app_logs');
+  }
 
-        
-        final newVersion =
-            ScheduleVersion.fromSchedule(schedule.today, at: now);
+  Future<void> persistVersion({
+    required String groupKey,
+    required String targetDate,
+    required String scheduleCode,
+    required String dtekUpdatedAt,
+  }) async {
+    final db = await database;
 
-        
-        if (versions.isEmpty || versions.last.hash != newVersion.hash) {
-          versions.add(newVersion);
+    final List<Map<String, dynamic>> maps = await db.query(
+      'schedule_history',
+      where: 'group_key = ? AND target_date = ? AND dtek_updated_at = ?',
+      whereArgs: [groupKey, targetDate, dtekUpdatedAt],
+    );
 
-          
-          if (versions.length > _maxVersionsPerDay) {
-            versions = versions.sublist(versions.length - _maxVersionsPerDay);
+    if (maps.isEmpty) {
+      await db.insert(
+        'schedule_history',
+        {
+          'group_key': groupKey,
+          'target_date': targetDate,
+          'schedule_code': scheduleCode,
+          'dtek_updated_at': dtekUpdatedAt,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      print(
+          "[HistoryService] Saved new version for $groupKey ($targetDate): $dtekUpdatedAt");
+    }
+  }
+
+  Future<String?> getLatestUpdatedAt({
+    required String groupKey,
+    required String targetDate,
+  }) async {
+    final db = await database;
+
+    final List<Map<String, dynamic>> maps = await db.query(
+      'schedule_history',
+      columns: ['dtek_updated_at'],
+      where: 'group_key = ? AND target_date = ?',
+      whereArgs: [groupKey, targetDate],
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+
+    if (maps.isNotEmpty) {
+      return maps.first['dtek_updated_at'] as String;
+    }
+    return null;
+  }
+
+  Future<List<ScheduleVersion>> getVersionsForDate(
+      DateTime date, String groupKey) async {
+    final db = await database;
+    final dateStr =
+        "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+
+    // Always try to migrate first to ensure we have all data (including Today if mixed)
+    await _tryMigrateFromPrefs(date, groupKey);
+
+    final List<Map<String, dynamic>> maps = await db.query(
+      'schedule_history',
+      where: 'group_key = ? AND target_date = ?',
+      whereArgs: [groupKey, dateStr],
+      orderBy: 'id ASC',
+    );
+
+    List<ScheduleVersion> versions = [];
+    for (var map in maps) {
+      String timeStr = map['dtek_updated_at'] as String;
+      DateTime savedAt;
+      try {
+        // Try to find full date-time first (DD.MM.YYYY HH:mm)
+        // Matches: 27.01.2026 19:54 or 27.01.26 19:54
+        final RegExp dateExp =
+            RegExp(r'(\d{2})\.(\d{2})\.(\d{2,4})\s+(\d{1,2}):(\d{2})');
+        final dateMatch = dateExp.firstMatch(timeStr);
+
+        if (dateMatch != null) {
+          int day = int.parse(dateMatch.group(1)!);
+          int month = int.parse(dateMatch.group(2)!);
+          int year = int.parse(dateMatch.group(3)!);
+          if (year < 100) year += 2000;
+          int h = int.parse(dateMatch.group(4)!);
+          int m = int.parse(dateMatch.group(5)!);
+          savedAt = DateTime(year, month, day, h, m);
+        } else {
+          // Fallback to just time (HH:mm)
+          final RegExp exp = RegExp(r'(\d{1,2}):(\d{2})');
+          final match = exp.firstMatch(timeStr);
+          if (match != null) {
+            int h = int.parse(match.group(1)!);
+            int m = int.parse(match.group(2)!);
+            savedAt = DateTime(date.year, date.month, date.day, h, m);
+          } else {
+            savedAt = DateTime.now();
+          }
+        }
+      } catch (e) {
+        savedAt = DateTime.now();
+      }
+
+      final schedule = DailySchedule.fromEncodedString(map['schedule_code']);
+
+      versions.add(ScheduleVersion(
+          hash: map['schedule_code'],
+          savedAt: savedAt,
+          outageMinutes: schedule.totalOutageMinutes));
+    }
+
+    return versions;
+  }
+
+  Future<void> importHistoryFromJson(String jsonStr) async {
+    try {
+      if (jsonStr.trim().isEmpty) throw Exception("Empty JSON string");
+
+      final Map<String, dynamic> data = jsonDecode(jsonStr);
+      int importedCount = 0;
+      int skippedCount = 0;
+
+      for (var entry in data.entries) {
+        String key = entry.key;
+
+        // Handle raw shared_preferences.json prefixes (e.g. "flutter.")
+        if (key.startsWith("flutter.")) {
+          key = key.substring(8);
+        }
+
+        // Only process history keys
+        final isV2 = key.startsWith("history_v2_");
+        final isV1 = !isV2 &&
+            key.startsWith("history_"); // e.g. history_2026-01-19_GPV1.1
+
+        if (!isV2 && !isV1) continue;
+
+        final parts = key.split('_');
+        // V2: history, v2, DATE, GROUP
+        // V1: history, DATE, GROUP
+
+        String dateStr;
+        String groupKey;
+
+        if (isV2) {
+          if (parts.length < 4) continue;
+          dateStr = parts[2];
+          groupKey = parts[3];
+        } else {
+          if (parts.length < 3) continue;
+          dateStr = parts[1];
+          groupKey = parts[2];
+        }
+
+        var value = entry.value;
+
+        // Handle double-encoded values (common in raw config files)
+        if (value is String) {
+          try {
+            if (value.startsWith("[") || value.startsWith("{")) {
+              value = jsonDecode(value);
+            }
+          } catch (e) {
+            // If decode fails, it might be a simple V1 string "10101..."
+          }
+        }
+
+        if (isV2) {
+          if (value is! List) {
+            skippedCount++;
+            continue;
           }
 
-          
-          await _saveVersions(prefs, key, versions);
-          print(
-              "[HistoryService] Нова версія збережена: $group (всього: ${versions.length})");
+          for (var item in value) {
+            Map<String, dynamic>? versionMap;
+
+            if (item is String) {
+              try {
+                versionMap = jsonDecode(item);
+              } catch (e) {}
+            } else if (item is Map) {
+              // Already a map
+              try {
+                versionMap = Map<String, dynamic>.from(item);
+              } catch (e) {}
+            }
+
+            if (versionMap != null) {
+              try {
+                final version = ScheduleVersion.fromJson(versionMap);
+
+                await persistVersion(
+                    groupKey: groupKey,
+                    targetDate: dateStr,
+                    scheduleCode: version.hash,
+                    dtekUpdatedAt:
+                        "${version.savedAt.hour}:${version.savedAt.minute.toString().padLeft(2, '0')}");
+                importedCount++;
+              } catch (e) {
+                // print("Item import error: $e");
+              }
+            }
+          }
         } else {
-          print("[HistoryService] Хеш не змінився для $group, пропускаємо");
-        }
-      }
-    } catch (e) {
-      print("[HistoryService] Error saving history: $e");
-    }
-  }
-
-  
-  Future<List<ScheduleVersion>> getVersionsForDate(
-      DateTime date, String group) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final dateKey =
-          "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
-
-      
-      final keyV2 = "history_v2_${dateKey}_$group";
-      List<ScheduleVersion> versions = await _loadVersions(prefs, keyV2);
-
-      if (versions.isNotEmpty) {
-        return versions;
-      }
-
-      
-      final keyOld = "history_${dateKey}_$group";
-      if (prefs.containsKey(keyOld)) {
-        final encoded = prefs.getString(keyOld);
-        if (encoded != null && encoded.length == 24) {
-          
-          final schedule = DailySchedule.fromEncodedString(encoded);
-          final version = ScheduleVersion(
-            hash: encoded,
-            savedAt:
-                DateTime(date.year, date.month, date.day, 0, 0), 
-            outageMinutes: schedule.totalOutageMinutes,
-          );
-          return [version];
+          // V1 - Value might be String or Number if pure digits
+          String code = value.toString();
+          if (code.length >= 24) {
+            try {
+              // V1 didn't track save time, so we assume 00:00
+              await persistVersion(
+                  groupKey: groupKey,
+                  targetDate: dateStr,
+                  scheduleCode: code,
+                  dtekUpdatedAt: "00:00");
+              importedCount++;
+            } catch (e) {
+              skippedCount++;
+            }
+          }
         }
       }
 
-      return [];
-    } catch (e) {
-      print("[HistoryService] Error loading versions: $e");
-      return [];
-    }
-  }
+      final msg =
+          "Import finished: $importedCount records imported, $skippedCount keys skipped.";
+      await logAction(msg);
+      print("[HistoryService] $msg");
 
-  
-  
-  Future<DailySchedule?> getHistoryForDate(DateTime date, String group) async {
-    final versions = await getVersionsForDate(date, group);
-    if (versions.isEmpty) return null;
-    return versions.last.toSchedule();
-  }
-
-  
-  Future<DailySchedule?> getVersionByIndex(
-      DateTime date, String group, int index) async {
-    final versions = await getVersionsForDate(date, group);
-    if (index < 0 || index >= versions.length) return null;
-    return versions[index].toSchedule();
-  }
-
-  
-
-  Future<List<ScheduleVersion>> _loadVersions(
-      SharedPreferences prefs, String key) async {
-    try {
-      if (!prefs.containsKey(key)) return [];
-
-      await prefs.reload(); 
-      final jsonStr = prefs.getString(key);
-      if (jsonStr == null || jsonStr.isEmpty) return [];
-
-      final List<dynamic> jsonList = jsonDecode(jsonStr);
-      return jsonList
-          .map((j) => ScheduleVersion.fromJson(j as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      print("[HistoryService] Error parsing versions: $e");
-      return [];
-    }
-  }
-
-  Future<void> _saveVersions(SharedPreferences prefs, String key,
-      List<ScheduleVersion> versions) async {
-    final jsonList = versions.map((v) => v.toJson()).toList();
-    await prefs.setString(key, jsonEncode(jsonList));
-  }
-
-  
-  Future<List<DateTime>> getAvailableDates(String group,
-      {int daysBack = 30}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final available = <DateTime>[];
-    final now = DateTime.now();
-
-    for (int i = 0; i < daysBack; i++) {
-      final date = now.subtract(Duration(days: i));
-      final dateKey =
-          "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
-
-      final keyV2 = "history_v2_${dateKey}_$group";
-      final keyOld = "history_${dateKey}_$group";
-
-      if (prefs.containsKey(keyV2) || prefs.containsKey(keyOld)) {
-        available.add(DateTime(date.year, date.month, date.day));
+      if (importedCount == 0 && data.isNotEmpty) {
+        throw Exception(
+            "No valid history records found. Checked ${data.length} keys.");
       }
+    } catch (e) {
+      print("Import error: $e");
+      await logAction("Import error: $e", level: "ERROR");
+      throw e;
+    }
+  }
+
+  Future<String> exportHistoryToJson() async {
+    final Map<String, dynamic> exportData = {};
+
+    // 1. Export from Database (Primary Source)
+    try {
+      final db = await database;
+      final List<Map<String, dynamic>> rows =
+          await db.query('schedule_history');
+
+      for (var row in rows) {
+        try {
+          String group = row['group_key'];
+          String date = row['target_date']; // YYYY-MM-DD
+          String code = row['schedule_code'];
+          String time = row['dtek_updated_at']; // H:mm
+
+          final key = "history_v2_${date}_$group";
+
+          // Reconstruct DateTime
+          final dParts = date.split('-');
+          final tParts = time.split(':');
+          final dt = DateTime(int.parse(dParts[0]), int.parse(dParts[1]),
+              int.parse(dParts[2]), int.parse(tParts[0]), int.parse(tParts[1]));
+
+          // Reconstruct ScheduleVersion
+          final sch = DailySchedule.fromEncodedString(code);
+          final ver = ScheduleVersion(
+              hash: code, savedAt: dt, outageMinutes: sch.totalOutageMinutes);
+
+          if (!exportData.containsKey(key)) {
+            exportData[key] = <String>[];
+          }
+          (exportData[key] as List).add(jsonEncode(ver.toJson()));
+        } catch (e) {
+          // Skip malformed DB row
+        }
+      }
+    } catch (e) {
+      await logAction("Export DB Error: $e", level: "WARN");
     }
 
-    return available;
+    // 2. Export from SharedPreferences (Legacy/Fallback)
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      final keys = prefs.getKeys();
+
+      for (String key in keys) {
+        if (key.startsWith("history_v2_")) {
+          // Verify format is List<String>
+          try {
+            final list = prefs.getStringList(key);
+            if (list == null) continue;
+
+            if (!exportData.containsKey(key)) {
+              exportData[key] = list;
+            } else {
+              // Combine? For now, DB takes precedence so we skip if present.
+              // Or we can append unique items? Too complex for now.
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      await logAction("Export Prefs Error: $e", level: "WARN");
+    }
+
+    return jsonEncode(exportData);
+  }
+
+  Future<void> _tryMigrateFromPrefs(DateTime date, String groupKey) async {
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      final dateStr =
+          "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+      final key = "history_v2_${dateStr}_$groupKey";
+
+      // Mark as migrated to avoid re-reading prefs every time?
+      // Or just rely on persistVersion skipping duplicates. Relying on persistVersion is safer.
+
+      final List<String>? list = prefs.getStringList(key);
+      if (list == null || list.isEmpty) return;
+
+      int migratedCount = 0;
+      for (String jsonStr in list) {
+        try {
+          final version = ScheduleVersion.fromJson(jsonDecode(jsonStr));
+
+          // Persist to DB
+          await persistVersion(
+              groupKey: groupKey,
+              targetDate: dateStr,
+              scheduleCode: version.hash,
+              dtekUpdatedAt:
+                  "${version.savedAt.hour}:${version.savedAt.minute.toString().padLeft(2, '0')}");
+          migratedCount++;
+        } catch (e) {/* ignore corrupt data */}
+      }
+      if (migratedCount > 0) {
+        await logAction(
+            "CheckMigrate: processed $migratedCount records for $groupKey $dateStr");
+      }
+    } catch (e) {
+      print("Migration error: $e");
+    }
   }
 }

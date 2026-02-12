@@ -1,11 +1,11 @@
 import 'package:workmanager/workmanager.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'parser_service.dart';
 import 'widget_service.dart';
 import 'notification_service.dart';
 import 'history_service.dart';
+import 'preferences_helper.dart';
 import '../models/schedule_status.dart';
 
 const String taskUpdateSchedule = "taskUpdateSchedule";
@@ -14,40 +14,40 @@ const String taskUpdateSchedule = "taskUpdateSchedule";
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     print("[Background] 🕒 Запуск фонового завдання: $task");
+    await HistoryService().logAction("Бекграунд завдання запущено: $task");
 
     try {
       if (task == taskUpdateSchedule) {
-        
-        final prefs = await SharedPreferences.getInstance();
+        final prefs = await PreferencesHelper.getSafeInstance();
         List<String> notificationGroups =
             prefs.getStringList('notification_groups') ?? [];
 
-        
         if (notificationGroups.isEmpty) {
           final selectedGroup = prefs.getString('selected_group') ?? "GPV2.1";
           notificationGroups = [selectedGroup];
         }
 
         print("[Background] Групи для сповіщень: $notificationGroups");
+        await HistoryService()
+            .logAction("Групи для оновлення: $notificationGroups");
 
-        
         final parser = ParserService();
-        
+
         final allSchedules = await parser.fetchAllSchedules();
 
         if (allSchedules.isNotEmpty) {
-          
-          await HistoryService().saveHistory(allSchedules);
+          await HistoryService()
+              .logAction("Дані успішно отримані. Груп: ${allSchedules.length}");
 
-          
+          // History is saved inside ParserService now
+          // await HistoryService().saveHistory(allSchedules);
+
           final widgetService = WidgetService();
           await widgetService.updateWidget(allSchedules);
 
-          
           final notificationService = NotificationService();
           await notificationService.init();
 
-          
           bool first = true;
 
           for (String group in notificationGroups) {
@@ -60,7 +60,6 @@ void callbackDispatcher() {
               first = false;
               print("[Background] 🔔 Сповіщення оновлено для $group");
 
-              
               final bool notifyChange =
                   prefs.getBool('notify_schedule_change') ?? true;
               if (notifyChange) {
@@ -76,33 +75,24 @@ void callbackDispatcher() {
                 final todayStr = "${now.year}-${now.month}-${now.day}";
                 final nowMs = now.millisecondsSinceEpoch;
 
-                
                 final newHash = mySchedule.today.scheduleHash;
                 final newMinutes = mySchedule.today.totalOutageMinutes;
 
-                
-                final cooldownMs = 5 * 60 * 1000; 
+                final cooldownMs = 5 * 60 * 1000;
                 final canNotify = (nowMs - lastNotifTime) > cooldownMs;
 
                 bool shouldUpdateMetadata = true;
 
-                
-                
-                
-                
                 if (savedDate == todayStr &&
                     oldHash != null &&
                     oldHash != newHash) {
                   if (canNotify) {
-                    
-                    
                     int oldMinutes = 0;
                     for (int i = 0; i < oldHash.length && i < 24; i++) {
                       final char = oldHash[i];
                       if (char == '1')
-                        oldMinutes += 60; 
-                      else if (char == '2' || char == '3')
-                        oldMinutes += 30; 
+                        oldMinutes += 60;
+                      else if (char == '2' || char == '3') oldMinutes += 30;
                     }
 
                     final diff = newMinutes - oldMinutes;
@@ -117,42 +107,56 @@ void callbackDispatcher() {
 
                       print(
                           "[Background] 📢 Виявлено зміну графіку для $group: $msg");
-                      await notificationService.showImmediate(
-                          "Графік змінено!", msg,
-                          groupName: group);
 
-                      
+                      try {
+                        await notificationService.showImmediate(
+                            "Графік змінено!", msg,
+                            groupName: group);
+                        await HistoryService()
+                            .logAction("Сповіщення про зміну надіслано: $msg");
+                      } catch (e) {
+                        await HistoryService().logAction(
+                            "Помилка надсилання сповіщення: $e",
+                            level: "ERROR");
+                      }
+
                       await prefs.setInt(keyLastNotif, nowMs);
                     }
                   } else {
                     print(
                         "[Background] ⏳ Зміни є ($group), але охолодження. Чекаємо...");
-                    shouldUpdateMetadata =
-                        false; 
+                    await HistoryService().logAction(
+                        "Зміни є, але спрацювало обмеження (cooldown)");
+                    shouldUpdateMetadata = false;
                   }
                 } else if (savedDate != todayStr) {
                   print(
                       "[Background] 📅 Новий день ($savedDate -> $todayStr). База оновлена без сповіщень.");
+                  await HistoryService().logAction(
+                      "Новий день ($savedDate -> $todayStr). База оновлена.");
                 }
 
-                
                 if (shouldUpdateMetadata) {
                   await prefs.setString(keyHash, newHash);
                   await prefs.setString(keyDate, todayStr);
                 }
               }
-              
+              await HistoryService().logAction("Оброблено групу $group");
             }
           }
 
           print("[Background] ✅ Фонову задачу успішно виконано");
+          await HistoryService().logAction("Бекграунд завдання завершено");
         } else {
           print("[Background] ⚠️ Дані не отримано (порожній список)");
-          return Future.value(false); 
+          await HistoryService()
+              .logAction("Помилка: Пустий список графіків", level: "ERROR");
+          return Future.value(false);
         }
       }
     } catch (e) {
       print("[Background] ❌ Критична помилка: $e");
+      await HistoryService().logAction("Помилка виконання: $e", level: "ERROR");
       return Future.value(false);
     }
 
@@ -166,13 +170,12 @@ class BackgroundManager {
   BackgroundManager._internal();
 
   Future<void> init() async {
-    
     if (kIsWeb || (defaultTargetPlatform == TargetPlatform.windows)) return;
 
     try {
       await Workmanager().initialize(
         callbackDispatcher,
-        isInDebugMode: false, 
+        isInDebugMode: false,
       );
       print("[BackgroundManager] Ініціалізація успішна");
     } catch (e) {
@@ -184,16 +187,15 @@ class BackgroundManager {
     if (kIsWeb || (defaultTargetPlatform == TargetPlatform.windows)) return;
 
     try {
-      
       Workmanager().registerPeriodicTask(
         "periodic_update_task",
         taskUpdateSchedule,
         frequency: const Duration(minutes: 15),
         constraints: Constraints(
-          networkType: NetworkType.connected, 
+          networkType: NetworkType.connected,
         ),
-        existingWorkPolicy: ExistingPeriodicWorkPolicy.keep, 
-        initialDelay: const Duration(seconds: 10), 
+        existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+        initialDelay: const Duration(seconds: 10),
       );
       print("[BackgroundManager] Періодичну задачу зареєстровано");
     } catch (e) {
