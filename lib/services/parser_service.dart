@@ -33,13 +33,14 @@ class ParserService {
     await HistoryService().logAction("Парсер: Старт fetchAllSchedules (v3)");
     final httpResult = await _fetchWithHttpClient();
     if (httpResult != null && httpResult.isNotEmpty) {
-      await HistoryService().logAction("Парсер: HTTP метод спрацював, повернення результату");
+      await HistoryService()
+          .logAction("Парсер: HTTP метод спрацював, повернення результату");
       return httpResult;
     }
 
     print("[Parser] 🌍 HTTP не спрацював, запускаємо Headless WebView...");
     await HistoryService().logAction("Парсер: HTTP не вдалося, запуск WebView");
-    
+
     print("[Parser] 🚀 Запуск Headless браузера (Hybrid)...");
     final completer = Completer<Map<String, FullSchedule>>();
 
@@ -61,7 +62,7 @@ class ParserService {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       ),
       onLoadStop: (controller, url) async {
-        print("[Parser] Страница загружена. Ищем данные...");
+        print("[Parser] Сторінка завантажена. Шукаємо дані...");
 
         for (int i = 0; i < 20; i++) {
           try {
@@ -74,16 +75,15 @@ class ParserService {
             if (jsResult != null &&
                 jsResult != "null" &&
                 jsResult.toString().length > 100) {
-              print("[Parser] ✅ Данные найдены через JS переменную!");
+              print("[Parser] ✅ Дані знайдено через JS змінну!");
               jsonString = jsResult.toString();
-            }
-            else {
+            } else {
               final html = await controller.evaluateJavascript(
                   source: "document.documentElement.outerHTML");
               if (html != null) {
                 jsonString = _extractJsonFromHtml(html.toString());
                 if (jsonString.isNotEmpty) {
-                  print("[Parser] ✅ Данные найдены через поиск в HTML!");
+                  print("[Parser] ✅ Дані знайдено через пошук у HTML!");
                 }
               }
             }
@@ -96,22 +96,25 @@ class ParserService {
               _headlessWebView = null;
               return;
             } else {
-              print("[Parser] Попытка ${i + 1}/20: Данные пока не найдены...");
+              print("[Parser] Спроба ${i + 1}/20: Дані поки не знайдено...");
               // Only log every 5th attempt to avoid spamming logs
               if ((i + 1) % 5 == 0) {
-                 await HistoryService().logAction("Парсер: спроба ${i + 1}/20 - дані не знайдено");
+                await HistoryService()
+                    .logAction("Парсер: спроба ${i + 1}/20 - дані не знайдено");
               }
             }
           } catch (e) {
-            print("[Parser] Ошибка итерации: $e");
-            await HistoryService().logAction("Парсер помилка ітерації: $e", level: "ERROR");
+            print("[Parser] Помилка ітерації: $e");
+            await HistoryService()
+                .logAction("Парсер помилка ітерації: $e", level: "ERROR");
           }
           await Future.delayed(const Duration(seconds: 1));
         }
 
         if (!completer.isCompleted) {
           print("[Parser] ❌ Тайм-аут");
-          await HistoryService().logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
+          await HistoryService()
+              .logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
           completer.complete({});
           await _headlessWebView?.dispose();
           _headlessWebView = null;
@@ -122,8 +125,9 @@ class ParserService {
     try {
       await _headlessWebView?.run();
     } catch (e) {
-      print("[Parser] ❌ Ошибка запуска WebView: $e");
-      await HistoryService().logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
+      print("[Parser] ❌ Помилка запуску WebView: $e");
+      await HistoryService()
+          .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
       return {};
     }
 
@@ -132,49 +136,60 @@ class ParserService {
 
   Future<Map<String, FullSchedule>?> _fetchWithHttpClient() async {
     try {
-      print("[Parser] 🌍 Пробуем HTTP запрос...");
+      print("[Parser] 🌍 Пробуємо HTTP запит...");
       await HistoryService().logAction("Парсер: Старт HTTP запиту");
       final client = HttpClient();
-      client.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+      client.userAgent =
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
       // Set a timeout
       client.connectionTimeout = const Duration(seconds: 15);
-      
+
       final request = await client.getUrl(Uri.parse(_url));
       final response = await request.close();
-      
-      await HistoryService().logAction("Парсер HTTP: Код відповіді ${response.statusCode}");
-      
+
+      await HistoryService()
+          .logAction("Парсер HTTP: Код відповіді ${response.statusCode}");
+
       if (response.statusCode == 200) {
         final html = await response.transform(utf8.decoder).join();
-        await HistoryService().logAction("Парсер HTTP: Отримано ${html.length} байт HTML");
-        
+        await HistoryService()
+            .logAction("Парсер HTTP: Отримано ${html.length} байт HTML");
+
         final jsonString = _extractJsonFromHtml(html);
         if (jsonString.isNotEmpty) {
-           print("[Parser] ✅ Данные найдены через HTTP!");
-           if (jsonString.length > 50) {
-             await HistoryService().logAction("Парсер HTTP: JSON знайдено (${jsonString.length} симв.), спроба розбору...");
-           } else {
-             await HistoryService().logAction("Парсер HTTP: JSON знайдено, але підозріло короткий: $jsonString", level: "WARN");
-           }
-           
-           try {
-              final result = await _parseAndSaveAllGroups(jsonString);
-              await HistoryService().logAction("Парсер HTTP: Успішно розібрано ${result.length} груп");
-              return result;
-           } catch (e) {
-              await HistoryService().logAction("Парсер HTTP: Помилка розбору JSON: $e", level: "ERROR");
-              throw e;
-           }
+          print("[Parser] ✅ Дані знайдено через HTTP!");
+          if (jsonString.length > 50) {
+            await HistoryService().logAction(
+                "Парсер HTTP: JSON знайдено (${jsonString.length} симв.), спроба розбору...");
+          } else {
+            await HistoryService().logAction(
+                "Парсер HTTP: JSON знайдено, але підозріло короткий: $jsonString",
+                level: "WARN");
+          }
+
+          try {
+            final result = await _parseAndSaveAllGroups(jsonString);
+            await HistoryService().logAction(
+                "Парсер HTTP: Успішно розібрано ${result.length} груп");
+            return result;
+          } catch (e) {
+            await HistoryService().logAction(
+                "Парсер HTTP: Помилка розбору JSON: $e",
+                level: "ERROR");
+            throw e;
+          }
         } else {
-           print("[Parser] HTTP: HTML получен, но JSON не найден");
-           await HistoryService().logAction("Парсер HTTP: JSON не знайдено в HTML", level: "WARN");
+          print("[Parser] HTTP: HTML отримано, але JSON не знайдено");
+          await HistoryService()
+              .logAction("Парсер HTTP: JSON не знайдено в HTML", level: "WARN");
         }
       } else {
         print("[Parser] HTTP: Status code ${response.statusCode}");
       }
     } catch (e) {
       print("[Parser] HTTP Error: $e");
-      await HistoryService().logAction("Парсер HTTP Критична помилка: $e", level: "ERROR");
+      await HistoryService()
+          .logAction("Парсер HTTP Критична помилка: $e", level: "ERROR");
     }
     return null;
   }
@@ -203,7 +218,8 @@ class ParserService {
     }
   }
 
-  Future<Map<String, FullSchedule>> _parseAndSaveAllGroups(String rawJson) async {
+  Future<Map<String, FullSchedule>> _parseAndSaveAllGroups(
+      String rawJson) async {
     try {
       if (rawJson.startsWith('"') && rawJson.endsWith('"')) {
         rawJson = jsonDecode(rawJson);
@@ -221,8 +237,10 @@ class ParserService {
       Map<String, dynamic> dataObj = jsonData['data'];
 
       // Format dates for history
-      final todayDate = DateTime.fromMillisecondsSinceEpoch(todayTimestamp * 1000);
-      final tomorrowDate = DateTime.fromMillisecondsSinceEpoch(tomorrowTimestamp * 1000);
+      final todayDate =
+          DateTime.fromMillisecondsSinceEpoch(todayTimestamp * 1000);
+      final tomorrowDate =
+          DateTime.fromMillisecondsSinceEpoch(tomorrowTimestamp * 1000);
       final dateFormatter = DateFormat('yyyy-MM-dd');
       final todayDateStr = dateFormatter.format(todayDate);
       final tomorrowDateStr = dateFormatter.format(tomorrowDate);
@@ -230,8 +248,10 @@ class ParserService {
       Map<String, FullSchedule> result = {};
 
       for (String group in allGroups) {
-        final todaySchedule = _parseDay(dataObj, todayTimestamp.toString(), group);
-        final tomorrowSchedule = _parseDay(dataObj, tomorrowTimestamp.toString(), group);
+        final todaySchedule =
+            _parseDay(dataObj, todayTimestamp.toString(), group);
+        final tomorrowSchedule =
+            _parseDay(dataObj, tomorrowTimestamp.toString(), group);
 
         result[group] = FullSchedule(
           today: todaySchedule,
@@ -252,7 +272,7 @@ class ParserService {
         // Save history for tomorrow
         if (!tomorrowSchedule.isEmpty) {
           await HistoryService().persistVersion(
-             groupKey: group,
+            groupKey: group,
             targetDate: tomorrowDateStr,
             scheduleCode: tomorrowSchedule.toEncodedString(),
             dtekUpdatedAt: updateTime,
@@ -261,8 +281,9 @@ class ParserService {
       }
       return result;
     } catch (e) {
-      print("[Parser] Ошибка парсинга JSON: $e");
-      await HistoryService().logAction("Парсер: Помилка парсингу JSON: $e", level: "ERROR");
+      print("[Parser] Помилка парсингу JSON: $e");
+      await HistoryService()
+          .logAction("Парсер: Помилка парсингу JSON: $e", level: "ERROR");
       return {};
     }
   }

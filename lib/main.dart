@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
+import 'dart:ui';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
@@ -16,14 +19,23 @@ import 'services/widget_service.dart';
 import 'services/history_service.dart';
 import 'services/power_monitor_service.dart';
 import 'services/preferences_helper.dart';
+import 'services/achievement_service.dart';
+import 'services/darkness_theme_service.dart';
 import 'models/schedule_status.dart';
 import 'models/power_event.dart';
 import 'ui/settings_page.dart';
+import 'ui/analytics_screen.dart';
+import 'ui/achievements_screen.dart';
+import 'ui/widgets/theme_animated_cell.dart';
 
 @pragma('vm:entry-point')
 Future<void> backgroundCallback(Uri? uri) async {
   if (uri?.host == 'refresh') {
     print("[Background] Refresh triggered from widget");
+    // Трекер для ачівки "Завжди перед очима"
+    try {
+      AchievementService().trackWidgetOpen();
+    } catch (_) {}
     final widgetService = WidgetService();
     try {
       final parser = ParserService();
@@ -72,7 +84,7 @@ void main() async {
         await windowManager.setPreventClose(true);
       });
     } catch (e) {
-      print("[MAIN] Ошибка Window Manager: $e");
+      print("[MAIN] Помилка Window Manager: $e");
     }
 
     try {
@@ -91,7 +103,7 @@ void main() async {
         appPath: Platform.resolvedExecutable,
       );
     } catch (e) {
-      print("[MAIN] Ошибка автозапуска: $e");
+      print("[MAIN] Помилка автозапуску: $e");
     }
   }
 
@@ -99,7 +111,7 @@ void main() async {
     final notificationService = NotificationService();
     await notificationService.init();
   } catch (e) {
-    print("[MAIN] Ошибка уведомлений: $e");
+    print("[MAIN] Помилка сповіщень: $e");
   }
 
   if (Platform.isAndroid) {
@@ -108,7 +120,7 @@ void main() async {
       await bgManager.init();
       bgManager.registerPeriodicTask();
     } catch (e) {
-      print("[MAIN] Ошибка Background: $e");
+      print("[MAIN] Помилка Background: $e");
     }
   }
 
@@ -124,11 +136,32 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   bool _isDarkMode = true;
+  bool _autoDarknessTheme = false;
+  final DarknessThemeService _darknessThemeService = DarknessThemeService();
+  DarknessStage _currentDarknessStage = DarknessStage.solarpunk;
 
   @override
   void initState() {
     super.initState();
     _loadTheme();
+    _initDarknessTheme();
+  }
+
+  Future<void> _initDarknessTheme() async {
+    _darknessThemeService.onStageChanged = (stage) {
+      if (mounted) {
+        setState(() {
+          _currentDarknessStage = stage;
+        });
+      }
+    };
+    await _darknessThemeService.init();
+    if (mounted) {
+      setState(() {
+        _autoDarknessTheme = _darknessThemeService.isEnabled;
+        _currentDarknessStage = _darknessThemeService.currentStage;
+      });
+    }
   }
 
   Future<void> _loadTheme() async {
@@ -137,6 +170,8 @@ class _MyAppState extends State<MyApp> {
       if (mounted) {
         setState(() {
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
+          _autoDarknessTheme = _darknessThemeService.isEnabled;
+          _currentDarknessStage = _darknessThemeService.currentStage;
         });
       }
     } catch (e) {
@@ -146,6 +181,21 @@ class _MyAppState extends State<MyApp> {
 
   void _toggleTheme() {
     _loadTheme();
+    // Також оновити стадію тьми
+    _darknessThemeService.refresh();
+    if (mounted) {
+      setState(() {
+        _autoDarknessTheme = _darknessThemeService.isEnabled;
+        _currentDarknessStage = _darknessThemeService.currentStage;
+      });
+    }
+  }
+
+  ThemeData get _activeTheme {
+    if (_autoDarknessTheme) {
+      return _darknessThemeService.getThemeForStage(_currentDarknessStage);
+    }
+    return _isDarkMode ? _darkTheme : _lightTheme;
   }
 
   @override
@@ -153,7 +203,7 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       title: 'Люмен',
       debugShowCheckedModeBanner: false,
-      theme: _isDarkMode ? _darkTheme : _lightTheme,
+      theme: _activeTheme,
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
@@ -214,10 +264,14 @@ class HourSegment {
   final double startFraction; // 0.0–1.0 (0 мін – 60 мін)
   final double endFraction; // 0.0–1.0
   final Color color;
+  final bool isFuture;
 
-  HourSegment(this.startFraction, this.endFraction, this.color);
+  HourSegment(this.startFraction, this.endFraction, this.color,
+      {this.isFuture = false});
 
   double get width => endFraction - startFraction;
+  double get start => startFraction;
+  double get end => endFraction;
 }
 
 /// Допоміжний клас для діапазону відключення всередині години.
@@ -253,12 +307,14 @@ class _HomeScreenState extends State<HomeScreen>
   List<ScheduleVersion> _historyVersions = [];
   int _selectedVersionIndex = -1;
 
-  int _lastNotifiedMinute = -1;
   int _lastAutoRefreshMinute = -1;
   Timer? _timer;
 
   final Map<String, int> _lastUpdateOldStats = {};
   bool _wasUpdated = false;
+
+  bool _isCachedData = false;
+  Color _statusColor = Colors.grey;
 
   static const bool _showNotificationTestButton = false;
 
@@ -268,6 +324,10 @@ class _HomeScreenState extends State<HomeScreen>
   bool _powerMonitorEnabled = false;
   List<PowerOutageInterval> _realOutageIntervals = [];
   String _powerStatus = 'unknown'; // 'online' / 'offline' / 'unknown'
+  List<List<HourSegment>>? _realHourSegments;
+
+  final AchievementService _achievementService = AchievementService();
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
@@ -280,6 +340,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     _loadPreferencesAndData();
     _initPowerMonitor();
+    _initAchievements();
 
     _timer = Timer.periodic(const Duration(seconds: 2), (timer) {
       final now = DateTime.now();
@@ -289,10 +350,20 @@ class _HomeScreenState extends State<HomeScreen>
         _loadData(silent: true);
       }
 
-      _checkNotificationsManually();
-
       if (mounted) setState(() {});
     });
+  }
+
+  Future<void> _initAchievements() async {
+    _achievementService.onAchievementUnlocked = (achievement) {
+      if (mounted) {
+        AchievementUnlockedOverlay.show(context, achievement);
+      }
+    };
+    // Початкове завантаження стану
+    await _achievementService.loadAllStates();
+    // Трекер сесії ("Контроль ситуації")
+    _achievementService.trackAppSession();
   }
 
   Future<void> _initPowerMonitor() async {
@@ -314,6 +385,8 @@ class _HomeScreenState extends State<HomeScreen>
               _powerStatus = status;
             });
           }
+          // Оновити стадію тьми при зміні статусу живлення
+          DarknessThemeService().refresh();
         });
       }
     };
@@ -378,6 +451,8 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     setState(() => _currentGroup = newGroup);
+    // Трекер для ачівки "Громадянин"
+    _achievementService.trackGroupChange();
 
     if (_viewMode == ScheduleViewMode.today ||
         _viewMode == ScheduleViewMode.tomorrow) {
@@ -419,8 +494,46 @@ class _HomeScreenState extends State<HomeScreen>
     _updateStatusDate();
   }
 
+  Future<void> _loadCachedData() async {
+    try {
+      final cached = await HistoryService().getLastKnownSchedules();
+      if (cached.isNotEmpty && mounted) {
+        setState(() {
+          _allSchedules = cached;
+          _isLoading = false;
+          _isCachedData = true;
+          _statusColor = Colors.orange;
+
+          final current = cached[_currentGroup];
+          if (current != null) {
+            _statusMessage = "З пам'яті: ${current.lastUpdatedSource}";
+          } else {
+            _statusMessage = "З пам'яті (дані завантажено)";
+          }
+        });
+
+        // Load history versions for the cached data to populate dropdown if needed
+        final now = DateTime.now();
+        final versions =
+            await HistoryService().getVersionsForDate(now, _currentGroup);
+        if (mounted) {
+          setState(() {
+            _historyVersions = versions;
+            if (_historyVersions.isNotEmpty) {
+              _selectedVersionIndex = _historyVersions.length - 1;
+              _historySchedule = _historyVersions.last.toSchedule();
+            }
+          });
+        }
+      }
+    } catch (e) {
+      print("Error loading cached data: $e");
+    }
+  }
+
   @override
   void dispose() {
+    _focusNode.dispose();
     if (Platform.isWindows) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
@@ -462,33 +575,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (await windowManager.isPreventClose()) windowManager.hide();
   }
 
-  void _checkNotificationsManually() {
-    List<String> groupsToNotify =
-        _notificationGroups.isEmpty ? [_currentGroup] : _notificationGroups;
-
-    final now = DateTime.now();
-    final hour = now.hour;
-    final minute = now.minute;
-
-    if (_lastNotifiedMinute == minute) return;
-
-    for (String group in groupsToNotify) {
-      final schedule = _allSchedules[group];
-      if (schedule == null) continue;
-
-      final todaySchedule = schedule.today;
-
-      if (minute == 25) {
-        if (todaySchedule.hours[hour] == LightStatus.semiOn) {
-          _notifier.showImmediate(
-              "Скоро світло!", "О $hour:30 мають увімкнути!",
-              groupName: group);
-        }
-      }
-    }
-    _lastNotifiedMinute = minute;
-  }
-
   Future<void> _updateStatusDate() async {
     DateTime targetDate;
     if (_viewMode == ScheduleViewMode.today) {
@@ -508,29 +594,53 @@ class _HomeScreenState extends State<HomeScreen>
 
     if (mounted) {
       String msg = "Оновлено ДТЕК: Невідомо";
+      Color color = Colors.grey;
 
       if (_historyVersions.isNotEmpty) {
         // Prefer history version time string which includes date
         msg = "Оновлено ДТЕК: ${_historyVersions.last.timeString}";
+        color = Colors.green;
       } else if (updateTime != null) {
         msg = "Оновлено ДТЕК: $updateTime";
+        color = Colors.green;
       } else if (_allSchedules.containsKey(_currentGroup)) {
         msg =
             "Оновлено ДТЕК: ${_allSchedules[_currentGroup]!.lastUpdatedSource}";
+        color = _isCachedData ? Colors.orange : Colors.green;
+      }
+
+      if (_isCachedData) {
+        if (msg.contains("Оновлено ДТЕК")) {
+          msg = msg.replaceAll("Оновлено ДТЕК", "З пам'яті");
+        } else {
+          msg = "$msg (З пам'яті)";
+        }
+        color = Colors.orange;
       }
 
       setState(() {
         _statusMessage = msg;
+        _statusColor = color;
       });
     }
   }
 
   Future<void> _loadData({bool silent = false}) async {
-    if (!silent)
+    if (!silent) {
+      // First, try to load from cache if we are empty
+      if (_allSchedules.isEmpty) {
+        await _loadCachedData();
+      }
+
       setState(() {
-        _isLoading = true;
-        _statusMessage = "Оновлення...";
+        if (_allSchedules.isEmpty) {
+          _isLoading = true; // Show spinner only if no data at all
+        }
+        _statusMessage =
+            _isCachedData ? "Оновлення... (показано архів)" : "Оновлення...";
+        _statusColor = Colors.orange;
       });
+    }
 
     try {
       if (_allSchedules.isNotEmpty) {
@@ -556,7 +666,9 @@ class _HomeScreenState extends State<HomeScreen>
       setState(() {
         _allSchedules = allData;
         _isLoading = false;
+        _isCachedData = false;
         _wasUpdated = true;
+        _statusColor = Colors.green;
 
         _historyVersions = todayVersions;
         if (_historyVersions.isNotEmpty) {
@@ -595,28 +707,30 @@ class _HomeScreenState extends State<HomeScreen>
               savedDate == todayStr &&
               oldHash != null &&
               oldHash != newHash) {
-            final newMinutes = _calculateOutageMinutes(schedule.today);
-            int oldMinutes = 0;
+            if (Platform.isWindows) {
+              final newMinutes = _calculateOutageMinutes(schedule.today);
+              int oldMinutes = 0;
 
-            for (int i = 0; i < oldHash.length && i < 24; i++) {
-              final char = oldHash[i];
-              if (char == '1')
-                oldMinutes += 60;
-              else if (char == '2' || char == '3') oldMinutes += 30;
-            }
+              for (int i = 0; i < oldHash.length && i < 24; i++) {
+                final char = oldHash[i];
+                if (char == '1')
+                  oldMinutes += 60;
+                else if (char == '2' || char == '3') oldMinutes += 30;
+              }
 
-            final diff = newMinutes - oldMinutes;
-            if (diff != 0) {
-              final diffHours = (diff.abs() / 60);
-              final diffStr = diffHours == diffHours.toInt()
-                  ? diffHours.toInt().toString()
-                  : diffHours.toStringAsFixed(1);
-              final msg = diff > 0
-                  ? "Світла стало МЕНШЕ на $diffStr год. 😔"
-                  : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
+              final diff = newMinutes - oldMinutes;
+              if (diff != 0) {
+                final diffHours = (diff.abs() / 60);
+                final diffStr = diffHours == diffHours.toInt()
+                    ? diffHours.toInt().toString()
+                    : diffHours.toStringAsFixed(1);
+                final msg = diff > 0
+                    ? "Світла стало МЕНШЕ на $diffStr год. 😔"
+                    : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
 
-              _notifier.showImmediate("Графік змінено ($group)!", msg,
-                  groupName: group);
+                _notifier.showImmediate("Графік змінено!", msg,
+                    groupName: group);
+              }
             }
           }
 
@@ -629,11 +743,23 @@ class _HomeScreenState extends State<HomeScreen>
 
       _updateNotificationsOnly();
       if (Platform.isAndroid) await _widgetService.updateWidget(_allSchedules);
+
+      // Перевірка досягнень після завантаження даних
+      _achievementService.checkAll(
+        schedules: _allSchedules,
+        currentGroup: _currentGroup,
+      );
     } catch (e) {
       if (mounted)
         setState(() {
           _isLoading = false;
-          _statusMessage = "Помилка оновлення";
+          if (_isCachedData) {
+            _statusMessage = "Немає зв'язку (Архів)";
+            _statusColor = Colors.red;
+          } else {
+            _statusMessage = "Помилка оновлення";
+            _statusColor = Colors.red;
+          }
         });
       print("Error loading data: $e");
     }
@@ -754,6 +880,8 @@ class _HomeScreenState extends State<HomeScreen>
         _historyDate = picked;
       });
       await _loadHistoryData(picked);
+      // Трекер для ачівки "Архіваріус"
+      _achievementService.trackHistoryView(picked);
     } else {
       if (_viewMode == ScheduleViewMode.history && _historyDate == null) {
         setState(() => _viewMode = ScheduleViewMode.today);
@@ -864,6 +992,8 @@ class _HomeScreenState extends State<HomeScreen>
       notificationGroups = [_currentGroup];
     }
 
+    await _notifier.cancelAllScheduled();
+
     bool first = true;
     for (String group in notificationGroups) {
       final schedule = _allSchedules[group];
@@ -960,10 +1090,42 @@ class _HomeScreenState extends State<HomeScreen>
   /// Побудувати DailySchedule з реальних інтервалів відключень (для grid).
   /// Використовується тільки для інтервального списку та нотифікацій (fallback).
   DailySchedule _buildRealScheduleFromIntervals(
-      List<PowerOutageInterval> intervals, DateTime date) {
-    List<LightStatus> hours = List.filled(24, LightStatus.on);
+      List<PowerOutageInterval> intervals, DateTime date,
+      {DailySchedule? baseSchedule}) {
+    // Якщо є прогноз, беремо його за основу, інакше все зелене
+    List<LightStatus> hours = baseSchedule != null
+        ? List.from(baseSchedule.hours)
+        : List.filled(24, LightStatus.on);
 
-    for (int h = 0; h < 24; h++) {
+    final now = DateTime.now();
+    final isToday =
+        date.year == now.year && date.month == now.month && date.day == now.day;
+
+    // Якщо це сьогодні - перезаписуємо минуле і поточну годину реальними даними.
+    // Майбутнє залишаємо як у прогнозі (або зеленим якщо прогнозу немає).
+    // Якщо день у минулому - перезаписуємо весь день (limitHour = 24).
+    // Якщо день у майбутньому - все залишається прогнозом (loop не виконається або limitHour=0).
+
+    int limitHour = 24;
+    if (isToday) {
+      // Перезаписуємо все ДО поточної години включно.
+      // Поточна година теж формується тут, але в GridView вона перекривається _buildRealModeCell.
+      // Для total outage minutes важливо порахувати і поточну годину з оффлайном.
+      limitHour = now.hour + 1;
+    } else if (date.isAfter(now)) {
+      // Майбутній день - повністю прогноз
+      limitHour = 0;
+    }
+
+    for (int h = 0; h < limitHour; h++) {
+      // Скидаємо статус на On перед розрахунком реального,
+      // бо ми хочемо порахувати суто по факту відключень.
+      // (Хоча якщо там було semiOn/off в прогнозі, а світло було 100% часу - воно стане On.
+      // А якщо світло було 0% часу - стане Off).
+      // Але логіку нижче треба перевірити.
+      // Логіка нижче базується на offMinutes.
+      hours[h] = LightStatus.on;
+
       int offMinutes = 0;
       for (final interval in intervals) {
         offMinutes += interval.minutesOfflineInHour(date, h);
@@ -1040,32 +1202,34 @@ class _HomeScreenState extends State<HomeScreen>
       // Година в майбутньому
       if (isToday && hourStart.isAfter(now)) {
         // Повністю в майбутньому — використовуємо прогноз або порожньо
-        if (_powerStatus == 'offline') {
-          // Свет выключен — сірий прогноз
-          if (forecast != null && !forecast.isEmpty) {
-            final fStatus = forecast.hours[h];
-            if (fStatus == LightStatus.on) {
-              // Прогноз каже: тут має бути світло (значить повинні увімкнути)
+        if (forecast != null && !forecast.isEmpty) {
+          final fStatus = forecast.hours[h];
+          switch (fStatus) {
+            case LightStatus.on:
               allSegments.add([HourSegment(0, 1, greenColor.withOpacity(0.3))]);
-            } else {
+              break;
+            case LightStatus.off:
+              allSegments.add([HourSegment(0, 1, redColor.withOpacity(0.3))]);
+              break;
+            case LightStatus.semiOn:
+              // Red -> Green
+              allSegments.add([
+                HourSegment(0, 0.5, redColor.withOpacity(0.3)),
+                HourSegment(0.5, 1, greenColor.withOpacity(0.3))
+              ]);
+              break;
+            case LightStatus.semiOff:
+              // Green -> Red
+              allSegments.add([
+                HourSegment(0, 0.5, greenColor.withOpacity(0.3)),
+                HourSegment(0.5, 1, redColor.withOpacity(0.3))
+              ]);
+              break;
+            case LightStatus.maybe:
               allSegments.add([HourSegment(0, 1, greyColor.withOpacity(0.4))]);
-            }
-          } else {
-            allSegments.add([HourSegment(0, 1, noDataColor)]);
-          }
-        } else if (_powerStatus == 'online') {
-          // Свет есть — перевіряємо чи прогноз обіцяє відключення
-          if (forecast != null && !forecast.isEmpty) {
-            final fStatus = forecast.hours[h];
-            if (fStatus == LightStatus.off ||
-                fStatus == LightStatus.semiOff ||
-                fStatus == LightStatus.semiOn) {
-              allSegments.add([HourSegment(0, 1, greyColor.withOpacity(0.4))]);
-            } else {
-              allSegments.add([HourSegment(0, 1, greenColor.withOpacity(0.3))]);
-            }
-          } else {
-            allSegments.add([HourSegment(0, 1, noDataColor)]);
+              break;
+            default:
+              allSegments.add([HourSegment(0, 1, noDataColor)]);
           }
         } else {
           allSegments.add([HourSegment(0, 1, noDataColor)]);
@@ -1105,12 +1269,12 @@ class _HomeScreenState extends State<HomeScreen>
         if (startFrac >= factEndFraction) continue;
         if (endFrac > factEndFraction) endFrac = factEndFraction;
 
-        if (endFrac > startFrac + 0.01) {
+        if (endFrac > startFrac + 0.001) {
           offRanges.add(_OffRange(startFrac, endFrac));
         }
       }
 
-      // Побудувати зелені/червоні сегменти
+      // Побудувати зелені/червоні сегменти (ФАКТ)
       for (final r in offRanges) {
         if (r.start > cursor + 0.005) {
           segments.add(HourSegment(cursor, r.start, greenColor));
@@ -1122,53 +1286,56 @@ class _HomeScreenState extends State<HomeScreen>
         segments.add(HourSegment(cursor, factEndFraction, greenColor));
       }
 
-      // Додати прогноз-хвіст для поточної години (після now)
+      // ---------------------------------------------------------
+      // ПРОГНОЗ для залишку години (після factEndFraction)
+      // ---------------------------------------------------------
       if (isToday && now.hour == h && factEndFraction < 0.99) {
-        if (_powerStatus == 'offline') {
-          // Спочатку перевіряємо прогноз: чи є обіцянка включення в цю годину?
-          bool forecastSaysOn = false;
-          if (forecast != null && !forecast.isEmpty) {
-            final fs = forecast.hours[h];
-            if (fs == LightStatus.semiOn) {
-              // Прогноз: вимкнено першу половину, увімкнено другу
-              forecastSaysOn = factEndFraction >= 0.5;
-            } else if (fs == LightStatus.on) {
-              forecastSaysOn = true;
+        // Якщо є прогноз — беремо його
+        if (forecast != null && !forecast.isEmpty) {
+          final fStatus = forecast.hours[h];
+
+          // Helper to add segment if it overlaps with [factEndFraction, 1.0]
+          void addForecastSegment(double start, double end, Color c) {
+            final double s = start < factEndFraction ? factEndFraction : start;
+            final double e = end; // end is always 0.5 or 1.0
+            if (e > s) {
+              segments.add(HourSegment(s, e, c.withOpacity(0.3)));
             }
           }
-          if (forecastSaysOn) {
-            segments.add(
-                HourSegment(factEndFraction, 1.0, greenColor.withOpacity(0.3)));
-          } else {
-            segments.add(
-                HourSegment(factEndFraction, 1.0, greyColor.withOpacity(0.4)));
-          }
-        } else if (_powerStatus == 'online') {
-          // Свет є — перевіряємо чи прогноз каже що скоро відключать
-          bool forecastSaysOff = false;
-          if (forecast != null && !forecast.isEmpty) {
-            final fs = forecast.hours[h];
-            if (fs == LightStatus.semiOff) {
-              forecastSaysOff = factEndFraction >= 0.5;
-            } else if (fs == LightStatus.off) {
-              forecastSaysOff = true;
-            }
-          }
-          if (forecastSaysOff) {
-            segments.add(
-                HourSegment(factEndFraction, 1.0, greyColor.withOpacity(0.4)));
-          } else {
-            segments.add(
-                HourSegment(factEndFraction, 1.0, greenColor.withOpacity(0.3)));
+
+          switch (fStatus) {
+            case LightStatus.on:
+              addForecastSegment(0.0, 1.0, greenColor);
+              break;
+            case LightStatus.off:
+              addForecastSegment(0.0, 1.0, redColor);
+              break;
+            case LightStatus.semiOn:
+              // 0.0-0.5 OFF (Red), 0.5-1.0 ON (Green)
+              addForecastSegment(0.0, 0.5, redColor);
+              addForecastSegment(0.5, 1.0, greenColor);
+              break;
+            case LightStatus.semiOff:
+              // 0.0-0.5 ON (Green), 0.5-1.0 OFF (Red)
+              addForecastSegment(0.0, 0.5, greenColor);
+              addForecastSegment(0.5, 1.0, redColor);
+              break;
+            case LightStatus.maybe:
+              addForecastSegment(0.0, 1.0, greyColor);
+              break;
+            default:
+              addForecastSegment(0.0, 1.0, noDataColor);
           }
         } else {
+          // Немає прогнозу - малюємо "невідомо" або "зелене" (залежить від логіки,
+          // але зазвичай краще показати noData/Unknown)
           segments.add(HourSegment(factEndFraction, 1.0, noDataColor));
         }
       }
 
       // Якщо взагалі нема сегментів (не повинно бути, але на всяк випадок)
       if (segments.isEmpty) {
-        segments.add(HourSegment(0, 1, greenColor));
+        segments.add(HourSegment(0, 1, greenColor)); // Default fallback
       }
 
       allSegments.add(segments);
@@ -1338,6 +1505,101 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  /// Банер поточної стадії тьми (показується коли автотема ввімкнена).
+  Widget _buildDarknessStageBar() {
+    final darknessService = DarknessThemeService();
+    if (!darknessService.isEnabled) return const SizedBox.shrink();
+
+    final stage = darknessService.currentStage;
+    final icon = DarknessThemeService.stageIcon(stage);
+    final name = DarknessThemeService.stageName(stage);
+    final subtitle = DarknessThemeService.stageSubtitle(stage);
+    final desc = DarknessThemeService.stageDescription(stage);
+    final accent = DarknessThemeService.stageAccentColor(stage);
+    final secondary = DarknessThemeService.stageSecondaryColor(stage);
+    final bg = DarknessThemeService.stageBackgroundColor(stage);
+    final flutterIcon = DarknessThemeService.stageFlutterIcon(stage);
+
+    // Stalker mode: более жёсткий и тревожный стиль
+    final isStalker = stage == DarknessStage.stalker;
+    final isCyberpunk = stage == DarknessStage.cyberpunk;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: EdgeInsets.symmetric(
+        horizontal: isStalker ? 8 : 12,
+        vertical: isStalker ? 8 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: isStalker
+            ? Colors.black
+            : isCyberpunk
+                ? const Color(0xFF08081A)
+                : accent.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(isStalker ? 2 : 10),
+        border: Border.all(
+          color: isStalker ? accent.withOpacity(0.6) : accent.withOpacity(0.3),
+          width: isStalker ? 1.5 : 1,
+        ),
+        boxShadow: isCyberpunk || isStalker
+            ? [
+                BoxShadow(
+                  color: accent.withOpacity(isStalker ? 0.15 : 0.2),
+                  blurRadius: isStalker ? 8 : 12,
+                  spreadRadius: 0,
+                ),
+              ]
+            : null,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            flutterIcon,
+            color: isStalker ? secondary : accent,
+            size: isStalker ? 18 : 16,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isStalker ? '[ $name ]' : '$icon $name',
+                  style: TextStyle(
+                    fontSize: isStalker ? 11 : 12,
+                    color: accent,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: isStalker ? 'monospace' : null,
+                    letterSpacing: isStalker ? 2 : (isCyberpunk ? 1 : 0),
+                  ),
+                ),
+                Text(
+                  isStalker ? subtitle.toUpperCase() : subtitle,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: accent.withOpacity(0.6),
+                    fontFamily: isStalker ? 'monospace' : null,
+                    letterSpacing: isStalker ? 1.5 : 0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isStalker) ...[
+            const SizedBox(width: 8),
+            Icon(
+              Icons.warning_amber,
+              color: secondary,
+              size: 14,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// Віджет перемикача "Прогноз / Реальне".
   Widget _buildDataSourceToggle() {
     if (!_powerMonitorEnabled) return const SizedBox.shrink();
@@ -1444,9 +1706,108 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final containerColor =
-        isDark ? const Color(0xFF2C2C2C) : Colors.grey.shade300;
-    final textColor = isDark ? Colors.white : Colors.black87;
+    final darknessService = DarknessThemeService();
+    final stage =
+        darknessService.isEnabled ? darknessService.currentStage : null;
+
+    // Resolve colors per theme
+    Color containerColor;
+    Color textColor;
+    Color iconColor;
+    double borderRadiusVal;
+    Border? border;
+    List<BoxShadow>? shadows;
+    TextStyle? extraStyle;
+
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        containerColor = const Color(0xFF1B5E20).withOpacity(0.85);
+        textColor = const Color(0xFFE8F5E9);
+        iconColor = const Color(0xFF66BB6A);
+        borderRadiusVal = 16;
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFF66BB6A).withOpacity(0.2),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
+        ];
+        break;
+      case DarknessStage.dieselpunk:
+        containerColor = const Color(0xFF1A1A1A);
+        textColor = const Color(0xFFFFD54F);
+        iconColor = const Color(0xFFFF9800);
+        borderRadiusVal = 4;
+        border = Border.all(
+          color: const Color(0xFFFF9800).withOpacity(0.35),
+          width: 1.5,
+        );
+        shadows = [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.6),
+            blurRadius: 4,
+            offset: const Offset(2, 2),
+          ),
+        ];
+        extraStyle = const TextStyle(
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.5,
+        );
+        break;
+      case DarknessStage.cyberpunk:
+        containerColor = const Color(0xFF0A0E21);
+        textColor = const Color(0xFF00FFFF);
+        iconColor = const Color(0xFFFF0080);
+        borderRadiusVal = 8;
+        border = Border.all(
+          color: const Color(0xFF00FFFF).withOpacity(0.4),
+          width: 1,
+        );
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFF00FFFF).withOpacity(0.2),
+            blurRadius: 12,
+            spreadRadius: 1,
+          ),
+        ];
+        extraStyle = const TextStyle(
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.5,
+        );
+        break;
+      case DarknessStage.stalker:
+        containerColor = const Color(0xFF050505);
+        textColor = const Color(0xFF39FF14);
+        iconColor = const Color(0xFF39FF14);
+        borderRadiusVal = 2;
+        border = Border.all(
+          color: const Color(0xFF39FF14).withOpacity(0.3),
+          width: 1,
+        );
+        extraStyle = TextStyle(
+          fontWeight: FontWeight.bold,
+          fontFamily: 'monospace',
+          letterSpacing: 2,
+          shadows: [
+            Shadow(blurRadius: 4, color: const Color(0xFF39FF14)),
+          ],
+        );
+        break;
+      default:
+        containerColor =
+            isDark ? const Color(0xFF2C2C2C) : Colors.grey.shade300;
+        textColor = isDark ? Colors.white : Colors.black87;
+        iconColor = Colors.orange;
+        borderRadiusVal = 12;
+    }
+
+    final baseTextStyle = TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.bold,
+      color: textColor,
+    );
+    final finalTextStyle =
+        extraStyle != null ? baseTextStyle.merge(extraStyle) : baseTextStyle;
 
     return Center(
       child: Container(
@@ -1454,22 +1815,106 @@ class _HomeScreenState extends State<HomeScreen>
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: containerColor,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(borderRadiusVal),
+          border: border,
+          boxShadow: shadows,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.timer_outlined, color: Colors.orange, size: 24),
+            Icon(Icons.timer_outlined, color: iconColor, size: 24),
             const SizedBox(width: 8),
-            Text(
-              msg,
-              style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold, color: textColor),
-            ),
+            Text(msg, style: finalTextStyle),
           ],
         ),
       ),
     );
+  }
+
+  void _setDataSourceMode(DataSourceMode mode) {
+    if (!_powerMonitorEnabled) return;
+    if (_dataSourceMode == mode) return;
+
+    setState(() => _dataSourceMode = mode);
+    if (mode == DataSourceMode.real) {
+      _loadRealOutageData(_getDisplayDate()).then((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  Future<void> _navigateDate(int offset) async {
+    if (offset == 0) return;
+
+    DateTime current;
+    switch (_viewMode) {
+      case ScheduleViewMode.today:
+        current = DateTime.now();
+        break;
+      case ScheduleViewMode.yesterday:
+        current = DateTime.now().subtract(const Duration(days: 1));
+        break;
+      case ScheduleViewMode.tomorrow:
+        current = DateTime.now().add(const Duration(days: 1));
+        break;
+      case ScheduleViewMode.history:
+        current =
+            _historyDate ?? DateTime.now().subtract(const Duration(days: 2));
+        break;
+    }
+
+    final newDate = current.add(Duration(days: offset));
+    final now = DateTime.now();
+    final yesterday = now.subtract(const Duration(days: 1));
+    final tomorrow = now.add(const Duration(days: 1));
+
+    if (DateUtils.isSameDay(newDate, now)) {
+      setState(() => _viewMode = ScheduleViewMode.today);
+      _updateStatusDate();
+
+      final versions =
+          await HistoryService().getVersionsForDate(now, _currentGroup);
+      if (mounted) {
+        setState(() {
+          _historyVersions = versions;
+          if (_historyVersions.isNotEmpty) {
+            _selectedVersionIndex = _historyVersions.length - 1;
+            _historySchedule = _historyVersions.last.toSchedule();
+          } else {
+            _selectedVersionIndex = -1;
+            _historySchedule = null;
+          }
+        });
+      }
+
+      if (_dataSourceMode == DataSourceMode.real) {
+        _loadRealOutageData(newDate).then((_) => setState(() {}));
+      }
+    } else if (DateUtils.isSameDay(newDate, yesterday)) {
+      setState(() {
+        _viewMode = ScheduleViewMode.yesterday;
+        _historyDate = newDate;
+      });
+      _loadHistoryData(newDate);
+      if (_dataSourceMode == DataSourceMode.real) {
+        _loadRealOutageData(newDate).then((_) => setState(() {}));
+      }
+    } else if (DateUtils.isSameDay(newDate, tomorrow)) {
+      setState(() => _viewMode = ScheduleViewMode.tomorrow);
+      _updateStatusDate();
+      if (_dataSourceMode == DataSourceMode.real) {
+        _loadRealOutageData(newDate).then((_) => setState(() {}));
+      }
+    } else {
+      setState(() {
+        _viewMode = ScheduleViewMode.history;
+        _historyDate = newDate;
+      });
+      _loadHistoryData(newDate);
+      if (_dataSourceMode == DataSourceMode.real) {
+        _loadRealOutageData(newDate).then((_) => setState(() {}));
+      }
+    }
   }
 
   @override
@@ -1498,12 +1943,13 @@ class _HomeScreenState extends State<HomeScreen>
 
     // Override with real data if in real mode
     List<IntervalInfo> intervals;
-    List<List<HourSegment>>? realHourSegments;
+    _realHourSegments = null;
     if (_powerMonitorEnabled && _dataSourceMode == DataSourceMode.real) {
-      currentDisplay =
-          _buildRealScheduleFromIntervals(_realOutageIntervals, displayDate);
+      currentDisplay = _buildRealScheduleFromIntervals(
+          _realOutageIntervals, displayDate,
+          baseSchedule: currentDisplay);
       intervals = _generateRealIntervals(_realOutageIntervals, displayDate);
-      realHourSegments =
+      _realHourSegments =
           _computeAllHourSegments(_realOutageIntervals, displayDate);
     } else {
       intervals = _generateIntervals(currentDisplay);
@@ -1511,308 +1957,407 @@ class _HomeScreenState extends State<HomeScreen>
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: DropdownButton<String>(
-          value: _currentGroup,
-          dropdownColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
-          icon: Icon(Icons.arrow_drop_down,
-              color: isDark ? Colors.orange : Colors.deepPurple),
-          underline: Container(),
-          style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : Colors.black87),
-          onChanged: (newGroup) async {
-            await _changeGroup(newGroup);
-
-            if (_viewMode == ScheduleViewMode.yesterday &&
-                _historyDate != null) {
-              _loadHistoryData(_historyDate!);
-            } else if (_viewMode == ScheduleViewMode.history &&
-                _historyDate != null) {
-              _loadHistoryData(_historyDate!);
-            }
+    return FocusableActionDetector(
+      focusNode: _focusNode,
+      autofocus: true,
+      shortcuts: {
+        LogicalKeySet(LogicalKeyboardKey.keyA):
+            const _SwitchModeIntent(DataSourceMode.predicted),
+        LogicalKeySet(LogicalKeyboardKey.arrowLeft):
+            const _SwitchModeIntent(DataSourceMode.predicted),
+        LogicalKeySet(LogicalKeyboardKey.numpad4):
+            const _SwitchModeIntent(DataSourceMode.predicted),
+        LogicalKeySet(LogicalKeyboardKey.keyD):
+            const _SwitchModeIntent(DataSourceMode.real),
+        LogicalKeySet(LogicalKeyboardKey.arrowRight):
+            const _SwitchModeIntent(DataSourceMode.real),
+        LogicalKeySet(LogicalKeyboardKey.numpad6):
+            const _SwitchModeIntent(DataSourceMode.real),
+      },
+      actions: {
+        _SwitchModeIntent: CallbackAction<_SwitchModeIntent>(
+          onInvoke: (intent) {
+            _setDataSourceMode(intent.mode);
+            return null;
           },
-          items: ParserService.allGroups.map((String value) {
-            return DropdownMenuItem(
-                value: value,
-                child: Text("Група ${value.replaceFirst('GPV', '')}"));
-          }).toList(),
         ),
-        centerTitle: true,
-        actions: [
-          if (_showNotificationTestButton)
-            IconButton(
-              icon: Icon(Icons.notifications_active,
+      },
+      child: GestureDetector(
+        onHorizontalDragEnd: (details) {
+          if (details.primaryVelocity! > 0) {
+            // Swipe Right -> Forecast
+            _setDataSourceMode(DataSourceMode.predicted);
+          } else if (details.primaryVelocity! < 0) {
+            // Swipe Left -> Real
+            _setDataSourceMode(DataSourceMode.real);
+          }
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: DropdownButton<String>(
+              value: _currentGroup,
+              dropdownColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
+              icon: Icon(Icons.arrow_drop_down,
                   color: isDark ? Colors.orange : Colors.deepPurple),
-              tooltip: "Тест сповіщень",
-              onPressed: () async {
-                await _notifier.testNotifications();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Тестові сповіщення відправлено')),
-                  );
+              underline: Container(),
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87),
+              onChanged: (newGroup) async {
+                await _changeGroup(newGroup);
+
+                if (_viewMode == ScheduleViewMode.yesterday &&
+                    _historyDate != null) {
+                  _loadHistoryData(_historyDate!);
+                } else if (_viewMode == ScheduleViewMode.history &&
+                    _historyDate != null) {
+                  _loadHistoryData(_historyDate!);
                 }
               },
+              items: ParserService.allGroups.map((String value) {
+                return DropdownMenuItem(
+                    value: value,
+                    child: Text("Група ${value.replaceFirst('GPV', '')}"));
+              }).toList(),
             ),
-          IconButton(
-            icon: Icon(Icons.refresh,
-                color: isDark ? Colors.white : Colors.black87),
-            onPressed: () {
-              _loadData();
-              if (_powerMonitorEnabled) _powerMonitor.forceRefresh();
-            },
-          ),
-          _buildPowerIndicator(),
-          IconButton(
-            icon: Icon(Icons.settings,
-                color: isDark ? Colors.white : Colors.black87),
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) =>
-                        SettingsPage(onThemeChanged: widget.onThemeChanged)),
-              );
-              _loadPreferencesAndData();
-              _initPowerMonitor();
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12.0),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                    child: ChoiceChip(
-                      label: const Text('Минуле'),
-                      selected: _viewMode == ScheduleViewMode.history,
-                      onSelected: (bool selected) {
-                        _selectDateAndLoad().then((_) {
-                          if (_dataSourceMode == DataSourceMode.real) {
-                            _loadRealOutageData(_getDisplayDate())
-                                .then((_) => setState(() {}));
-                          }
-                        });
-                      },
+            centerTitle: true,
+            actions: [
+              if (_showNotificationTestButton)
+                IconButton(
+                  icon: Icon(Icons.notifications_active,
+                      color: isDark ? Colors.orange : Colors.deepPurple),
+                  tooltip: "Тест сповіщень",
+                  onPressed: () async {
+                    await _notifier.testNotifications();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Тестові сповіщення відправлено')),
+                      );
+                    }
+                  },
+                ),
+              IconButton(
+                icon: Icon(Icons.refresh,
+                    color: isDark ? Colors.white : Colors.black87),
+                onPressed: () {
+                  _loadData();
+                  if (_powerMonitorEnabled) _powerMonitor.forceRefresh();
+                  _achievementService.trackRefresh();
+                },
+              ),
+              IconButton(
+                icon: Icon(Icons.analytics_outlined,
+                    color: isDark ? Colors.orange : Colors.deepPurple),
+                tooltip: 'Аналітика',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          AnalyticsScreen(groupKey: _currentGroup),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                    child: ChoiceChip(
-                      label: const Text('Вчора'),
-                      selected: _viewMode == ScheduleViewMode.yesterday,
-                      onSelected: (bool selected) {
-                        if (selected) {
-                          setState(() {
-                            _viewMode = ScheduleViewMode.yesterday;
-                            _historyDate = DateTime.now()
-                                .subtract(const Duration(days: 1));
-                          });
-                          _loadHistoryData(_historyDate!);
-                          if (_dataSourceMode == DataSourceMode.real) {
-                            _loadRealOutageData(_historyDate!)
-                                .then((_) => setState(() {}));
-                          }
-                        }
-                      },
+                  );
+                },
+              ),
+              IconButton(
+                icon: Icon(Icons.emoji_events_outlined,
+                    color: isDark ? Colors.amber : Colors.deepOrange),
+                tooltip: 'Досягнення',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const AchievementsScreen(),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                    child: ChoiceChip(
-                      label: const Text('Сьогодні'),
-                      selected: _viewMode == ScheduleViewMode.today,
-                      onSelected: (bool selected) {
-                        setState(() {
-                          _viewMode = ScheduleViewMode.today;
-                        });
-                        _updateStatusDate();
-
-                        HistoryService()
-                            .getVersionsForDate(DateTime.now(), _currentGroup)
-                            .then((versions) {
-                          if (mounted) {
-                            setState(() {
-                              _historyVersions = versions;
-                              if (_historyVersions.isNotEmpty) {
-                                _selectedVersionIndex =
-                                    _historyVersions.length - 1;
-                                _historySchedule =
-                                    _historyVersions.last.toSchedule();
-                              } else {
-                                _selectedVersionIndex = -1;
-                                _historySchedule = null;
+                  );
+                },
+              ),
+              _buildPowerIndicator(),
+              IconButton(
+                icon: Icon(Icons.settings,
+                    color: isDark ? Colors.white : Colors.black87),
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => SettingsPage(
+                            onThemeChanged: widget.onThemeChanged)),
+                  );
+                  _loadPreferencesAndData();
+                  _initPowerMonitor();
+                },
+              ),
+            ],
+          ),
+          body: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12.0),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          DarknessThemeService().getArrowIcon(forward: false),
+                          color:
+                              Theme.of(context).textTheme.titleLarge?.color ??
+                                  Colors.white,
+                        ),
+                        onPressed: () => _navigateDate(-1),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                        child: ChoiceChip(
+                          label: const Text('Минуле'),
+                          selected: _viewMode == ScheduleViewMode.history,
+                          onSelected: (bool selected) {
+                            _selectDateAndLoad().then((_) {
+                              if (_dataSourceMode == DataSourceMode.real) {
+                                _loadRealOutageData(_getDisplayDate())
+                                    .then((_) => setState(() {}));
                               }
                             });
-                          }
-                        });
-                        if (_dataSourceMode == DataSourceMode.real) {
-                          _loadRealOutageData(DateTime.now())
-                              .then((_) => setState(() {}));
-                        }
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                    child: ChoiceChip(
-                      label: const Text('Завтра'),
-                      selected: _viewMode == ScheduleViewMode.tomorrow,
-                      onSelected: (bool selected) {
-                        setState(() {
-                          _viewMode = ScheduleViewMode.tomorrow;
-                        });
-                        _updateStatusDate();
-                        if (_dataSourceMode == DataSourceMode.real) {
-                          _loadRealOutageData(
-                                  DateTime.now().add(const Duration(days: 1)))
-                              .then((_) => setState(() {}));
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          _buildDataSourceToggle(),
-          GestureDetector(
-            onTap: (_historyVersions.isNotEmpty) ? _showVersionPicker : null,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(_statusMessage,
-                    style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                if (_historyVersions.length > 0)
-                  const Icon(Icons.arrow_drop_down,
-                      color: Colors.grey, size: 16),
-              ],
-            ),
-          ),
-          if (!_isLoading) ...[
-            const SizedBox(height: 8),
-            if (_viewMode == ScheduleViewMode.today ||
-                _viewMode == ScheduleViewMode.tomorrow)
-              _buildCountdownWidget(_allSchedules[_currentGroup]),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0),
-              child: Text(
-                _getOutageInfoText(
-                    currentDisplay, _viewMode == ScheduleViewMode.tomorrow),
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    color: Theme.of(context).textTheme.bodyLarge?.color ??
-                        Colors.black87),
-              ),
-            ),
-          ],
-          Expanded(
-            child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(color: Colors.orange))
-                : RefreshIndicator(
-                    color: Colors.orange,
-                    onRefresh: () async {
-                      if (_viewMode == ScheduleViewMode.history ||
-                          _viewMode == ScheduleViewMode.yesterday) {
-                        if (_historyDate != null)
-                          await _loadHistoryData(_historyDate!);
-                      } else {
-                        await _loadData(silent: true);
-                      }
-                    },
-                    child: ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                          child: _buildGrid(currentDisplay, cols,
-                              realHourSegments: realHourSegments),
+                          },
                         ),
-                        if (intervals.isNotEmpty)
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
-                            child: Text("Розклад інтервалами:",
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 16)),
-                          ),
-                        if (intervals.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 40),
-                            child: Card(
-                              child: Column(
-                                children: intervals.map((interval) {
-                                  return GestureDetector(
-                                    onLongPress: () =>
-                                        _showIntervalMenu(context, interval),
-                                    child: Container(
-                                      decoration: const BoxDecoration(
-                                          border: Border(
-                                              bottom: BorderSide(
-                                                  color: Colors.white10))),
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 12, horizontal: 16),
-                                      child: Row(
-                                        children: [
-                                          SizedBox(
-                                              width: 120,
-                                              child: Text(interval.timeRange,
-                                                  style: TextStyle(
-                                                      fontSize: 16,
-                                                      fontWeight:
-                                                          FontWeight.w500,
-                                                      color: interval.statusText
-                                                              .contains("OFF")
-                                                          ? Colors.red
-                                                          : (Theme.of(context)
-                                                                      .brightness ==
-                                                                  Brightness
-                                                                      .dark
-                                                              ? Colors.white
-                                                              : Colors
-                                                                  .black87)))),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 8, vertical: 2),
-                                            decoration: BoxDecoration(
-                                                color: interval.color
-                                                    .withOpacity(0.2),
-                                                borderRadius:
-                                                    BorderRadius.circular(4)),
-                                            child: Text(interval.statusText,
-                                                style: TextStyle(
-                                                    color: interval.color,
-                                                    fontWeight:
-                                                        FontWeight.bold)),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text("(${interval.duration})",
-                                              style: const TextStyle(
-                                                  color: Colors.grey)),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                          )
-                      ],
-                    ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                        child: ChoiceChip(
+                          label: const Text('Вчора'),
+                          selected: _viewMode == ScheduleViewMode.yesterday,
+                          onSelected: (bool selected) {
+                            if (selected) {
+                              setState(() {
+                                _viewMode = ScheduleViewMode.yesterday;
+                                _historyDate = DateTime.now()
+                                    .subtract(const Duration(days: 1));
+                              });
+                              _loadHistoryData(_historyDate!);
+                              if (_dataSourceMode == DataSourceMode.real) {
+                                _loadRealOutageData(_historyDate!)
+                                    .then((_) => setState(() {}));
+                              }
+                            }
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                        child: ChoiceChip(
+                          label: const Text('Сьогодні'),
+                          selected: _viewMode == ScheduleViewMode.today,
+                          onSelected: (bool selected) {
+                            setState(() {
+                              _viewMode = ScheduleViewMode.today;
+                            });
+                            _updateStatusDate();
+
+                            HistoryService()
+                                .getVersionsForDate(
+                                    DateTime.now(), _currentGroup)
+                                .then((versions) {
+                              if (mounted) {
+                                setState(() {
+                                  _historyVersions = versions;
+                                  if (_historyVersions.isNotEmpty) {
+                                    _selectedVersionIndex =
+                                        _historyVersions.length - 1;
+                                    _historySchedule =
+                                        _historyVersions.last.toSchedule();
+                                  } else {
+                                    _selectedVersionIndex = -1;
+                                    _historySchedule = null;
+                                  }
+                                });
+                              }
+                            });
+                            if (_dataSourceMode == DataSourceMode.real) {
+                              _loadRealOutageData(DateTime.now())
+                                  .then((_) => setState(() {}));
+                            }
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                        child: ChoiceChip(
+                          label: const Text('Завтра'),
+                          selected: _viewMode == ScheduleViewMode.tomorrow,
+                          onSelected: (bool selected) {
+                            setState(() {
+                              _viewMode = ScheduleViewMode.tomorrow;
+                            });
+                            _updateStatusDate();
+                            if (_dataSourceMode == DataSourceMode.real) {
+                              _loadRealOutageData(DateTime.now()
+                                      .add(const Duration(days: 1)))
+                                  .then((_) => setState(() {}));
+                            }
+                          },
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          DarknessThemeService().getArrowIcon(forward: true),
+                          color:
+                              Theme.of(context).textTheme.titleLarge?.color ??
+                                  Colors.white,
+                        ),
+                        onPressed: () => _navigateDate(1),
+                      ),
+                    ],
                   ),
+                ),
+              ),
+              _buildDataSourceToggle(),
+              _buildDarknessStageBar(),
+              GestureDetector(
+                onTap:
+                    (_historyVersions.isNotEmpty) ? _showVersionPicker : null,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(_statusMessage,
+                        style: TextStyle(
+                            color: _statusColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold)),
+                    if (_historyVersions.length > 0)
+                      const Icon(Icons.arrow_drop_down,
+                          color: Colors.grey, size: 16),
+                  ],
+                ),
+              ),
+              if (!_isLoading) ...[
+                const SizedBox(height: 8),
+                if (_viewMode == ScheduleViewMode.today ||
+                    _viewMode == ScheduleViewMode.tomorrow)
+                  _buildCountdownWidget(_allSchedules[_currentGroup]),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8.0),
+                  child: Text(
+                    _getOutageInfoText(
+                        currentDisplay, _viewMode == ScheduleViewMode.tomorrow),
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Theme.of(context).textTheme.bodyLarge?.color ??
+                            Colors.black87),
+                  ),
+                ),
+              ],
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: CircularProgressIndicator(color: Colors.orange))
+                    : RefreshIndicator(
+                        color: Colors.orange,
+                        onRefresh: () async {
+                          _achievementService.trackRefresh();
+                          if (_viewMode == ScheduleViewMode.history ||
+                              _viewMode == ScheduleViewMode.yesterday) {
+                            if (_historyDate != null)
+                              await _loadHistoryData(_historyDate!);
+                          } else {
+                            await _loadData(silent: true);
+                          }
+                        },
+                        child: ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: [
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12.0),
+                              child: _buildGrid(currentDisplay, cols,
+                                  realHourSegments: _realHourSegments),
+                            ),
+                            if (intervals.isNotEmpty)
+                              const Padding(
+                                padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+                                child: Text("Розклад інтервалами:",
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16)),
+                              ),
+                            if (intervals.isNotEmpty)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 0, 12, 40),
+                                child: Card(
+                                  child: Column(
+                                    children: intervals.map((interval) {
+                                      return GestureDetector(
+                                        onLongPress: () => _showIntervalMenu(
+                                            context, interval),
+                                        child: Container(
+                                          decoration: const BoxDecoration(
+                                              border: Border(
+                                                  bottom: BorderSide(
+                                                      color: Colors.white10))),
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 12, horizontal: 16),
+                                          child: Row(
+                                            children: [
+                                              SizedBox(
+                                                  width: 120,
+                                                  child: Text(
+                                                      interval.timeRange,
+                                                      style: TextStyle(
+                                                          fontSize: 16,
+                                                          fontWeight:
+                                                              FontWeight.w500,
+                                                          color: interval
+                                                                  .statusText
+                                                                  .contains(
+                                                                      "OFF")
+                                                              ? Colors.red
+                                                              : (Theme.of(context)
+                                                                          .brightness ==
+                                                                      Brightness
+                                                                          .dark
+                                                                  ? Colors.white
+                                                                  : Colors
+                                                                      .black87)))),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 2),
+                                                decoration: BoxDecoration(
+                                                    color: interval.color
+                                                        .withOpacity(0.2),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            4)),
+                                                child: Text(interval.statusText,
+                                                    style: TextStyle(
+                                                        color: interval.color,
+                                                        fontWeight:
+                                                            FontWeight.bold)),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text("(${interval.duration})",
+                                                  style: const TextStyle(
+                                                      color: Colors.grey)),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ),
+                              )
+                          ],
+                        ),
+                      ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1822,9 +2367,28 @@ class _HomeScreenState extends State<HomeScreen>
     final bool isRealMode =
         _powerMonitorEnabled && _dataSourceMode == DataSourceMode.real;
 
+    if (isRealMode &&
+        (_powerMonitor.customUrl == null ||
+            _powerMonitor.customUrl!.trim().isEmpty)) {
+      return const SizedBox(
+        height: 500,
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(40),
+            child: Text(
+              "URL бази даних не налаштовано. Перейдіть в Налаштування.",
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+      );
+    }
+
     if (!isRealMode && (schedule == null || schedule.isEmpty)) {
       return RefreshIndicator(
         onRefresh: () async {
+          _achievementService.trackRefresh();
           await _loadData(silent: true);
         },
         child: const SingleChildScrollView(
@@ -1866,90 +2430,336 @@ class _HomeScreenState extends State<HomeScreen>
         final status = schedule?.hours[index] ?? LightStatus.unknown;
         Widget cellContent;
 
-        final redColor = Colors.red.shade400;
-        final greenColor = Colors.green.shade400;
+        final darknessService = DarknessThemeService();
+        final stage =
+            darknessService.isEnabled ? darknessService.currentStage : null;
 
         switch (status) {
           case LightStatus.on:
-            cellContent = _colorBox(greenColor, "$index:00");
+            cellContent = _themedColorBox(true, "$index:00", stage);
             break;
           case LightStatus.off:
-            cellContent = _colorBox(redColor, "$index:00");
+            cellContent = _themedColorBox(false, "$index:00", stage);
             break;
           case LightStatus.semiOn:
-            cellContent = _gradientBox([redColor, greenColor], "$index:00 ⚡");
+            cellContent = _themedGradientBox(true, "$index:00", stage);
             break;
           case LightStatus.semiOff:
-            cellContent = _gradientBox([greenColor, redColor], "$index:00");
+            cellContent = _themedGradientBox(false, "$index:00", stage);
             break;
           case LightStatus.maybe:
-            cellContent = _colorBox(Colors.grey.shade400, "$index:00 ?");
+            cellContent = _themedMaybeBox("$index:00", stage);
             break;
           default:
-            cellContent = _colorBox(Colors.grey.shade300, "$index:00");
+            cellContent = _themedMaybeBox("$index:00", stage);
         }
 
+        // Wrap with animation
+        final animated = ThemeAnimatedCell(
+          stage: stage,
+          child: cellContent,
+        );
+
         if (isCurrentHour) {
-          return Stack(children: [
-            Container(
-                decoration: BoxDecoration(
-                    border: Border.all(color: Colors.blue, width: 3),
-                    borderRadius: BorderRadius.circular(8)),
-                child: cellContent),
-            const Positioned(
-                top: 4,
-                right: 4,
-                child: Icon(Icons.circle, size: 8, color: Colors.blue))
-          ]);
+          return _themedCurrentHourWrap(animated, stage);
         }
-        return cellContent;
+        return animated;
       },
     );
   }
 
-  /// Ячейка Real Mode: пропорційна заливка кольорами.
+  /// Ячейка Real Mode: пропорційна заливка кольорами (themed) + анімації + Future Styling.
   Widget _buildRealModeCell(
       int hour, List<HourSegment> segments, bool isCurrentHour) {
+    final darknessService = DarknessThemeService();
+    final stage =
+        darknessService.isEnabled ? darknessService.currentStage : null;
     final now = DateTime.now();
     final bool showNowLine = isCurrentHour;
     final double nowFraction = showNowLine ? now.minute / 60.0 : 0;
+    final radius = _themedBorderRadius(stage);
+    final textStyle = _themedCellTextStyle(stage);
 
-    // Побудувати мини-таймлайн
+    // Resolve now-line color per theme
+    Color nowLineColor;
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        nowLineColor = const Color(0xFF2E7D32);
+        break;
+      case DarknessStage.dieselpunk:
+        nowLineColor = const Color(0xFFFF9800);
+        break;
+      case DarknessStage.cyberpunk:
+        nowLineColor = const Color(0xFFFF0080);
+        break;
+      case DarknessStage.stalker:
+        nowLineColor = const Color(0xFFFF1744);
+        break;
+      default:
+        nowLineColor = Colors.white.withOpacity(0.9);
+    }
+
+    // Helper to determine if a color represents "ON" state
+    bool isOn(Color c) {
+      return c.green > 100 && c.red < 150;
+    }
+
+    // Build timeline segments
     Widget timeline = LayoutBuilder(builder: (context, constraints) {
       final totalWidth = constraints.maxWidth;
       List<Widget> children = [];
 
       for (final segment in segments) {
-        final w = segment.width * totalWidth;
-        if (w < 0.5) continue;
-        children.add(Container(
-          width: w,
-          color: segment.color,
-        ));
+        // Handle split for current hour
+        double start = segment.startFraction;
+        double end = segment.endFraction;
+
+        // If this segment is entirely in the past (left of now line) or entirely future (right)
+        // Or if it crosses.
+        // We render it as one piece, BUT we apply "Future" styling if it is effectively "Future".
+        // HOWEVER, the user wants a sharp visual split at `nowFraction`.
+        // So we strictly split segments at `nowFraction` if they overlap.
+
+        List<_RenderSegment> distinctParts = [];
+
+        if (isCurrentHour) {
+          // 1. Part before NOW (Past/Fact)
+          if (start < nowFraction) {
+            final effectiveEnd = end < nowFraction ? end : nowFraction;
+            distinctParts.add(_RenderSegment(
+                start, effectiveEnd, segment.color, false)); // isFuture=false
+          }
+          // 2. Part after NOW (Future/Forecast)
+          if (end > nowFraction) {
+            final effectiveStart = start > nowFraction ? start : nowFraction;
+            distinctParts.add(_RenderSegment(
+                effectiveStart, end, segment.color, true)); // isFuture=true
+          }
+        } else {
+          // Past hour or Future hour
+          final isFutureHour = hour > now.hour;
+          // If hour is today and > now.hour => Future
+          // If hour is tomorrow => Future (but we only show 24h usually, assumes index 0..23 is today)
+          // Wait, _buildRealModeCell is used in today view?
+          // The grid builder says: `final bool isCurrentHour = _viewMode == ScheduleViewMode.today && DateTime.now().hour == index;`
+          // And index is 0..23.
+          // So if index > now.hour, it's future. if index < now.hour, it's past.
+          bool isFuture = false;
+          if (_viewMode == ScheduleViewMode.today) {
+            if (hour > now.hour) isFuture = true;
+          } else if (_viewMode == ScheduleViewMode.tomorrow) {
+            isFuture = true;
+          } else if (_viewMode == ScheduleViewMode.yesterday ||
+              _viewMode == ScheduleViewMode.history) {
+            isFuture = false;
+          }
+
+          distinctParts
+              .add(_RenderSegment(start, end, segment.color, isFuture));
+        }
+
+        for (final part in distinctParts) {
+          final w = (part.end - part.start) * totalWidth;
+          if (w < 0.5) continue;
+
+          leftOffset() => part.start * totalWidth;
+
+          final isSegmentOn = isOn(part.color);
+          final themeColor =
+              isSegmentOn ? _themedOnColor(stage) : _themedOffColor(stage);
+
+          // Decoration for segment
+          BoxDecoration segDecoration;
+          Widget? overlay;
+
+          if (part.isFuture) {
+            // --- FUTURE STYLING ---
+            switch (stage) {
+              case DarknessStage.solarpunk:
+                // Blueprint / Potential: Semi-transparent grid
+                segDecoration = BoxDecoration(
+                    color: themeColor.withOpacity(0.35),
+                    border: Border.all(
+                        color: themeColor.withOpacity(0.5), width: 0.5));
+                overlay = CustomPaint(
+                    painter: _GridOverlayPainter(
+                        color: themeColor.withOpacity(0.15)));
+                break;
+              case DarknessStage.dieselpunk:
+                // Draft / Paper: Diagonal hatching (dense)
+                segDecoration = BoxDecoration(
+                  color: themeColor.withOpacity(0.5),
+                );
+                overlay = ClipRect(
+                  child: CustomPaint(
+                    painter: _DiagonalStripesPainter(
+                      color: Colors.black.withOpacity(0.2), // Darker etch
+                      spacing: 4, // Denser
+                    ),
+                  ),
+                );
+                break;
+              case DarknessStage.cyberpunk:
+                // Simulation / Hologram: Vertical scanlines
+                segDecoration = BoxDecoration(
+                  color: themeColor.withOpacity(0.2),
+                  border: Border.all(color: themeColor, width: 1),
+                );
+                overlay = Column(
+                  children: List.generate(
+                      10,
+                      (index) => Expanded(
+                              child: Container(
+                            margin: const EdgeInsets.only(bottom: 1),
+                            color: themeColor.withOpacity(0.1),
+                          ))),
+                );
+                break;
+              case DarknessStage.stalker:
+                // Fog / Anomaly: Static noise + Desaturated
+                segDecoration = BoxDecoration(
+                  color: Color.lerp(themeColor, Colors.grey, 0.7)!
+                      .withOpacity(0.4),
+                );
+                overlay = CustomPaint(
+                  painter: _NoisePainter(
+                      seed: hour * 100 + part.start.toInt()), // Static seed
+                );
+                break;
+              default:
+                segDecoration = BoxDecoration(
+                  color: themeColor.withOpacity(0.4),
+                );
+                overlay = const Icon(Icons.help_outline,
+                    size: 12, color: Colors.white24);
+            }
+          } else {
+            // --- FACT STYLING (Standard) ---
+            switch (stage) {
+              case DarknessStage.solarpunk:
+                segDecoration = BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: isSegmentOn
+                        ? [const Color(0xFF66BB6A), const Color(0xFF43A047)]
+                        : [const Color(0xFFE57373), const Color(0xFFBF360C)],
+                  ),
+                );
+                break;
+              case DarknessStage.dieselpunk:
+                segDecoration = BoxDecoration(
+                  color: themeColor,
+                );
+                break;
+              case DarknessStage.cyberpunk:
+                segDecoration = BoxDecoration(
+                  color: themeColor,
+                  border: Border(
+                    top: BorderSide(
+                      color: (isSegmentOn
+                              ? const Color(0xFF00FFFF)
+                              : const Color(0xFFFF0080))
+                          .withOpacity(0.5),
+                      width: 1,
+                    ),
+                  ),
+                );
+                break;
+              case DarknessStage.stalker:
+                segDecoration = BoxDecoration(
+                  color: themeColor, // already mapped to dark storage colors
+                );
+                break;
+              default:
+                segDecoration = BoxDecoration(color: themeColor);
+            }
+          }
+
+          Widget segmentWidget =
+              Container(decoration: segDecoration, child: overlay);
+
+          // Legacy overlays for Fact parts (Diesel stripes OFF etc)
+          if (!part.isFuture) {
+            List<Widget> extras = [segmentWidget];
+            // Dieselpunk: diagonal stripes for OFF FACT
+            if (stage == DarknessStage.dieselpunk && !isSegmentOn)
+              extras.add(Positioned.fill(
+                child: ClipRect(
+                  child: CustomPaint(
+                    painter: _DiagonalStripesPainter(
+                      color: const Color(0xFFFF9800).withOpacity(0.08),
+                    ),
+                  ),
+                ),
+              ));
+            // Stalker: scanlines for OFF FACT
+            if (stage == DarknessStage.stalker && !isSegmentOn)
+              extras.add(Positioned.fill(
+                child: CustomPaint(
+                  painter: _ScanlinePainter(
+                    color: const Color(0xFFFF1744).withOpacity(0.06),
+                  ),
+                ),
+              ));
+
+            children.add(Positioned(
+              left: leftOffset(),
+              width: w,
+              top: 0,
+              bottom: 0,
+              child: Stack(children: extras),
+            ));
+          } else {
+            // Future widget already has overlay inside
+            children.add(Positioned(
+              left: leftOffset(),
+              width: w,
+              top: 0,
+              bottom: 0,
+              child: segmentWidget,
+            ));
+          }
+        }
       }
 
       return Stack(
         children: [
-          Row(children: children),
-          // "Now" вертикальна лінія
+          ...children, // Positioned widgets
+
+          // Stalker: global scanline overlay (subtle) - ONLY FOR FACT PARTS?
+          // Actually, let's keep it global for cohesion, or maybe restrict?
+          // User said "Future... must be unique".
+          // Let's keep global effects minimal on Future to not conflict.
+
+          // "Now" vertical line
           if (showNowLine)
             Positioned(
               left: nowFraction * totalWidth - 1,
               top: 0,
               bottom: 0,
               child: Container(
-                width: 2,
-                color: Colors.white.withOpacity(0.9),
+                width: stage == DarknessStage.stalker ? 1.5 : 2,
+                decoration: BoxDecoration(
+                  color: nowLineColor,
+                  boxShadow: stage == DarknessStage.cyberpunk
+                      ? [
+                          BoxShadow(
+                            color: nowLineColor.withOpacity(0.6),
+                            blurRadius: 6,
+                            spreadRadius: 1,
+                          ),
+                        ]
+                      : null,
+                ),
               ),
             ),
-          // Мітка часу
+
+          // Timestamp
           Center(
             child: Text(
               "$hour:00",
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                color: Colors.white,
+              style: textStyle.copyWith(
                 shadows: [
                   Shadow(
                       blurRadius: 4,
@@ -1959,297 +2769,994 @@ class _HomeScreenState extends State<HomeScreen>
                       blurRadius: 8,
                       color: Colors.black54,
                       offset: const Offset(0, 0)),
+                  if (stage == DarknessStage.stalker)
+                    const Shadow(
+                        blurRadius: 4,
+                        color: Color(0xFF39FF14),
+                        offset: Offset(0, 0)),
                 ],
               ),
             ),
           ),
+
+          // Stalker: small radiation icon
+          if (stage == DarknessStage.stalker)
+            Positioned(
+              right: 2,
+              bottom: 1,
+              child: Icon(
+                Icons.radio_button_checked,
+                size: 8,
+                color: const Color(0xFF39FF14).withOpacity(0.2),
+              ),
+            ),
         ],
       );
     });
 
-    // Обгортка GestureDetector для тултіпа
+    // Container styling (outer shell)
+    BoxDecoration containerDecoration;
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        // Solarpunk cells usually have shadow, dealt with by ThemeAnimatedCell mostly?
+        // But we need the rounded corners and base background
+        containerDecoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF2E2E2E), // Base background
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.dieselpunk:
+        containerDecoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF1A1A1A),
+          border: Border.all(
+            color: const Color(0xFFFF9800).withOpacity(0.2),
+            width: 1,
+          ),
+        );
+        break;
+      case DarknessStage.cyberpunk:
+        containerDecoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF0A0E21),
+          border: Border.all(
+            color: const Color(0xFF2A2A4A),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF00FFFF).withOpacity(0.08),
+              blurRadius: 6,
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.stalker:
+        containerDecoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF050505),
+          border: Border.all(
+            color: const Color(0xFF39FF14).withOpacity(0.2),
+            width: 1,
+          ),
+        );
+        break;
+      default:
+        containerDecoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: Colors.grey.shade900,
+        );
+    }
+
+    // Wrap with gesture detector and tooltip
     Widget cell = GestureDetector(
       onLongPress: () => _showHourDetailTooltip(hour),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            color: Colors.grey.shade900,
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: timeline,
-          ),
-        ),
+      child: Container(
+        decoration: containerDecoration,
+        clipBehavior: Clip.antiAlias, // Ensure segments don't overflow
+        child: timeline,
       ),
     );
 
+    // Wrap with animation
+    final animated = ThemeAnimatedCell(
+      stage: stage,
+      child: cell,
+    );
+
     if (isCurrentHour) {
-      return Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.blue, width: 3),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: cell,
-      );
+      return _themedCurrentHourWrap(animated, stage);
     }
-    return cell;
+    return animated;
   }
 
-  /// Тултіп з деталями по годині.
-  void _showHourDetailTooltip(int hour) {
-    final date = _getDisplayDate();
-    final hourStart = DateTime(date.year, date.month, date.day, hour);
-    final hourEnd = hourStart.add(const Duration(hours: 1));
-    final now = DateTime.now();
+  /// Themed ON/OFF cell.
+  Widget _themedColorBox(bool isOn, String text, DarknessStage? stage) {
+    final color = isOn ? _themedOnColor(stage) : _themedOffColor(stage);
+    final radius = _themedBorderRadius(stage);
+    final textStyle = _themedCellTextStyle(stage);
 
-    List<String> lines = [];
-
-    // Collect OFF ranges in this hour
-    List<_OffRange> offRanges = [];
-    for (final interval in _realOutageIntervals) {
-      final intervalEnd = interval.end ?? now;
-      if (interval.start.isAfter(hourEnd) || intervalEnd.isBefore(hourStart))
-        continue;
-
-      final effectiveStart =
-          interval.start.isAfter(hourStart) ? interval.start : hourStart;
-      final effectiveEnd =
-          intervalEnd.isBefore(hourEnd) ? intervalEnd : hourEnd;
-      offRanges.add(_OffRange(
-        effectiveStart.difference(hourStart).inMinutes / 60.0,
-        effectiveEnd.difference(hourStart).inMinutes / 60.0,
-      ));
+    // Determine decorative icon
+    IconData? icon;
+    Color iconColor = Colors.white24;
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        icon = isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined;
+        iconColor = Colors.white.withOpacity(0.25);
+        break;
+      case DarknessStage.dieselpunk:
+        icon = isOn
+            ? Icons.settings_outlined
+            : Icons.local_fire_department_outlined;
+        iconColor = const Color(0xFFFF9800).withOpacity(0.2);
+        break;
+      case DarknessStage.cyberpunk:
+        icon = isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined;
+        iconColor = const Color(0xFFFF0080).withOpacity(0.25);
+        break;
+      case DarknessStage.stalker:
+        icon = isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded;
+        iconColor = isOn
+            ? const Color(0xFF39FF14).withOpacity(0.15)
+            : const Color(0xFFFF1744).withOpacity(0.25);
+        break;
+      default:
+        icon = null;
     }
 
-    double cursorMin = 0;
-    for (final r in offRanges) {
-      final startMin = (r.start * 60).round();
-      final endMin = (r.end * 60).round();
-      if (startMin > cursorMin) {
-        lines.add(
-            "${_fmtHM(hour, cursorMin.round())} - ${_fmtHM(hour, startMin)}: Світло є ✅");
-      }
-      lines.add(
-          "${_fmtHM(hour, startMin)} - ${_fmtHM(hour, endMin)}: Світла немає ❌");
-      cursorMin = endMin.toDouble();
-    }
-    // Tail
-    final endOfView =
-        (date.day == now.day && hour == now.hour) ? now.minute : 60;
-    if (cursorMin < endOfView) {
-      lines.add(
-          "${_fmtHM(hour, cursorMin.round())} - ${_fmtHM(hour, endOfView)}: Світлоє ✅");
+    // Build decoration
+    BoxDecoration decoration;
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isOn
+                ? [const Color(0xFF66BB6A), const Color(0xFF43A047)]
+                : [const Color(0xFFE57373), const Color(0xFFBF360C)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.25),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.dieselpunk:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: color,
+          border: Border.all(
+            color: const Color(0xFFFF9800).withOpacity(0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 4,
+              offset: const Offset(2, 2),
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.cyberpunk:
+        final neonColor =
+            isOn ? const Color(0xFF00FFFF) : const Color(0xFFFF0080);
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: color,
+          border: Border.all(
+            color: neonColor.withOpacity(0.5),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: neonColor.withOpacity(0.2),
+              blurRadius: 10,
+              spreadRadius: 1,
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.stalker:
+        final borderColor = isOn
+            ? const Color(0xFF39FF14).withOpacity(0.4)
+            : const Color(0xFFFF1744).withOpacity(0.5);
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: isOn ? const Color(0xFF0A1F0A) : const Color(0xFF1A0000),
+          border: Border.all(color: borderColor, width: 1),
+        );
+        break;
+      default:
+        decoration = BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(radius),
+        );
     }
 
-    if (lines.isEmpty) {
-      lines.add("Дані відсутні");
+    // Stalker: override text for OFF cells
+    String displayText = text;
+    TextStyle displayStyle = textStyle;
+    if (stage == DarknessStage.stalker && !isOn) {
+      displayStyle = textStyle.copyWith(
+        color: const Color(0xFFFF1744),
+        shadows: [
+          const Shadow(blurRadius: 4, color: Color(0xFFFF1744)),
+        ],
+      );
     }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text("$hour:00 — ${hour + 1 > 23 ? 0 : hour + 1}:00"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: lines
-              .map((l) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Text(l, style: const TextStyle(fontSize: 14)),
-                  ))
-              .toList(),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text("OK")),
+    return Container(
+      decoration: decoration,
+      child: Stack(
+        children: [
+          // Background decorative icon
+          if (icon != null)
+            Positioned(
+              right: 3,
+              bottom: 2,
+              child: Icon(icon, size: 16, color: iconColor),
+            ),
+          // Stalker scanline overlay for OFF cells
+          if (stage == DarknessStage.stalker && !isOn)
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _ScanlinePainter(
+                  color: const Color(0xFFFF1744).withOpacity(0.06),
+                ),
+              ),
+            ),
+          // Stalker: radiation icon top-left for OFF
+          if (stage == DarknessStage.stalker && !isOn)
+            Positioned(
+              left: 3,
+              top: 2,
+              child: Icon(
+                Icons.warning_amber_rounded,
+                size: 10,
+                color: const Color(0xFFFF1744).withOpacity(0.4),
+              ),
+            ),
+          // Cyberpunk: subtle inner glow line at top
+          if (stage == DarknessStage.cyberpunk)
+            Positioned(
+              top: 0,
+              left: 4,
+              right: 4,
+              child: Container(
+                height: 1,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.transparent,
+                      (isOn ? const Color(0xFF00FFFF) : const Color(0xFFFF0080))
+                          .withOpacity(0.5),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          // Dieselpunk: diagonal stripes for OFF
+          if (stage == DarknessStage.dieselpunk && !isOn)
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(radius),
+                child: CustomPaint(
+                  painter: _DiagonalStripesPainter(
+                    color: const Color(0xFFFF9800).withOpacity(0.08),
+                  ),
+                ),
+              ),
+            ),
+          // Main text
+          Center(child: Text(displayText, style: displayStyle)),
         ],
       ),
     );
   }
 
-  String _fmtHM(int hour, int minute) {
-    return "${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}";
-  }
+  /// Themed gradient box for semi-on / semi-off status.
+  Widget _themedGradientBox(bool isSemiOn, String text, DarknessStage? stage) {
+    final onColor = _themedOnColor(stage);
+    final offColor = _themedOffColor(stage);
+    final radius = _themedBorderRadius(stage);
+    final textStyle = _themedCellTextStyle(stage);
+    final colors = isSemiOn ? [offColor, onColor] : [onColor, offColor];
 
-  Widget _colorBox(Color color, String text) {
-    return Container(
-        decoration:
-            BoxDecoration(color: color, borderRadius: BorderRadius.circular(6)),
-        child: Center(
-            child: Text(text,
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: Colors.white))));
-  }
+    // Determine icons for both halves
+    IconData? iconLeft;
+    IconData? iconRight;
+    Color iconColorLeft = Colors.white24;
+    Color iconColorRight = Colors.white24;
 
-  Widget _gradientBox(List<Color> colors, String text) {
-    return Container(
-        decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            gradient: LinearGradient(colors: colors, stops: const [0.5, 0.5])),
-        child: Center(
-            child: Text(text,
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: Colors.white))));
-  }
+    // Helper to pick icon per theme & state
+    (IconData?, Color) getThemeIcon(bool isOn, DarknessStage? s) {
+      switch (s) {
+        case DarknessStage.solarpunk:
+          return (
+            isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined,
+            Colors.white.withOpacity(0.25)
+          );
+        case DarknessStage.dieselpunk:
+          return (
+            isOn
+                ? Icons.settings_outlined
+                : Icons.local_fire_department_outlined,
+            const Color(0xFFFF9800).withOpacity(0.2)
+          );
+        case DarknessStage.cyberpunk:
+          return (
+            isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined,
+            const Color(0xFFFF0080).withOpacity(0.25)
+          );
+        case DarknessStage.stalker:
+          return (
+            isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded,
+            isOn
+                ? const Color(0xFF39FF14).withOpacity(0.15)
+                : const Color(0xFFFF1744).withOpacity(0.25)
+          );
+        default:
+          return (null, Colors.white24);
+      }
+    }
 
-  void _showIntervalMenu(BuildContext context, IntervalInfo interval) {
-    // Allow modification even if ID is missing (try referencing by timestamp)
-    // For END event: if it's "ON" (green), the END of this interval is the timestamp of the NEXT event (which is ON).
-    // So interval.timeRange "10:00 - 11:00". 11:00 is the ON event.
-    // If status is OFF/Red, the start is the OFF event.
+    // Assign icons based on semiOn/semiOff logic
+    // semiOn: First half OFF, Second half ON
+    // semiOff: First half ON, Second half OFF
+    if (isSemiOn) {
+      final (iL, cL) = getThemeIcon(false, stage); // Left is OFF
+      final (iR, cR) = getThemeIcon(true, stage); // Right is ON
+      iconLeft = iL;
+      iconColorLeft = cL;
+      iconRight = iR;
+      iconColorRight = cR;
+    } else {
+      final (iL, cL) = getThemeIcon(true, stage); // Left is ON
+      final (iR, cR) = getThemeIcon(false, stage); // Right is OFF
+      iconLeft = iL;
+      iconColorLeft = cL;
+      iconRight = iR;
+      iconColorRight = cR;
+    }
 
-    // Actually, IntervalInfo stores `start` and `end` times implicitly in string, but we don't have the raw DateTime here easily
-    // without parsing or passing it.
-    // Let's rely on IDs primarily, but if ID is missing for an OFF segment, it means we have a phantom start.
-    // We can't robustly delete by timestamp without passing DateTime.
-
-    // Better approach: If ID is null, show "Fix/Delete" that deletes by timestamp derived from timeRange?
-    // Parsing "HH:mm" is risky if dates differ.
-
-    // However, cleanupPhantomEvents() should fix the null IDs on restart.
-    // If user is live, maybe we just advise restart?
-    // Or we assume ID null means it's a gap-filler that shouldn't exist as OFF.
-
-    if (interval.startEventId == null && interval.endEventId == null) {
-      // Check if it's a real OFF interval (Red)
-      if (interval.statusText.contains("OFF")) {
-        // This is a phantom OFF.
-        // We should allow deleting it.
-        // But we need the start time.
-        // Let's parse the start time from the string string "HH:mm - HH:mm"
-        // This is a hack but effective for this context.
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text("Цей інтервал не можна змінити (системний)")),
+    // Stalker uses harsh split, cyberpunk uses neon glow
+    BoxDecoration decoration;
+    String displayText = text;
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        displayText = isSemiOn ? '$text ⚡' : text;
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: colors,
+            stops: const [0.45, 0.55],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: onColor.withOpacity(0.2),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
         );
-        return;
-      }
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-
-    // Parse times for fallback deletion
-    final times = interval.timeRange.split(' - ');
-    DateTime? startTimeFallback;
-    if (times.length == 2 && _viewMode == ScheduleViewMode.today) {
-      final now = DateTime.now();
-      final startParts = times[0].split(':');
-
-      if (startParts.length == 2) {
-        startTimeFallback = DateTime(now.year, now.month, now.day,
-            int.parse(startParts[0]), int.parse(startParts[1]));
-      }
-    }
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: bgColor,
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (interval.startEventId != null)
-                ListTile(
-                  leading: const Icon(Icons.edit, color: Colors.blue),
-                  title: const Text('Змінити час початку'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _editEventTime(interval.startEventId!);
-                  },
-                ),
-              if (interval.endEventId != null)
-                ListTile(
-                  leading: const Icon(Icons.edit_calendar, color: Colors.blue),
-                  title: const Text('Змінити час завершення'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _editEventTime(interval.endEventId!);
-                  },
-                ),
-              if (interval.startEventId != null ||
-                  (interval.startEventId == null &&
-                      startTimeFallback != null &&
-                      interval.statusText.contains("OFF")))
-                ListTile(
-                  leading: const Icon(Icons.delete, color: Colors.red),
-                  title: Text(interval.startEventId == null
-                      ? 'Видалити (FORCE)'
-                      : 'Видалити подію початку'),
-                  subtitle: interval.startEventId == null
-                      ? const Text("Видалити за часом (без ID)")
-                      : null,
-                  onTap: () {
-                    Navigator.pop(context);
-                    if (interval.startEventId != null) {
-                      _deleteEvent(interval.startEventId!);
-                    } else if (startTimeFallback != null) {
-                      _deleteEventByTime(startTimeFallback);
-                    }
-                  },
-                ),
-              if (interval.endEventId != null)
-                ListTile(
-                  leading: const Icon(Icons.delete_forever, color: Colors.red),
-                  title: const Text('Видалити подію завершення'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _deleteEvent(interval.endEventId!);
-                  },
-                ),
-            ],
+        break;
+      case DarknessStage.dieselpunk:
+        displayText = isSemiOn ? '$text ⚡' : text;
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: LinearGradient(
+            colors: colors,
+            stops: const [0.5, 0.5],
+          ),
+          border: Border.all(
+            color: const Color(0xFFFF9800).withOpacity(0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.4),
+              blurRadius: 3,
+              offset: const Offset(1, 1),
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.cyberpunk:
+        displayText = isSemiOn ? '$text ⚡' : text;
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: LinearGradient(
+            colors: colors,
+            stops: const [0.5, 0.5],
+          ),
+          border: Border.all(
+            color: const Color(0xFFBB86FC).withOpacity(0.4),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFBB86FC).withOpacity(0.15),
+              blurRadius: 8,
+              spreadRadius: 1,
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.stalker:
+        displayText = isSemiOn ? '$text ?' : text;
+        final cOn = const Color(0xFF0A1F0A);
+        final cOff = const Color(0xFF1A0000);
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: LinearGradient(
+            colors: isSemiOn ? [cOff, cOn] : [cOn, cOff],
+            stops: const [0.5, 0.5],
+          ),
+          border: Border.all(
+            color: const Color(0xFFFFD600).withOpacity(0.4),
+            width: 1,
           ),
         );
-      },
+        break;
+      default:
+        displayText = isSemiOn ? '$text ⚡' : text;
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: LinearGradient(colors: colors, stops: const [0.5, 0.5]),
+        );
+    }
+
+    return Container(
+      decoration: decoration,
+      child: Stack(
+        children: [
+          // 1) Icons for left/right halves
+          if (iconLeft != null)
+            Positioned(
+              left: 4,
+              bottom: 4,
+              child: Icon(iconLeft, size: 14, color: iconColorLeft),
+            ),
+          if (iconRight != null)
+            Positioned(
+              right: 4,
+              bottom: 4,
+              child: Icon(iconRight, size: 14, color: iconColorRight),
+            ),
+
+          if (stage == DarknessStage.stalker)
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _ScanlinePainter(
+                  color: const Color(0xFFFFD600).withOpacity(0.04),
+                ),
+              ),
+            ),
+          if (stage == DarknessStage.stalker)
+            Positioned(
+              right: 3,
+              bottom: 2,
+              child: Icon(
+                iconRight ?? Icons.help_outline, // Use derived icon or fallback
+                size: 12,
+                color: iconColorRight,
+              ),
+            ),
+
+          // 2) Dieselpunk: diagonal stripes for semiOff (right half is OFF)
+          // semiOff -> !isSemiOn -> [ON, OFF] -> right half is OFF
+          if (stage == DarknessStage.dieselpunk && !isSemiOn)
+            Positioned.fill(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: Container()), // Empty left half (ON)
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(radius),
+                          bottomRight: Radius.circular(radius)),
+                      child: CustomPaint(
+                        painter: _DiagonalStripesPainter(
+                          color: const Color(0xFFFF9800).withOpacity(0.08),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          // Dieselpunk: diagonal stripes for semiOn (left half is OFF)
+          // semiOn -> [OFF, ON] -> left half is OFF
+          if (stage == DarknessStage.dieselpunk && isSemiOn)
+            Positioned.fill(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(radius),
+                          bottomLeft: Radius.circular(radius)),
+                      child: CustomPaint(
+                        painter: _DiagonalStripesPainter(
+                          color: const Color(0xFFFF9800).withOpacity(0.08),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(child: Container()), // Empty right half (ON)
+                ],
+              ),
+            ),
+
+          Center(
+            child: Text(
+              displayText,
+              style: stage == DarknessStage.stalker
+                  ? textStyle.copyWith(
+                      color: const Color(0xFFFFD600),
+                      shadows: [
+                        const Shadow(blurRadius: 4, color: Color(0xFFFFD600)),
+                      ],
+                    )
+                  : textStyle,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Future<void> _deleteEventByTime(DateTime ts) async {
-    await _powerMonitor.deleteEventByTimestamp(ts);
-    await _loadRealOutageData(_getDisplayDate());
-    setState(() {});
+  /// Themed maybe/unknown cell.
+  Widget _themedMaybeBox(String text, DarknessStage? stage) {
+    final radius = _themedBorderRadius(stage);
+    final textStyle = _themedCellTextStyle(stage);
+
+    BoxDecoration decoration;
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFFBDBDBD),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.2),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        );
+        break;
+      case DarknessStage.dieselpunk:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF3E2723),
+          border: Border.all(
+            color: const Color(0xFF795548).withOpacity(0.4),
+            width: 1,
+          ),
+        );
+        break;
+      case DarknessStage.cyberpunk:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF12122A),
+          border: Border.all(
+            color: const Color(0xFF2A2A4A),
+            width: 1,
+          ),
+        );
+        break;
+      case DarknessStage.stalker:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: const Color(0xFF0A0A0A),
+          border: Border.all(
+            color: const Color(0xFF39FF14).withOpacity(0.15),
+            width: 1,
+          ),
+        );
+        break;
+      default:
+        decoration = BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          color: Colors.grey.shade300,
+        );
+    }
+
+    return Container(
+      decoration: decoration,
+      child: Stack(
+        children: [
+          if (stage == DarknessStage.stalker)
+            Positioned(
+              right: 3,
+              bottom: 2,
+              child: Icon(
+                Icons.help_outline,
+                size: 12,
+                color: const Color(0xFF39FF14).withOpacity(0.15),
+              ),
+            ),
+          Center(
+            child: Text(
+              '$text ?',
+              style: stage == DarknessStage.stalker
+                  ? textStyle.copyWith(
+                      color: const Color(0xFF39FF14).withOpacity(0.5),
+                    )
+                  : (stage == DarknessStage.cyberpunk
+                      ? textStyle.copyWith(
+                          color: const Color(0xFF4A4A6A),
+                        )
+                      : textStyle.copyWith(color: Colors.white70)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
-  Future<void> _deleteEvent(int id) async {
-    await _powerMonitor.deleteEvent(id);
-    await _loadRealOutageData(_getDisplayDate());
-    setState(() {});
+  /// Themed current-hour wrapper.
+  Widget _themedCurrentHourWrap(Widget child, DarknessStage? stage) {
+    Color borderColor;
+    double borderWidth;
+    double radius;
+    List<BoxShadow>? shadows;
+    IconData dotIcon = Icons.circle;
+    Color dotColor;
+    double dotSize = 8;
+
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        borderColor = const Color(0xFF2E7D32);
+        borderWidth = 2.5;
+        radius = 14;
+        dotColor = const Color(0xFF2E7D32);
+        dotIcon = Icons.access_time_filled;
+        dotSize = 10;
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFF2E7D32).withOpacity(0.3),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
+        ];
+        break;
+      case DarknessStage.dieselpunk:
+        borderColor = const Color(0xFFFF9800);
+        borderWidth = 3;
+        radius = 4;
+        dotColor = const Color(0xFFFF9800);
+        dotIcon = Icons.circle;
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFFFF9800).withOpacity(0.3),
+            blurRadius: 6,
+          ),
+        ];
+        break;
+      case DarknessStage.cyberpunk:
+        borderColor = const Color(0xFF00FFFF);
+        borderWidth = 2;
+        radius = 8;
+        dotColor = const Color(0xFFFF0080);
+        dotIcon = Icons.circle;
+        dotSize = 6;
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFF00FFFF).withOpacity(0.4),
+            blurRadius: 12,
+            spreadRadius: 2,
+          ),
+          BoxShadow(
+            color: const Color(0xFFFF0080).withOpacity(0.15),
+            blurRadius: 8,
+          ),
+        ];
+        break;
+      case DarknessStage.stalker:
+        borderColor = const Color(0xFFFF1744);
+        borderWidth = 2;
+        radius = 2;
+        dotColor = const Color(0xFFFF1744);
+        dotIcon = Icons.warning_amber_rounded;
+        dotSize = 10;
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFFFF1744).withOpacity(0.3),
+            blurRadius: 6,
+          ),
+        ];
+        break;
+      default:
+        borderColor = Colors.blue;
+        borderWidth = 3;
+        radius = 8;
+        dotColor = Colors.blue;
+        shadows = null;
+    }
+
+    return Stack(children: [
+      Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: borderColor, width: borderWidth),
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: shadows,
+        ),
+        child: child,
+      ),
+      Positioned(
+        top: 3,
+        right: 3,
+        child: Icon(dotIcon, size: dotSize, color: dotColor),
+      ),
+    ]);
   }
 
-  Future<void> _editEventTime(int id) async {
-    final event = await _powerMonitor.getEvent(id);
-    if (event == null) return;
+  // ========================================================
+  // THEMED GRID CELLS HELPERS
+  // ========================================================
 
-    final TimeOfDay? picked = await showTimePicker(
+  /// Resolve ON/OFF colors for the current DarknessStage.
+  Color _themedOnColor(DarknessStage? stage) {
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        return const Color(0xFF4CAF50);
+      case DarknessStage.dieselpunk:
+        return const Color(0xFFB8860B); // dark goldenrod
+      case DarknessStage.cyberpunk:
+        return const Color(0xFF00BFA5); // neon teal
+      case DarknessStage.stalker:
+        return const Color(0xFF1B5E20); // dark toxic green
+      default:
+        return Colors.green.shade400;
+    }
+  }
+
+  Color _themedOffColor(DarknessStage? stage) {
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        return const Color(0xFFBF360C); // warm terracotta
+      case DarknessStage.dieselpunk:
+        return const Color(0xFF4E342E); // dark soot/rust
+      case DarknessStage.cyberpunk:
+        return const Color(0xFFAD1457); // deep magenta
+      case DarknessStage.stalker:
+        return const Color(0xFF8B0000); // blood dark red
+      default:
+        return Colors.red.shade400;
+    }
+  }
+
+  double _themedBorderRadius(DarknessStage? stage) {
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        return 14;
+      case DarknessStage.dieselpunk:
+        return 4;
+      case DarknessStage.cyberpunk:
+        return 8;
+      case DarknessStage.stalker:
+        return 2;
+      default:
+        return 6;
+    }
+  }
+
+  TextStyle _themedCellTextStyle(DarknessStage? stage) {
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        return const TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+          color: Colors.white,
+          shadows: [
+            Shadow(blurRadius: 2, color: Color(0x66000000)),
+          ],
+        );
+      case DarknessStage.dieselpunk:
+        return const TextStyle(
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+          color: Color(0xFFFFD54F),
+          letterSpacing: 0.5,
+          shadows: [
+            Shadow(blurRadius: 3, color: Color(0x88000000)),
+          ],
+        );
+      case DarknessStage.cyberpunk:
+        return const TextStyle(
+          fontFamily: 'Courier',
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          color: Color(0xFF00FFFF),
+          shadows: [
+            Shadow(blurRadius: 4, color: Color(0xFF00FFFF)),
+          ],
+        );
+      case DarknessStage.stalker:
+        return const TextStyle(
+          fontFamily: 'RobotoMono',
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+          color: Color(0xFF39FF14),
+          shadows: [
+            Shadow(blurRadius: 2, color: Color(0xFF39FF00)),
+            Shadow(blurRadius: 8, color: Colors.black),
+          ],
+        );
+      default:
+        return const TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+          color: Colors.white,
+        );
+    }
+  }
+
+  void _showHourDetailTooltip(int hour) {
+    if (_realHourSegments == null || hour >= _realHourSegments!.length) return;
+    final segs = _realHourSegments![hour];
+
+    showDialog(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(event.timestamp),
-      builder: (BuildContext context, Widget? child) {
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
-          child: child!,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text("Hour $hour Details"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: segs.map((s) {
+              final startM = (s.start * 60).toInt();
+              final endM = (s.end * 60).toInt();
+              return ListTile(
+                leading: CircleAvatar(backgroundColor: s.color, radius: 8),
+                title: Text("${_fmtHM(hour, startM)} - ${_fmtHM(hour, endM)}"),
+                subtitle: Text(s.isFuture ? "Forecast" : "Real Data"),
+              );
+            }).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text("Close"),
+            ),
+          ],
         );
       },
     );
+  }
 
-    if (picked != null) {
-      final newDateTime = DateTime(
-        event.timestamp.year,
-        event.timestamp.month,
-        event.timestamp.day,
-        picked.hour,
-        picked.minute,
-      );
-      await _powerMonitor.updateEventTimestamp(id, newDateTime);
-      await _loadRealOutageData(_getDisplayDate());
-      setState(() {});
+  String _fmtHM(int h, int m) {
+    return "${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}";
+  }
+
+  void _showIntervalMenu(BuildContext context, dynamic interval) {
+    // Placeholder for interval menu used in other modes
+    // interval is likely IntervalInfo or similar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Menu not implemented for this view")),
+    );
+  }
+}
+
+//End of _HomeScreenState
+
+// --- PAINTERS & HELPERS ---
+
+class _RenderSegment {
+  final double start;
+  final double end;
+  final Color color;
+  final bool isFuture;
+
+  _RenderSegment(this.start, this.end, this.color, this.isFuture);
+}
+
+class _GridOverlayPainter extends CustomPainter {
+  final Color color;
+  _GridOverlayPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    const step = 6.0;
+    for (double x = 0; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
   }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _ScanlinePainter extends CustomPainter {
+  final Color color;
+  _ScanlinePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    for (double y = 0; y < size.height; y += 3) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanlinePainter old) => old.color != color;
+}
+
+class _DiagonalStripesPainter extends CustomPainter {
+  final Color color;
+  final double spacing;
+  _DiagonalStripesPainter({required this.color, this.spacing = 10.0});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke;
+
+    for (double i = -size.height; i < size.width + size.height; i += spacing) {
+      canvas.drawLine(
+          Offset(i, 0), Offset(i + size.height, size.height), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DiagonalStripesPainter old) =>
+      old.color != color || old.spacing != spacing;
+}
+
+class _NoisePainter extends CustomPainter {
+  final int seed;
+  _NoisePainter({required this.seed});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final random = Random(seed);
+    final paint = Paint()..strokeWidth = 1;
+
+    for (int i = 0; i < 100; i++) {
+      paint.color = Colors.white.withOpacity(random.nextDouble() * 0.1);
+      final x = random.nextDouble() * size.width;
+      final y = random.nextDouble() * size.height;
+      canvas.drawPoints(PointMode.points, [Offset(x, y)], paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _NoisePainter old) => old.seed != seed;
+}
+
+class _SwitchModeIntent extends Intent {
+  final DataSourceMode mode;
+  const _SwitchModeIntent(this.mode);
 }

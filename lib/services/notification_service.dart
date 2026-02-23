@@ -226,7 +226,8 @@ class NotificationService {
 
       String finalTitle = title;
       if (groupName != null && notificationGroups.length > 1) {
-        finalTitle = "$groupName: $title";
+        String formattedGroup = groupName.replaceAll("GPV", "Група ");
+        finalTitle = "$formattedGroup: $title";
       }
 
       print("[NotificationService] Створення Platform-specific details...");
@@ -277,17 +278,19 @@ class NotificationService {
 
     SharedPreferences? prefs;
     try {
-      prefs = await SharedPreferences.getInstance();
+      prefs = await PreferencesHelper.getSafeInstance();
     } catch (e) {
       print(
           "Error getting SharedPreferences in scheduleNotificationsForToday: $e");
     }
 
-    final bool notify1hOff = prefs?.getBool('notify_1h_before_off') ?? true;
-    final bool notify30mOff = prefs?.getBool('notify_30m_before_off') ?? true;
-    final bool notify5mOff = prefs?.getBool('notify_5m_before_off') ?? true;
-    final bool notify1hOn = prefs?.getBool('notify_1h_before_on') ?? true;
-    final bool notify30mOn = prefs?.getBool('notify_30m_before_on') ?? true;
+    final bool fallback = prefs == null ? false : true;
+    final bool notify1hOff = prefs?.getBool('notify_1h_before_off') ?? fallback;
+    final bool notify30mOff =
+        prefs?.getBool('notify_30m_before_off') ?? fallback;
+    final bool notify5mOff = prefs?.getBool('notify_5m_before_off') ?? fallback;
+    final bool notify1hOn = prefs?.getBool('notify_1h_before_on') ?? fallback;
+    final bool notify30mOn = prefs?.getBool('notify_30m_before_on') ?? fallback;
     final List<String> notificationGroups =
         prefs?.getStringList('notification_groups') ?? [];
 
@@ -685,5 +688,9 @@ class NotificationService {
       print("[NotificationService]   ❌ ID=$id помилка: $e");
       print("[NotificationService]   StackTrace: $stackTrace");
     }
+  }
+
+  Future<void> cancelAllScheduled() async {
+    await _notificationsPlugin.cancelAll();
   }
 }

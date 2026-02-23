@@ -75,3 +75,6 @@ installer/
 .metadata
 devtools_options.yaml
 nuget.exe
+
+# Tests
+test/

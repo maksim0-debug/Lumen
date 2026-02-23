@@ -1,7 +1,7 @@
 name: vikl
 description: A new Flutter project.
 publish_to: 'none'
-version: 2.5.11+17
+version: 2.9.12+18
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -38,6 +38,7 @@ dependencies:
   sqflite_common_ffi: ^2.4.0+2
   path: ^1.9.1
   share_plus: ^12.0.1
+  fl_chart: ^0.70.2
   file_picker: ^10.3.10
   permission_handler: ^12.0.1
 

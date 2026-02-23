@@ -378,6 +378,12 @@ class HistoryService {
     }
   }
 
+  Future<void> clearPowerEvents() async {
+    final db = await database;
+    await db.delete('power_events');
+    print("[HistoryService] Cleared power_events table.");
+  }
+
   Future<String> exportHistoryToJson() async {
     final Map<String, dynamic> exportData = {};
 
@@ -482,5 +488,81 @@ class HistoryService {
     } catch (e) {
       print("Migration error: $e");
     }
+  }
+
+  Future<Map<String, FullSchedule>> getLastKnownSchedules() async {
+    final db = await database;
+    final Map<String, FullSchedule> result = {};
+    final now = DateTime.now();
+    final tomorrow = now.add(const Duration(days: 1));
+
+    final todayStr =
+        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    final tomorrowStr =
+        "${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}";
+
+    // Define all groups to iterate over
+    const List<String> allGroups = [
+      "GPV1.1",
+      "GPV1.2",
+      "GPV2.1",
+      "GPV2.2",
+      "GPV3.1",
+      "GPV3.2",
+      "GPV4.1",
+      "GPV4.2",
+      "GPV5.1",
+      "GPV5.2",
+      "GPV6.1",
+      "GPV6.2",
+    ];
+
+    for (String group in allGroups) {
+      // 1. Get Today's schedule
+      final List<Map<String, dynamic>> todayMaps = await db.query(
+        'schedule_history',
+        where: 'group_key = ? AND target_date = ?',
+        whereArgs: [group, todayStr],
+        orderBy: 'id DESC', // Get the latest version
+        limit: 1,
+      );
+
+      DailySchedule todaySchedule = DailySchedule.empty();
+      // Using a local var for lastUpdated to avoid conflict if I used it elsewhere
+      String lastUpdatedText = "Немає (Offline/Cache)";
+
+      if (todayMaps.isNotEmpty) {
+        final map = todayMaps.first;
+        todaySchedule = DailySchedule.fromEncodedString(map['schedule_code']);
+        lastUpdatedText = map['dtek_updated_at'] ?? "Невідомо";
+      }
+
+      // 2. Get Tomorrow's schedule
+      final List<Map<String, dynamic>> tomorrowMaps = await db.query(
+        'schedule_history',
+        where: 'group_key = ? AND target_date = ?',
+        whereArgs: [group, tomorrowStr],
+        orderBy: 'id DESC', // Get the latest version
+        limit: 1,
+      );
+
+      DailySchedule tomorrowSchedule = DailySchedule.empty();
+      if (tomorrowMaps.isNotEmpty) {
+        final map = tomorrowMaps.first;
+        tomorrowSchedule =
+            DailySchedule.fromEncodedString(map['schedule_code']);
+      }
+
+      // If we found at least something, add to result
+      if (!todaySchedule.isEmpty || !tomorrowSchedule.isEmpty) {
+        result[group] = FullSchedule(
+          today: todaySchedule,
+          tomorrow: tomorrowSchedule,
+          lastUpdatedSource: lastUpdatedText, // This will be the "cache" time
+        );
+      }
+    }
+
+    return result;
   }
 }

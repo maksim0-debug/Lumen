@@ -12,8 +12,7 @@ class PowerMonitorService {
   factory PowerMonitorService() => _instance;
   PowerMonitorService._internal();
 
-  static const String _firebaseUrl =
-      'https://lumen-power-default-rtdb.europe-west1.firebasedatabase.app';
+  String? _customUrl;
 
   Timer? _pollTimer;
   String _currentStatus = 'unknown'; // 'online' / 'offline' / 'unknown'
@@ -28,6 +27,7 @@ class PowerMonitorService {
   bool get isEnabled => _isEnabled;
   bool get isOnline => _currentStatus == 'online';
   bool get isOffline => _currentStatus == 'offline';
+  String? get customUrl => _customUrl;
 
   /// Ініціалізація: завантажити налаштування і запустити polling.
   Future<void> init() async {
@@ -38,6 +38,7 @@ class PowerMonitorService {
       print("Error loading SharedPreferences in PowerMonitorService.init: $e");
     }
     _isEnabled = prefs?.getBool('power_monitor_enabled') ?? false;
+    _customUrl = prefs?.getString('custom_power_monitor_url');
 
     if (_isEnabled) {
       // Cleanup bad data first
@@ -78,6 +79,8 @@ class PowerMonitorService {
   void startPolling() {
     stopPolling();
     _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      // Don't poll if no URL is set
+      if (_customUrl == null || _customUrl!.isEmpty) return;
       _fetchAndSync();
     });
   }
@@ -136,15 +139,28 @@ class PowerMonitorService {
 
   // 1. ИСПРАВЛЕННЫЙ МЕТОД ЗАГРУЗКИ (Сортировка по времени, а не ключу)
   Future<List<PowerEvent>> _fetchFromFirebase() async {
+    if (_customUrl == null || _customUrl!.trim().isEmpty) return [];
+
+    var baseUrl = _customUrl!.trim();
+    if (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.substring(0, baseUrl.length - 1);
+    }
+
     // Запрашиваем события. Лучше фильтровать по timestamp, если возможно,
     // но для надежности берем последние 100-200 записей, чтобы закрыть "дыры" истории.
     // limitToLast=200 гарантирует, что мы получим актуальные данные даже при плохом интернете.
-    final url = '$_firebaseUrl/events.json?orderBy="\$key"&limitToLast=200';
+    final url = '$baseUrl/events.json?orderBy="\$key"&limitToLast=200';
 
     final response = await http.get(Uri.parse(url));
 
     if (response.statusCode != 200)
       throw Exception('HTTP ${response.statusCode}');
+
+    final contentType = response.headers['content-type'] ?? '';
+    if (!contentType.contains('application/json')) {
+      throw FormatException(
+          'Invalid Content-Type. Expected JSON but got: $contentType');
+    }
 
     final body = response.body;
     if (body == 'null' || body.isEmpty) return [];
@@ -165,6 +181,53 @@ class PowerMonitorService {
     // КРИТИЧНО: Сортируем строго по времени Dart, а не по строкам ключей
     events.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return events;
+  }
+
+  Future<bool> testAndSetUrl(String newUrl) async {
+    try {
+      var baseUrl = newUrl.trim();
+      if (baseUrl.endsWith('/')) {
+        baseUrl = baseUrl.substring(0, baseUrl.length - 1);
+      }
+      if (baseUrl.isEmpty) return false;
+
+      // Firebase requires orderBy when using limitToLast
+      final url = '$baseUrl/events.json?orderBy="\$key"&limitToLast=1';
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode != 200) {
+        return false;
+      }
+
+      final contentType = response.headers['content-type'] ?? '';
+      if (!contentType.contains('application/json')) {
+        return false;
+      }
+
+      final body = response.body;
+      if (body != 'null' && body.isNotEmpty) {
+        // Just checking if it's valid JSON map format
+        final data = jsonDecode(body);
+        if (data is! Map) {
+          // Technically it could be an array of nulls but usually Firebase returns a map for objects
+          // We just ensure it doesn't throw.
+        }
+      }
+
+      final prefs = await PreferencesHelper.getSafeInstance();
+      await prefs.setString('custom_power_monitor_url', baseUrl);
+      _customUrl = baseUrl;
+
+      if (_isEnabled) {
+        await _fetchAndSync(isFullSync: true);
+        startPolling();
+      }
+
+      return true;
+    } catch (e) {
+      print('[PowerMonitor] testAndSetUrl error: $e');
+      return false;
+    }
   }
 
   // 2. ИСПРАВЛЕННЫЙ МЕТОД СОХРАНЕНИЯ (Без модификации времени!)
@@ -258,7 +321,7 @@ class PowerMonitorService {
     if (allEvents.isEmpty) return [];
 
     // 3. Настройки коррекции (6 минут)
-    const int routerDelayMinutes = 6;
+    const int routerDelayMinutes = 0;
 
     List<PowerOutageInterval> intervals = [];
 

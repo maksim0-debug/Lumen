@@ -8,7 +8,12 @@ import '../services/parser_service.dart';
 import '../services/backup_service.dart';
 import '../services/power_monitor_service.dart';
 import '../services/preferences_helper.dart';
+import '../services/achievement_service.dart';
+import '../services/darkness_theme_service.dart';
 import 'logs_page.dart';
+import 'manual_schedule_editor.dart';
+import 'power_monitor_guide_screen.dart';
+import '../services/history_service.dart';
 
 class SettingsPage extends StatefulWidget {
   final VoidCallback? onThemeChanged;
@@ -27,11 +32,15 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _notify30mBeforeOn = true;
   bool _notifyScheduleChange = true;
   bool _isDarkMode = true;
+  bool _animationsEnabled = true;
   bool _launchAtStartup = false;
   bool _isLoading = true;
   bool _enableLogging = true;
   bool _powerMonitorEnabled = false;
+  DarknessStage _currentDarknessStage = DarknessStage.solarpunk;
   List<String> _notificationGroups = [];
+
+  final TextEditingController _customUrlController = TextEditingController();
 
   @override
   void initState() {
@@ -73,9 +82,12 @@ class _SettingsPageState extends State<SettingsPage> {
           _notifyScheduleChange =
               prefs.getBool('notify_schedule_change') ?? true;
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
+          _animationsEnabled = DarknessThemeService().areAnimationsEnabled;
           _enableLogging = prefs.getBool('enable_logging') ?? true;
           _powerMonitorEnabled =
               prefs.getBool('power_monitor_enabled') ?? false;
+          // _autoDarknessTheme removed
+          _currentDarknessStage = DarknessThemeService().currentStage;
           _notificationGroups =
               prefs.getStringList('notification_groups') ?? [];
 
@@ -85,6 +97,9 @@ class _SettingsPageState extends State<SettingsPage> {
               _notificationGroups = [currentGroup];
             }
           }
+
+          final customUrl = prefs.getString('custom_power_monitor_url') ?? '';
+          _customUrlController.text = customUrl;
         }
 
         _isLoading = false;
@@ -95,6 +110,12 @@ class _SettingsPageState extends State<SettingsPage> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  @override
+  void dispose() {
+    _customUrlController.dispose();
+    super.dispose();
   }
 
   Future<void> _saveSetting(String key, bool value) async {
@@ -115,6 +136,74 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _testAndSaveUrl() async {
+    final url = _customUrlController.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Введіть URL бази даних')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final success = await PowerMonitorService().testAndSetUrl(url);
+      if (!mounted) return;
+
+      if (success) {
+        bool? clearHistory = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text("Джерело змінено"),
+            content: const Text(
+                "Ви успішно змінили джерело даних.\n\nБажаєте очистити локальну історію відключень від старого джерела?"),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text("Ні, залишити"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text("Так, очистити",
+                    style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+        );
+
+        if (clearHistory == true) {
+          await HistoryService().clearPowerEvents();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Історію відключень очищено')),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('URL успішно збережено')),
+            );
+          }
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Помилка: Не вдалося отримати JSON з цього URL або база закрита від читання.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Помилка: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -131,6 +220,17 @@ class _SettingsPageState extends State<SettingsPage> {
                     _isDarkMode, (val) async {
                   setState(() => _isDarkMode = val);
                   await _saveSetting('is_dark_mode', val);
+                  AchievementService().trackThemeToggle();
+                  if (widget.onThemeChanged != null) widget.onThemeChanged!();
+                }),
+                _buildCompactThemeSelector(),
+                _buildSwitchTile(
+                    "Анімації",
+                    "Увімкнути візуальні ефекти та анімації",
+                    _animationsEnabled, (val) async {
+                  setState(() => _animationsEnabled = val);
+                  await DarknessThemeService().setAnimationsEnabled(val);
+                  // Trigger theme rebuild if needed, though service likely notifies listeners
                   if (widget.onThemeChanged != null) widget.onThemeChanged!();
                 }),
                 if (Platform.isWindows) ...[
@@ -261,6 +361,44 @@ class _SettingsPageState extends State<SettingsPage> {
                     await PowerMonitorService().setEnabled(val);
                   },
                 ),
+                if (_powerMonitorEnabled) ...[
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _customUrlController,
+                            decoration: const InputDecoration(
+                              labelText: 'URL бази даних Firebase',
+                              hintText: 'https://xxx.firebasedatabase.app',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: _testAndSaveUrl,
+                          child: const Text('Зберегти'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.help_outline, color: Colors.blue),
+                    title:
+                        const Text("Як налаштувати свій сенсор? (Інструкція)"),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                    onTap: () {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const PowerMonitorGuideScreen()));
+                    },
+                  ),
+                ],
                 const Divider(),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -363,6 +501,19 @@ class _SettingsPageState extends State<SettingsPage> {
                     }
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.edit_calendar),
+                  title: const Text("Ручне редагування графіку"),
+                  subtitle: const Text("Створити або змінити дані історії"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                  onTap: () {
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) =>
+                                const ManualScheduleEditor()));
+                  },
+                ),
                 const Divider(),
                 ListTile(
                   title: const Text("Переглянути логи"),
@@ -398,5 +549,60 @@ class _SettingsPageState extends State<SettingsPage> {
       value: value,
       onChanged: onChanged,
     );
+  }
+
+  Widget _buildCompactThemeSelector() {
+    final currentMode = DarknessThemeService().mode;
+
+    return ListTile(
+      title: const Text("Режим теми"),
+      subtitle: Text(_getModeDescription(currentMode),
+          style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      trailing: DropdownButton<String>(
+        value: currentMode,
+        underline: Container(), // Remove underline
+        onChanged: (String? newValue) async {
+          if (newValue != null) {
+            await DarknessThemeService().setMode(newValue);
+            setState(() {
+              _currentDarknessStage = DarknessThemeService().currentStage;
+            });
+            if (widget.onThemeChanged != null) widget.onThemeChanged!();
+          }
+        },
+        items: [
+          const DropdownMenuItem(
+            value: 'off',
+            child: Text("Вимкнено"),
+          ),
+          const DropdownMenuItem(
+            value: 'auto',
+            child: Text("Автоматично"),
+          ),
+          const DropdownMenuItem(
+            value: 'solarpunk',
+            child: Text("🌿 Solarpunk"),
+          ),
+          const DropdownMenuItem(
+            value: 'dieselpunk',
+            child: Text("⚙️ Dieselpunk"),
+          ),
+          const DropdownMenuItem(
+            value: 'cyberpunk',
+            child: Text("🌃 Cyberpunk"),
+          ),
+          const DropdownMenuItem(
+            value: 'stalker',
+            child: Text("☢️ Stalker"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getModeDescription(String mode) {
+    if (mode == 'off') return "Використовується системна тема";
+    if (mode == 'auto') return "Змінюється від часу без світла";
+    return "Фіксована тема";
   }
 }
