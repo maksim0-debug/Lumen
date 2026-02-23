@@ -992,8 +992,6 @@ class _HomeScreenState extends State<HomeScreen>
       notificationGroups = [_currentGroup];
     }
 
-    await _notifier.cancelAllScheduled();
-
     bool first = true;
     for (String group in notificationGroups) {
       final schedule = _allSchedules[group];

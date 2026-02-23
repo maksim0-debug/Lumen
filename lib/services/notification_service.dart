@@ -309,7 +309,6 @@ class NotificationService {
           }
         } catch (e) {
           print("[NotificationService] Помилка скасування: $e");
-          await _notificationsPlugin.cancelAll();
         }
       } else {
         await _notificationsPlugin.cancelAll();
@@ -691,6 +690,18 @@ class NotificationService {
   }
 
   Future<void> cancelAllScheduled() async {
-    await _notificationsPlugin.cancelAll();
+    if (Platform.isAndroid) {
+      try {
+        final pending =
+            await _notificationsPlugin.pendingNotificationRequests();
+        for (var p in pending) {
+          await _notificationsPlugin.cancel(p.id);
+        }
+      } catch (e) {
+        print("[NotificationService] Помилка cancelAllScheduled: $e");
+      }
+    } else {
+      await _notificationsPlugin.cancelAll();
+    }
   }
 }
