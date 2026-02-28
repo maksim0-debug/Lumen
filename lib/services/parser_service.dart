@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:intl/intl.dart';
 import '../models/schedule_status.dart';
@@ -8,6 +10,7 @@ import 'history_service.dart';
 
 class ParserService {
   static const String _url = "https://www.dtek-krem.com.ua/ua/shutdowns";
+  static const String _homeUrl = "https://www.dtek-krem.com.ua/";
 
   static const List<String> allGroups = [
     "GPV1.1",
@@ -52,17 +55,66 @@ class ParserService {
     }
 
     _headlessWebView = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(_url)),
+      // Крок 1: Спочатку відкриваємо головну сторінку для отримання cookies
+      initialUrlRequest: URLRequest(url: WebUri(_homeUrl)),
       initialSettings: InAppWebViewSettings(
-        isInspectable: false,
+        isInspectable: kDebugMode,
         javaScriptEnabled: true,
-        incognito: true,
-        cacheEnabled: false,
+        incognito: false,
+        cacheEnabled: true,
+        domStorageEnabled: true,
+        databaseEnabled: true,
         userAgent:
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
       ),
+      // Приховуємо ознаки автоматизації (navigator.webdriver)
+      initialUserScripts: UnmodifiableListView([
+        UserScript(
+          source:
+              "Object.defineProperty(navigator, 'webdriver', {get: () => undefined}); if (!window.chrome) { window.chrome = { runtime: {} }; }",
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+        ),
+      ]),
+      onReceivedHttpError: (controller, request, errorResponse) async {
+        final reqUrl = request.url.toString();
+        final statusCode = errorResponse.statusCode;
+        if (reqUrl == _url || reqUrl == _homeUrl || reqUrl == _homeUrl.replaceAll(RegExp(r'/$'), '')) {
+          print("[Parser] ⛔ WebView HTTP помилка: $statusCode для $reqUrl");
+          await HistoryService().logAction(
+              "Парсер WebView помилка: HTTP $statusCode ($reqUrl)",
+              level: "ERROR");
+        }
+      },
+      onLoadError: (controller, url, code, message) async {
+        print("[Parser] ⛔ WebView помилка мережі: $code — $message");
+        await HistoryService().logAction(
+            "Парсер WebView помилка мережі: $code — $message",
+            level: "ERROR");
+      },
       onLoadStop: (controller, url) async {
-        print("[Parser] Сторінка завантажена. Шукаємо дані...");
+        final currentUrl = url?.toString() ?? '';
+
+        // Крок 1: Головна сторінка — чекаємо cookies і переходимо до графіків
+        if (!currentUrl.contains('/ua/shutdowns')) {
+          print(
+              "[Parser] \u{1F3E0} Головна сторінка завантажена ($currentUrl). Чекаємо 3 сек для cookies...");
+          await HistoryService().logAction(
+              "Парсер WebView: Головна сторінка завантажена, очікування cookies");
+          await Future.delayed(const Duration(seconds: 3));
+
+          print("[Parser] ➡️ Переходимо на сторінку графіків...");
+          await controller.loadUrl(
+            urlRequest: URLRequest(
+              url: WebUri(_url),
+              headers: {'Referer': _homeUrl},
+            ),
+          );
+          return;
+        }
+
+        // Крок 2: Сторінка графіків завантажена — шукаємо дані
+        print(
+            "[Parser] \u{1F4CA} Сторінка графіків завантажена. Шукаємо дані...");
 
         for (int i = 0; i < 20; i++) {
           try {
@@ -97,10 +149,30 @@ class ParserService {
               return;
             } else {
               print("[Parser] Спроба ${i + 1}/20: Дані поки не знайдено...");
-              // Only log every 5th attempt to avoid spamming logs
               if ((i + 1) % 5 == 0) {
                 await HistoryService()
                     .logAction("Парсер: спроба ${i + 1}/20 - дані не знайдено");
+              }
+
+              // Debug-логування на першій спробі
+              if (kDebugMode && i == 0) {
+                final debugHtml = await controller.evaluateJavascript(
+                    source: "document.documentElement.outerHTML");
+                if (debugHtml != null) {
+                  String snippet = debugHtml.toString();
+                  if (snippet.length > 500) {
+                    snippet = snippet.substring(0, 500);
+                  }
+                  print("[Parser-DEBUG] HTML Snippet:\n$snippet...");
+
+                  if (snippet.contains('cloudflare') ||
+                      snippet.contains('Just a moment')) {
+                    print("[Parser-DEBUG] ⚠️ Виявлено захист Cloudflare!");
+                    await HistoryService().logAction(
+                        "WebView потрапив на екран захисту Cloudflare",
+                        level: "WARN");
+                  }
+                }
               }
             }
           } catch (e) {
@@ -122,29 +194,97 @@ class ParserService {
       },
     );
 
+    // Страховочний тайм-аут: 60 секунд на весь процес WebView
+    Future.delayed(const Duration(seconds: 60), () {
+      if (!completer.isCompleted) {
+        print("[Parser] ❌ Глобальний тайм-аут WebView (60 сек)");
+        HistoryService().logAction(
+            "Парсер: Глобальний тайм-аут WebView 60 сек",
+            level: "ERROR");
+        completer.complete({});
+        _headlessWebView?.dispose();
+        _headlessWebView = null;
+      }
+    });
+
     try {
       await _headlessWebView?.run();
     } catch (e) {
       print("[Parser] ❌ Помилка запуску WebView: $e");
       await HistoryService()
           .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
+      if (!completer.isCompleted) completer.complete({});
       return {};
     }
 
     return completer.future;
   }
 
+  /// Допоміжний метод: встановлює стандартні заголовки браузера
+  void _setHttpHeaders(HttpClientRequest request, {String? referer}) {
+    request.headers.set('Accept',
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7');
+    request.headers.set(
+        'Accept-Language', 'uk,ru-RU;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6');
+    request.headers.set('Accept-Encoding', 'gzip, deflate');
+    request.headers.set('Cache-Control', 'max-age=0');
+    request.headers.set('Connection', 'keep-alive');
+    request.headers.set('Sec-Fetch-Dest', 'document');
+    request.headers.set('Sec-Fetch-Mode', 'navigate');
+    request.headers.set('Sec-Fetch-User', '?1');
+    request.headers.set('Upgrade-Insecure-Requests', '1');
+    request.headers.set('sec-ch-ua',
+        '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"');
+    request.headers.set('sec-ch-ua-mobile', '?0');
+    request.headers.set('sec-ch-ua-platform', '"Windows"');
+    if (referer != null) {
+      request.headers.set('Referer', referer);
+      request.headers.set('Sec-Fetch-Site', 'same-origin');
+    } else {
+      request.headers.set('Sec-Fetch-Site', 'none');
+    }
+  }
+
   Future<Map<String, FullSchedule>?> _fetchWithHttpClient() async {
     try {
-      print("[Parser] 🌍 Пробуємо HTTP запит...");
-      await HistoryService().logAction("Парсер: Старт HTTP запиту");
+      print("[Parser] 🌍 Пробуємо HTTP запит (двокроковий)...");
+      await HistoryService().logAction("Парсер: Старт HTTP запиту (v2)");
       final client = HttpClient();
       client.userAgent =
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-      // Set a timeout
       client.connectionTimeout = const Duration(seconds: 15);
 
+      // === Крок 1: Відвідуємо головну сторінку для отримання cookies ===
+      print("[Parser] HTTP Крок 1: Запит головної сторінки...");
+      final homeRequest = await client.getUrl(Uri.parse(_homeUrl));
+      _setHttpHeaders(homeRequest);
+      final homeResponse = await homeRequest.close();
+
+      final cookies = homeResponse.cookies;
+      final homeStatus = homeResponse.statusCode;
+      await homeResponse.drain<void>();
+
+      if (kDebugMode) {
+        print(
+            "[Parser-DEBUG] HTTP Головна: статус=$homeStatus, cookies=${cookies.length}");
+        for (var c in cookies) {
+          print(
+              "[Parser-DEBUG]   Cookie: ${c.name}=${c.value.length > 20 ? '${c.value.substring(0, 20)}...' : c.value}");
+        }
+      }
+      await HistoryService().logAction(
+          "Парсер HTTP: Головна сторінка: $homeStatus, cookies: ${cookies.length}");
+
+      // === Крок 2: Запитуємо цільову сторінку з cookies і Referer ===
+      print("[Parser] HTTP Крок 2: Запит сторінки графіків...");
       final request = await client.getUrl(Uri.parse(_url));
+      _setHttpHeaders(request, referer: _homeUrl);
+
+      // Додаємо cookies з Кроку 1
+      for (var cookie in cookies) {
+        request.cookies.add(cookie);
+      }
+
       final response = await request.close();
 
       await HistoryService()
@@ -160,10 +300,10 @@ class ParserService {
           print("[Parser] ✅ Дані знайдено через HTTP!");
           if (jsonString.length > 50) {
             await HistoryService().logAction(
-                "Парсер HTTP: JSON знайдено (${jsonString.length} симв.), спроба розбору...");
+                "Парсер HTTP: JSON знайдено (${jsonString.length} симв.)");
           } else {
             await HistoryService().logAction(
-                "Парсер HTTP: JSON знайдено, але підозріло короткий: $jsonString",
+                "Парсер HTTP: JSON підозріло короткий: $jsonString",
                 level: "WARN");
           }
 
@@ -176,15 +316,33 @@ class ParserService {
             await HistoryService().logAction(
                 "Парсер HTTP: Помилка розбору JSON: $e",
                 level: "ERROR");
-            throw e;
+            rethrow;
           }
         } else {
           print("[Parser] HTTP: HTML отримано, але JSON не знайдено");
           await HistoryService()
               .logAction("Парсер HTTP: JSON не знайдено в HTML", level: "WARN");
+
+          if (kDebugMode) {
+            String snippet = html;
+            if (snippet.length > 500) snippet = snippet.substring(0, 500);
+            print("[Parser-DEBUG] HTTP HTML Snippet:\n$snippet...");
+          }
         }
       } else {
         print("[Parser] HTTP: Status code ${response.statusCode}");
+        await HistoryService().logAction(
+            "Парсер HTTP: Не-200 відповідь: ${response.statusCode}",
+            level: "WARN");
+
+        if (kDebugMode) {
+          try {
+            final errorBody = await response.transform(utf8.decoder).join();
+            String snippet = errorBody;
+            if (snippet.length > 500) snippet = snippet.substring(0, 500);
+            print("[Parser-DEBUG] HTTP Error Body:\n$snippet...");
+          } catch (_) {}
+        }
       }
     } catch (e) {
       print("[Parser] HTTP Error: $e");

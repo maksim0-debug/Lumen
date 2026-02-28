@@ -7,6 +7,7 @@ import '../services/analytics_service.dart';
 import '../models/analytics_models.dart';
 import '../models/schedule_status.dart';
 import '../models/power_event.dart';
+import 'achievements_screen.dart';
 
 /// Екран аналітики відключень електроенергії.
 class AnalyticsScreen extends StatefulWidget {
@@ -49,6 +50,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   List<List<double>>? _heatmapData;
   List<DailyOutage>? _dailyTrend;
   int _selectedTrendDays = 30;
+  int _selectedHeatmapDays = 30;
 
   // Productivity
   ProductivityStats? _productivity7d;
@@ -115,7 +117,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
             lagStartOffset, lagEndOffset, widget.groupKey), // 7
         _analytics.getRecords(
             mode: _currentMode, groupKey: widget.groupKey), // 8
-        _analytics.getHeatmapData(30,
+        _analytics.getHeatmapData(_selectedHeatmapDays,
             mode: _currentMode, groupKey: widget.groupKey), // 9
         _analytics.getDailyOutageHours(_selectedTrendDays,
             mode: _currentMode, groupKey: widget.groupKey), // 10
@@ -199,6 +201,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ],
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.emoji_events_outlined,
+                color: isDark ? Colors.amber : Colors.deepOrange),
+            tooltip: 'Досягнення',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const AchievementsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -1103,8 +1120,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         // Heatmap
         _buildSectionTitle('🗓 Хітмеп активності', isDark),
         const SizedBox(height: 8),
-        Text('Червоний = світла не було (середнє за 30 днів)',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        _buildHeatmapPeriodSelector(isDark),
         const SizedBox(height: 12),
         if (_heatmapData != null)
           _buildHeatmap(isDark)
@@ -1236,6 +1252,59 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     );
   }
 
+  Widget _buildHeatmapPeriodSelector(bool isDark) {
+    final accent = isDark ? Colors.orange : Colors.deepPurple;
+    return CupertinoSlidingSegmentedControl<int>(
+      groupValue: _selectedHeatmapDays,
+      thumbColor: accent,
+      backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
+      children: {
+        14: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('2 тижні',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: _selectedHeatmapDays == 14
+                      ? Colors.white
+                      : Colors.grey)),
+        ),
+        30: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('Місяць',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: _selectedHeatmapDays == 30
+                      ? Colors.white
+                      : Colors.grey)),
+        ),
+        60: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('60 днів',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: _selectedHeatmapDays == 60
+                      ? Colors.white
+                      : Colors.grey)),
+        ),
+      },
+      onValueChanged: (value) {
+        if (value != null && _selectedHeatmapDays != value) {
+          setState(() => _selectedHeatmapDays = value);
+          _reloadHeatmap();
+        }
+      },
+    );
+  }
+
+  Future<void> _reloadHeatmap() async {
+    final data = await _analytics.getHeatmapData(
+      _selectedHeatmapDays,
+      mode: _currentMode,
+      groupKey: widget.groupKey,
+    );
+    if (mounted) setState(() => _heatmapData = data);
+  }
+
   Widget _buildHeatmap(bool isDark) {
     final dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
     const cellSize = 18.0;
@@ -1351,13 +1420,27 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   // TAB 5: COMPARISON (Порівняння груп)
   // ============================================================
 
-  Future<void> _loadComparison(int days) async {
+  Future<void> _loadComparison(int periodId) async {
     setState(() {
-      _comparisonDays = days;
+      _comparisonDays = periodId;
       _comparisonLoading = true;
     });
     try {
-      final result = await _analytics.getGroupComparison(days);
+      int start = 0;
+      int end = 0;
+      if (periodId == 1) {
+        start = 0;
+        end = 0;
+      } else if (periodId == 2) {
+        start = 1;
+        end = 1;
+      } else {
+        start = 0;
+        end = periodId - 1;
+      }
+
+      final result = await _analytics.getGroupComparison(
+          startDayOffset: start, endDayOffset: end);
       if (mounted) {
         setState(() {
           _comparisonData = result;

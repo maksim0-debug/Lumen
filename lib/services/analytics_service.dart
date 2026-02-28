@@ -828,9 +828,10 @@ class AnalyticsService {
   // GROUP COMPARISON (Порівняння груп)
   // ============================================================
 
-  /// Порівняння всіх груп за [days] днів.
+  /// Порівняння всіх груп за вибраний період.
   /// Використовує лише дані графіків (predicted/forecast) з БД.
-  Future<GroupComparisonResult> getGroupComparison(int days) async {
+  Future<GroupComparisonResult> getGroupComparison(
+      {required int startDayOffset, required int endDayOffset}) async {
     final now = DateTime.now();
     final allGroups = ParserService.allGroups;
     final Map<String, int> totalOff = {};
@@ -841,7 +842,7 @@ class AnalyticsService {
       daysCount[group] = 0;
     }
 
-    for (int d = 0; d < days; d++) {
+    for (int d = startDayOffset; d <= endDayOffset; d++) {
       final date =
           DateTime(now.year, now.month, now.day).subtract(Duration(days: d));
 

@@ -490,6 +490,90 @@ class HistoryService {
     }
   }
 
+  Future<String> exportDataRangeToJson(
+      DateTime startDate, DateTime endDate) async {
+    final db = await database;
+
+    // Форматуємо дати для SQLite
+    final startStr =
+        "${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}";
+    final endStr =
+        "${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}";
+    final endStrTime = "$endStr 23:59:59"; // Для подій з часом
+
+    // 1. Отримуємо графіки
+    final schedules = await db.query(
+      'schedule_history',
+      where: 'target_date >= ? AND target_date <= ?',
+      whereArgs: [startStr, endStr],
+    );
+
+    // 2. Отримуємо реальні події сенсора
+    final events = await db.query(
+      'power_events',
+      where: 'timestamp >= ? AND timestamp <= ?',
+      whereArgs: ["$startStr 00:00:00", endStrTime],
+    );
+
+    // Пакуємо в єдиний JSON
+    final Map<String, dynamic> exportData = {
+      'version': 1,
+      'export_date': DateTime.now().toIso8601String(),
+      'schedules': schedules,
+      'power_events': events,
+    };
+
+    return jsonEncode(exportData);
+  }
+
+  Future<int> importDataRangeFromJson(String jsonStr) async {
+    final db = await database;
+    final Map<String, dynamic> data = jsonDecode(jsonStr);
+
+    if (data['version'] != 1) throw Exception("Непідтримуваний формат файлу");
+
+    int importedCount = 0;
+    final batch = db.batch();
+
+    // 1. Імпорт графіків
+    final schedules = data['schedules'] as List<dynamic>? ?? [];
+    for (var s in schedules) {
+      batch.insert(
+        'schedule_history',
+        {
+          'group_key': s['group_key'],
+          'target_date': s['target_date'],
+          'schedule_code': s['schedule_code'],
+          'dtek_updated_at': s['dtek_updated_at'],
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      importedCount++;
+    }
+
+    // 2. Імпорт подій сенсора
+    final events = data['power_events'] as List<dynamic>? ?? [];
+    for (var e in events) {
+      batch.insert(
+        'power_events',
+        {
+          'firebase_key': e['firebase_key'],
+          'status': e['status'],
+          'timestamp': e['timestamp'],
+          'device': e['device'],
+          'synced_at': e['synced_at'],
+          'is_manual': e['is_manual'] ?? 0,
+        },
+        conflictAlgorithm:
+            ConflictAlgorithm.ignore, // Ігноруємо дублікати по firebase_key
+      );
+      importedCount++;
+    }
+
+    await batch.commit(noResult: true);
+    return importedCount;
+  }
+
   Future<Map<String, FullSchedule>> getLastKnownSchedules() async {
     final db = await database;
     final Map<String, FullSchedule> result = {};

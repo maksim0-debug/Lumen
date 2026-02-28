@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -112,7 +111,31 @@ class BackupService {
     }
   }
 
-  Future<int> importHistoryJson() async {
+  Future<String?> exportPartialHistory(DateTime start, DateTime end) async {
+    final jsonStr = await _historyService.exportDataRangeToJson(start, end);
+
+    final tempDir = await getTemporaryDirectory();
+    final fileName = 'lumen_history_${end.year}-${end.month}-${end.day}.json';
+    final tempPath = join(tempDir.path, fileName);
+
+    final file = File(tempPath);
+    await file.writeAsString(jsonStr);
+
+    if (Platform.isWindows) {
+      final downloadsDir = await getDownloadsDirectory();
+      if (downloadsDir == null) {
+        throw Exception("Downloads directory not found");
+      }
+      final finalPath = join(downloadsDir.path, fileName);
+      await file.copy(finalPath);
+      return finalPath;
+    } else {
+      await Share.shareXFiles([XFile(tempPath)], text: 'Експорт історії Lumen');
+      return null;
+    }
+  }
+
+  Future<int> importPartialHistory() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -125,68 +148,8 @@ class BackupService {
 
       final file = File(result.files.single.path!);
       final content = await file.readAsString();
-      final Map<String, dynamic> data = jsonDecode(content);
 
-      int count = 0;
-
-      for (var entry in data.entries) {
-        final key = entry.key; // e.g. history_v2_2025-12-06_GPV3.2
-        final list = entry.value as List;
-
-        if (list.isEmpty) continue;
-
-        for (var item in list) {
-          final hash = item['hash'];
-          final savedAt = item['savedAt'];
-
-          // Key format: history_v2_DATE_GROUP
-          final parts = key.split('_');
-          if (parts.length >= 4) {
-            final date = parts[2];
-            final group = parts[3];
-
-            // --- LOGIC: Overwrite OLD data (< Jan 19), Preserve NEW data (>= Jan 19) ---
-            DateTime? parsedDate;
-            try {
-              parsedDate = DateTime.parse(date);
-            } catch (_) {}
-
-            final db = await _historyService.database;
-
-            // Cutoff date: Jan 19, 2026
-            final cutoff = DateTime(2026, 1, 19);
-
-            if (parsedDate != null && parsedDate.isBefore(cutoff)) {
-              // OLD DATA: Force overwrite (delete existing first to remove "bad" data)
-              await db.delete(
-                'schedule_history',
-                where: 'group_key = ? AND target_date = ?',
-                whereArgs: [group, date],
-              );
-            } else {
-              // NEW DATA (or parse error): Safety Check - Do NOT overwrite
-              final List<Map<String, dynamic>> existing = await db.query(
-                'schedule_history',
-                columns: ['id'],
-                where: 'group_key = ? AND target_date = ?',
-                whereArgs: [group, date],
-                limit: 1,
-              );
-              if (existing.isNotEmpty) {
-                continue;
-              }
-            }
-
-            await _historyService.persistVersion(
-                groupKey: group,
-                targetDate: date,
-                scheduleCode: hash,
-                dtekUpdatedAt: savedAt);
-            count++;
-          }
-        }
-      }
-      return count;
+      return await _historyService.importDataRangeFromJson(content);
     } catch (e) {
       print("JSON Import error: $e");
       rethrow;

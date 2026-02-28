@@ -17,8 +17,9 @@ import '../services/history_service.dart';
 
 class SettingsPage extends StatefulWidget {
   final VoidCallback? onThemeChanged;
+  final VoidCallback? onScaleChanged;
 
-  const SettingsPage({super.key, this.onThemeChanged});
+  const SettingsPage({super.key, this.onThemeChanged, this.onScaleChanged});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -37,6 +38,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isLoading = true;
   bool _enableLogging = true;
   bool _powerMonitorEnabled = false;
+  double _uiScale = 1.0;
   DarknessStage _currentDarknessStage = DarknessStage.solarpunk;
   List<String> _notificationGroups = [];
 
@@ -86,6 +88,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _enableLogging = prefs.getBool('enable_logging') ?? true;
           _powerMonitorEnabled =
               prefs.getBool('power_monitor_enabled') ?? false;
+          _uiScale = prefs.getDouble('ui_scale') ?? 1.0;
           // _autoDarknessTheme removed
           _currentDarknessStage = DarknessThemeService().currentStage;
           _notificationGroups =
@@ -233,6 +236,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   // Trigger theme rebuild if needed, though service likely notifies listeners
                   if (widget.onThemeChanged != null) widget.onThemeChanged!();
                 }),
+                _buildScaleSelector(),
                 if (Platform.isWindows) ...[
                   _buildSwitchTile(
                       "Автозапуск при старті Windows",
@@ -400,119 +404,171 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ],
                 const Divider(),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Text(
-                    "Резервне копіювання (Beta)",
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue,
+                Theme(
+                  data: Theme.of(context)
+                      .copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    title: const Text(
+                      "Резервне копіювання (Beta)",
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
                     ),
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.download),
+                        title: const Text("Створити резервну копію"),
+                        subtitle: const Text("Зберегти базу даних у файл"),
+                        onTap: () async {
+                          try {
+                            setState(() => _isLoading = true);
+                            final path = await BackupService().exportDatabase();
+                            if (mounted) {
+                              if (path != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text("Збережено в: $path")));
+                              } else {
+                                // Share sheet opened, no specific success message needed usually
+                              }
+                            }
+                          } catch (e) {
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text("Помилка експорту: $e")));
+                          } finally {
+                            if (mounted) setState(() => _isLoading = false);
+                          }
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.upload),
+                        title: const Text("Відновити з файлу"),
+                        subtitle: const Text("Замінити поточну базу даних"),
+                        onTap: () async {
+                          // Show confirmation dialog
+                          bool? confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                    title: const Text("Відновлення даних"),
+                                    content: const Text(
+                                        "УВАГА! Всі поточні дані будуть замінені даними з файлу. Це неможливо скасувати.\n\nПродовжити?"),
+                                    actions: [
+                                      TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, false),
+                                          child: const Text("Скасувати")),
+                                      TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, true),
+                                          child: const Text("Відновити",
+                                              style: TextStyle(
+                                                  color: Colors.red))),
+                                    ],
+                                  ));
+
+                          if (confirm != true) return;
+
+                          try {
+                            setState(() => _isLoading = true);
+                            await BackupService().importDatabase();
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних.")));
+                            }
+                          } catch (e) {
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content:
+                                          Text("Помилка відновлення: $e")));
+                          } finally {
+                            if (mounted) setState(() => _isLoading = false);
+                          }
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.date_range),
+                        title: const Text("Експорт історії за період (JSON)"),
+                        subtitle: const Text("Зберегти дані до обраної дати"),
+                        onTap: () async {
+                          final DateTimeRange? picked =
+                              await showDateRangePicker(
+                            context: context,
+                            firstDate: DateTime(2024),
+                            lastDate: DateTime.now(),
+                            helpText: 'Оберіть період для експорту',
+                          );
+
+                          if (picked != null) {
+                            try {
+                              setState(() => _isLoading = true);
+                              final path = await BackupService()
+                                  .exportPartialHistory(
+                                      picked.start, picked.end);
+                              if (mounted) {
+                                if (path != null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content: Text("Збережено в: $path")));
+                                }
+                              }
+                            } catch (e) {
+                              if (mounted)
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("Помилка: $e")));
+                            } finally {
+                              if (mounted) setState(() => _isLoading = false);
+                            }
+                          }
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.data_object),
+                        title: const Text("Імпорт історії з JSON"),
+                        subtitle: const Text(
+                            "Додати збережені раніше події та графіки"),
+                        onTap: () async {
+                          try {
+                            setState(() => _isLoading = true);
+                            final count =
+                                await BackupService().importPartialHistory();
+                            if (mounted && count > 0) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                  content: Text(
+                                      "Успішно додано записів: $count. Перезапустіть додаток.")));
+                            }
+                          } catch (e) {
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text("Помилка імпорту: $e")));
+                          } finally {
+                            if (mounted) setState(() => _isLoading = false);
+                          }
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.edit_calendar),
+                        title: const Text("Ручне редагування графіку"),
+                        subtitle:
+                            const Text("Створити або змінити дані історії"),
+                        trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                        onTap: () {
+                          Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (context) =>
+                                      const ManualScheduleEditor()));
+                        },
+                      ),
+                    ],
                   ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.download),
-                  title: const Text("Створити резервну копію"),
-                  subtitle: const Text("Зберегти базу даних у файл"),
-                  onTap: () async {
-                    try {
-                      setState(() => _isLoading = true);
-                      final path = await BackupService().exportDatabase();
-                      if (mounted) {
-                        if (path != null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Збережено в: $path")));
-                        } else {
-                          // Share sheet opened, no specific success message needed usually
-                        }
-                      }
-                    } catch (e) {
-                      if (mounted)
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text("Помилка експорту: $e")));
-                    } finally {
-                      if (mounted) setState(() => _isLoading = false);
-                    }
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.upload),
-                  title: const Text("Відновити з файлу"),
-                  subtitle: const Text("Замінити поточну базу даних"),
-                  onTap: () async {
-                    // Show confirmation dialog
-                    bool? confirm = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                              title: const Text("Відновлення даних"),
-                              content: const Text(
-                                  "УВАГА! Всі поточні дані будуть замінені даними з файлу. Це неможливо скасувати.\n\nПродовжити?"),
-                              actions: [
-                                TextButton(
-                                    onPressed: () => Navigator.pop(ctx, false),
-                                    child: const Text("Скасувати")),
-                                TextButton(
-                                    onPressed: () => Navigator.pop(ctx, true),
-                                    child: const Text("Відновити",
-                                        style: TextStyle(color: Colors.red))),
-                              ],
-                            ));
-
-                    if (confirm != true) return;
-
-                    try {
-                      setState(() => _isLoading = true);
-                      await BackupService().importDatabase();
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                            content: Text(
-                                "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних.")));
-                      }
-                    } catch (e) {
-                      if (mounted)
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text("Помилка відновлення: $e")));
-                    } finally {
-                      if (mounted) setState(() => _isLoading = false);
-                    }
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.data_object),
-                  title: const Text("Імпорт історії з JSON"),
-                  subtitle:
-                      const Text("Додати графіки з парсера (smart_parser)"),
-                  onTap: () async {
-                    try {
-                      setState(() => _isLoading = true);
-                      final count = await BackupService().importHistoryJson();
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text(
-                                "Успішно імпортовано: $count записів. Перезапустіть, щоб побачити зміни.")));
-                      }
-                    } catch (e) {
-                      if (mounted)
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text("Помилка імпорту: $e")));
-                    } finally {
-                      if (mounted) setState(() => _isLoading = false);
-                    }
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.edit_calendar),
-                  title: const Text("Ручне редагування графіку"),
-                  subtitle: const Text("Створити або змінити дані історії"),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                  onTap: () {
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) =>
-                                const ManualScheduleEditor()));
-                  },
                 ),
                 const Divider(),
                 ListTile(
@@ -538,6 +594,39 @@ class _SettingsPageState extends State<SettingsPage> {
                 const SizedBox(height: 20),
               ],
             ),
+    );
+  }
+
+  Widget _buildScaleSelector() {
+    return ListTile(
+      title: const Text("Масштаб"),
+      subtitle: Text(
+        "Розмір елементів інтерфейсу",
+        style: const TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+      trailing: DropdownButton<double>(
+        value: _uiScale,
+        underline: Container(),
+        onChanged: (double? newValue) async {
+          if (newValue != null) {
+            setState(() => _uiScale = newValue);
+            try {
+              final prefs = await PreferencesHelper.getSafeInstance();
+              await prefs.setDouble('ui_scale', newValue);
+            } catch (e) {
+              print("Error saving ui_scale: $e");
+            }
+            if (widget.onScaleChanged != null) widget.onScaleChanged!();
+          }
+        },
+        items: const [
+          DropdownMenuItem(value: 0.50, child: Text("50%")),
+          DropdownMenuItem(value: 0.75, child: Text("75%")),
+          DropdownMenuItem(value: 0.90, child: Text("90%")),
+          DropdownMenuItem(value: 1.00, child: Text("100%")),
+          DropdownMenuItem(value: 1.15, child: Text("115%")),
+        ],
+      ),
     );
   }
 

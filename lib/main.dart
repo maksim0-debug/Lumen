@@ -137,6 +137,7 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   bool _isDarkMode = true;
   bool _autoDarknessTheme = false;
+  double _uiScale = 1.0;
   final DarknessThemeService _darknessThemeService = DarknessThemeService();
   DarknessStage _currentDarknessStage = DarknessStage.solarpunk;
 
@@ -170,6 +171,7 @@ class _MyAppState extends State<MyApp> {
       if (mounted) {
         setState(() {
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
+          _uiScale = prefs.getDouble('ui_scale') ?? 1.0;
           _autoDarknessTheme = _darknessThemeService.isEnabled;
           _currentDarknessStage = _darknessThemeService.currentStage;
         });
@@ -188,6 +190,19 @@ class _MyAppState extends State<MyApp> {
         _autoDarknessTheme = _darknessThemeService.isEnabled;
         _currentDarknessStage = _darknessThemeService.currentStage;
       });
+    }
+  }
+
+  void _reloadScale() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _uiScale = prefs.getDouble('ui_scale') ?? 1.0;
+        });
+      }
+    } catch (e) {
+      print("Error reloading scale: $e");
     }
   }
 
@@ -212,7 +227,18 @@ class _MyAppState extends State<MyApp> {
       supportedLocales: const [
         Locale('uk', 'UA'),
       ],
-      home: HomeScreen(onThemeChanged: _toggleTheme),
+      builder: (context, child) {
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(_uiScale),
+          ),
+          child: child!,
+        );
+      },
+      home: HomeScreen(
+        onThemeChanged: _toggleTheme,
+        onScaleChanged: _reloadScale,
+      ),
     );
   }
 
@@ -283,8 +309,9 @@ class _OffRange {
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback? onThemeChanged;
+  final VoidCallback? onScaleChanged;
 
-  const HomeScreen({super.key, this.onThemeChanged});
+  const HomeScreen({super.key, this.onThemeChanged, this.onScaleChanged});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -457,17 +484,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (_viewMode == ScheduleViewMode.today ||
         _viewMode == ScheduleViewMode.tomorrow) {
       final now = DateTime.now();
-      final versions = await HistoryService().getVersionsForDate(now, newGroup);
-      setState(() {
-        _historyVersions = versions;
-        if (_historyVersions.isNotEmpty) {
-          _selectedVersionIndex = _historyVersions.length - 1;
-          _historySchedule = _historyVersions.last.toSchedule();
-        } else {
-          _selectedVersionIndex = -1;
-          _historySchedule = null;
-        }
-      });
+      await _refreshVersionsForCurrentMode();
 
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -513,18 +530,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
 
         // Load history versions for the cached data to populate dropdown if needed
-        final now = DateTime.now();
-        final versions =
-            await HistoryService().getVersionsForDate(now, _currentGroup);
-        if (mounted) {
-          setState(() {
-            _historyVersions = versions;
-            if (_historyVersions.isNotEmpty) {
-              _selectedVersionIndex = _historyVersions.length - 1;
-              _historySchedule = _historyVersions.last.toSchedule();
-            }
-          });
-        }
+        await _refreshVersionsForCurrentMode();
       }
     } catch (e) {
       print("Error loading cached data: $e");
@@ -573,6 +579,24 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void onWindowClose() async {
     if (await windowManager.isPreventClose()) windowManager.hide();
+  }
+
+  Future<void> _refreshVersionsForCurrentMode() async {
+    final targetDate = _getDisplayDate();
+    final versions =
+        await HistoryService().getVersionsForDate(targetDate, _currentGroup);
+    if (mounted) {
+      setState(() {
+        _historyVersions = versions;
+        if (_historyVersions.isNotEmpty) {
+          _selectedVersionIndex = _historyVersions.length - 1;
+          _historySchedule = _historyVersions.last.toSchedule();
+        } else {
+          _selectedVersionIndex = -1;
+          _historySchedule = null;
+        }
+      });
+    }
   }
 
   Future<void> _updateStatusDate() async {
@@ -659,34 +683,20 @@ class _HomeScreenState extends State<HomeScreen>
 
       // await HistoryService().saveHistory(allData);
 
-      final now = DateTime.now();
-      final todayVersions =
-          await HistoryService().getVersionsForDate(now, _currentGroup);
-
       setState(() {
         _allSchedules = allData;
         _isLoading = false;
         _isCachedData = false;
         _wasUpdated = true;
         _statusColor = Colors.green;
-
-        _historyVersions = todayVersions;
-        if (_historyVersions.isNotEmpty) {
-          _selectedVersionIndex = _historyVersions.length - 1;
-          _historySchedule = _historyVersions.last.toSchedule();
-        } else {
-          _selectedVersionIndex = -1;
-          _historySchedule = null;
-        }
-
-        // final updateTime = allData.values.first.lastUpdatedSource;
-        // _statusMessage = "Оновлено ДТЕК: $updateTime";
       });
+      await _refreshVersionsForCurrentMode();
       _updateStatusDate();
 
       try {
         final prefs = await SharedPreferences.getInstance();
         final notifyChange = prefs.getBool('notify_schedule_change') ?? true;
+        final now = DateTime.now();
 
         final groupsToCheck =
             Set<String>.from([..._notificationGroups, _currentGroup]);
@@ -1631,6 +1641,8 @@ class _HomeScreenState extends State<HomeScreen>
               }
             },
           ),
+          const SizedBox(width: 4),
+          _buildPowerIndicator(),
         ],
       ),
     );
@@ -1869,21 +1881,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (DateUtils.isSameDay(newDate, now)) {
       setState(() => _viewMode = ScheduleViewMode.today);
       _updateStatusDate();
-
-      final versions =
-          await HistoryService().getVersionsForDate(now, _currentGroup);
-      if (mounted) {
-        setState(() {
-          _historyVersions = versions;
-          if (_historyVersions.isNotEmpty) {
-            _selectedVersionIndex = _historyVersions.length - 1;
-            _historySchedule = _historyVersions.last.toSchedule();
-          } else {
-            _selectedVersionIndex = -1;
-            _historySchedule = null;
-          }
-        });
-      }
+      await _refreshVersionsForCurrentMode();
 
       if (_dataSourceMode == DataSourceMode.real) {
         _loadRealOutageData(newDate).then((_) => setState(() {}));
@@ -1900,6 +1898,7 @@ class _HomeScreenState extends State<HomeScreen>
     } else if (DateUtils.isSameDay(newDate, tomorrow)) {
       setState(() => _viewMode = ScheduleViewMode.tomorrow);
       _updateStatusDate();
+      await _refreshVersionsForCurrentMode();
       if (_dataSourceMode == DataSourceMode.real) {
         _loadRealOutageData(newDate).then((_) => setState(() {}));
       }
@@ -1932,7 +1931,13 @@ class _HomeScreenState extends State<HomeScreen>
         currentDisplay = _allSchedules[_currentGroup]?.today;
       }
     } else if (_viewMode == ScheduleViewMode.tomorrow) {
-      currentDisplay = _allSchedules[_currentGroup]?.tomorrow;
+      if (_historyVersions.isNotEmpty &&
+          _selectedVersionIndex >= 0 &&
+          _historySchedule != null) {
+        currentDisplay = _historySchedule;
+      } else {
+        currentDisplay = _allSchedules[_currentGroup]?.tomorrow;
+      }
     } else if (_viewMode == ScheduleViewMode.yesterday) {
       currentDisplay = _historySchedule;
     } else if (_viewMode == ScheduleViewMode.history) {
@@ -2060,20 +2065,6 @@ class _HomeScreenState extends State<HomeScreen>
                 },
               ),
               IconButton(
-                icon: Icon(Icons.emoji_events_outlined,
-                    color: isDark ? Colors.amber : Colors.deepOrange),
-                tooltip: 'Досягнення',
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const AchievementsScreen(),
-                    ),
-                  );
-                },
-              ),
-              _buildPowerIndicator(),
-              IconButton(
                 icon: Icon(Icons.settings,
                     color: isDark ? Colors.white : Colors.black87),
                 onPressed: () async {
@@ -2081,7 +2072,9 @@ class _HomeScreenState extends State<HomeScreen>
                     context,
                     MaterialPageRoute(
                         builder: (context) => SettingsPage(
-                            onThemeChanged: widget.onThemeChanged)),
+                            onThemeChanged: widget.onThemeChanged,
+                            onScaleChanged: widget.onScaleChanged)),
+
                   );
                   _loadPreferencesAndData();
                   _initPowerMonitor();
@@ -2089,270 +2082,279 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ],
           ),
-          body: Column(
+          body: Stack(
             children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12.0),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          DarknessThemeService().getArrowIcon(forward: false),
-                          color:
-                              Theme.of(context).textTheme.titleLarge?.color ??
+              Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12.0),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              DarknessThemeService()
+                                  .getArrowIcon(forward: false),
+                              color: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.color ??
                                   Colors.white,
-                        ),
-                        onPressed: () => _navigateDate(-1),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                        child: ChoiceChip(
-                          label: const Text('Минуле'),
-                          selected: _viewMode == ScheduleViewMode.history,
-                          onSelected: (bool selected) {
-                            _selectDateAndLoad().then((_) {
-                              if (_dataSourceMode == DataSourceMode.real) {
-                                _loadRealOutageData(_getDisplayDate())
-                                    .then((_) => setState(() {}));
-                              }
-                            });
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                        child: ChoiceChip(
-                          label: const Text('Вчора'),
-                          selected: _viewMode == ScheduleViewMode.yesterday,
-                          onSelected: (bool selected) {
-                            if (selected) {
-                              setState(() {
-                                _viewMode = ScheduleViewMode.yesterday;
-                                _historyDate = DateTime.now()
-                                    .subtract(const Duration(days: 1));
-                              });
-                              _loadHistoryData(_historyDate!);
-                              if (_dataSourceMode == DataSourceMode.real) {
-                                _loadRealOutageData(_historyDate!)
-                                    .then((_) => setState(() {}));
-                              }
-                            }
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                        child: ChoiceChip(
-                          label: const Text('Сьогодні'),
-                          selected: _viewMode == ScheduleViewMode.today,
-                          onSelected: (bool selected) {
-                            setState(() {
-                              _viewMode = ScheduleViewMode.today;
-                            });
-                            _updateStatusDate();
-
-                            HistoryService()
-                                .getVersionsForDate(
-                                    DateTime.now(), _currentGroup)
-                                .then((versions) {
-                              if (mounted) {
-                                setState(() {
-                                  _historyVersions = versions;
-                                  if (_historyVersions.isNotEmpty) {
-                                    _selectedVersionIndex =
-                                        _historyVersions.length - 1;
-                                    _historySchedule =
-                                        _historyVersions.last.toSchedule();
-                                  } else {
-                                    _selectedVersionIndex = -1;
-                                    _historySchedule = null;
+                            ),
+                            onPressed: () => _navigateDate(-1),
+                          ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 4.0),
+                            child: ChoiceChip(
+                              label: const Text('Минуле'),
+                              selected: _viewMode == ScheduleViewMode.history,
+                              onSelected: (bool selected) {
+                                _selectDateAndLoad().then((_) {
+                                  if (_dataSourceMode == DataSourceMode.real) {
+                                    _loadRealOutageData(_getDisplayDate())
+                                        .then((_) => setState(() {}));
                                   }
                                 });
-                              }
-                            });
-                            if (_dataSourceMode == DataSourceMode.real) {
-                              _loadRealOutageData(DateTime.now())
-                                  .then((_) => setState(() {}));
-                            }
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                        child: ChoiceChip(
-                          label: const Text('Завтра'),
-                          selected: _viewMode == ScheduleViewMode.tomorrow,
-                          onSelected: (bool selected) {
-                            setState(() {
-                              _viewMode = ScheduleViewMode.tomorrow;
-                            });
-                            _updateStatusDate();
-                            if (_dataSourceMode == DataSourceMode.real) {
-                              _loadRealOutageData(DateTime.now()
-                                      .add(const Duration(days: 1)))
-                                  .then((_) => setState(() {}));
-                            }
-                          },
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          DarknessThemeService().getArrowIcon(forward: true),
-                          color:
-                              Theme.of(context).textTheme.titleLarge?.color ??
-                                  Colors.white,
-                        ),
-                        onPressed: () => _navigateDate(1),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              _buildDataSourceToggle(),
-              _buildDarknessStageBar(),
-              GestureDetector(
-                onTap:
-                    (_historyVersions.isNotEmpty) ? _showVersionPicker : null,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(_statusMessage,
-                        style: TextStyle(
-                            color: _statusColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold)),
-                    if (_historyVersions.length > 0)
-                      const Icon(Icons.arrow_drop_down,
-                          color: Colors.grey, size: 16),
-                  ],
-                ),
-              ),
-              if (!_isLoading) ...[
-                const SizedBox(height: 8),
-                if (_viewMode == ScheduleViewMode.today ||
-                    _viewMode == ScheduleViewMode.tomorrow)
-                  _buildCountdownWidget(_allSchedules[_currentGroup]),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: Text(
-                    _getOutageInfoText(
-                        currentDisplay, _viewMode == ScheduleViewMode.tomorrow),
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        color: Theme.of(context).textTheme.bodyLarge?.color ??
-                            Colors.black87),
-                  ),
-                ),
-              ],
-              Expanded(
-                child: _isLoading
-                    ? const Center(
-                        child: CircularProgressIndicator(color: Colors.orange))
-                    : RefreshIndicator(
-                        color: Colors.orange,
-                        onRefresh: () async {
-                          _achievementService.trackRefresh();
-                          if (_viewMode == ScheduleViewMode.history ||
-                              _viewMode == ScheduleViewMode.yesterday) {
-                            if (_historyDate != null)
-                              await _loadHistoryData(_historyDate!);
-                          } else {
-                            await _loadData(silent: true);
-                          }
-                        },
-                        child: ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: [
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12.0),
-                              child: _buildGrid(currentDisplay, cols,
-                                  realHourSegments: _realHourSegments),
+                              },
                             ),
-                            if (intervals.isNotEmpty)
-                              const Padding(
-                                padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
-                                child: Text("Розклад інтервалами:",
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16)),
-                              ),
-                            if (intervals.isNotEmpty)
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(12, 0, 12, 40),
-                                child: Card(
-                                  child: Column(
-                                    children: intervals.map((interval) {
-                                      return GestureDetector(
-                                        onLongPress: () => _showIntervalMenu(
-                                            context, interval),
-                                        child: Container(
-                                          decoration: const BoxDecoration(
-                                              border: Border(
-                                                  bottom: BorderSide(
-                                                      color: Colors.white10))),
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 12, horizontal: 16),
-                                          child: Row(
-                                            children: [
-                                              SizedBox(
-                                                  width: 120,
-                                                  child: Text(
-                                                      interval.timeRange,
-                                                      style: TextStyle(
-                                                          fontSize: 16,
-                                                          fontWeight:
-                                                              FontWeight.w500,
-                                                          color: interval
-                                                                  .statusText
-                                                                  .contains(
-                                                                      "OFF")
-                                                              ? Colors.red
-                                                              : (Theme.of(context)
-                                                                          .brightness ==
-                                                                      Brightness
-                                                                          .dark
-                                                                  ? Colors.white
-                                                                  : Colors
-                                                                      .black87)))),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
+                          ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 4.0),
+                            child: ChoiceChip(
+                              label: const Text('Вчора'),
+                              selected: _viewMode == ScheduleViewMode.yesterday,
+                              onSelected: (bool selected) {
+                                if (selected) {
+                                  setState(() {
+                                    _viewMode = ScheduleViewMode.yesterday;
+                                    _historyDate = DateTime.now()
+                                        .subtract(const Duration(days: 1));
+                                  });
+                                  _loadHistoryData(_historyDate!);
+                                  if (_dataSourceMode == DataSourceMode.real) {
+                                    _loadRealOutageData(_historyDate!)
+                                        .then((_) => setState(() {}));
+                                  }
+                                }
+                              },
+                            ),
+                          ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 4.0),
+                            child: ChoiceChip(
+                              label: const Text('Сьогодні'),
+                              selected: _viewMode == ScheduleViewMode.today,
+                              onSelected: (bool selected) {
+                                setState(() {
+                                  _viewMode = ScheduleViewMode.today;
+                                });
+                                _updateStatusDate();
+                                _refreshVersionsForCurrentMode();
+                                if (_dataSourceMode == DataSourceMode.real) {
+                                  _loadRealOutageData(DateTime.now())
+                                      .then((_) => setState(() {}));
+                                }
+                              },
+                            ),
+                          ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 4.0),
+                            child: ChoiceChip(
+                              label: const Text('Завтра'),
+                              selected: _viewMode == ScheduleViewMode.tomorrow,
+                              onSelected: (bool selected) {
+                                setState(() {
+                                  _viewMode = ScheduleViewMode.tomorrow;
+                                });
+                                _updateStatusDate();
+                                _refreshVersionsForCurrentMode();
+                                if (_dataSourceMode == DataSourceMode.real) {
+                                  _loadRealOutageData(DateTime.now()
+                                          .add(const Duration(days: 1)))
+                                      .then((_) => setState(() {}));
+                                }
+                              },
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              DarknessThemeService()
+                                  .getArrowIcon(forward: true),
+                              color: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.color ??
+                                  Colors.white,
+                            ),
+                            onPressed: () => _navigateDate(1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  _buildDataSourceToggle(),
+                  _buildDarknessStageBar(),
+                  GestureDetector(
+                    onTap: (_historyVersions.isNotEmpty)
+                        ? _showVersionPicker
+                        : null,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(_statusMessage,
+                            style: TextStyle(
+                                color: _statusColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold)),
+                        if (_historyVersions.length > 0)
+                          const Icon(Icons.arrow_drop_down,
+                              color: Colors.grey, size: 16),
+                      ],
+                    ),
+                  ),
+                  if (!_isLoading) ...[
+                    const SizedBox(height: 8),
+                    if (_viewMode == ScheduleViewMode.today ||
+                        _viewMode == ScheduleViewMode.tomorrow)
+                      _buildCountdownWidget(_allSchedules[_currentGroup]),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Text(
+                        _getOutageInfoText(currentDisplay,
+                            _viewMode == ScheduleViewMode.tomorrow),
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color:
+                                Theme.of(context).textTheme.bodyLarge?.color ??
+                                    Colors.black87),
+                      ),
+                    ),
+                  ],
+                  Expanded(
+                    child: _isLoading
+                        ? const Center(
+                            child:
+                                CircularProgressIndicator(color: Colors.orange))
+                        : RefreshIndicator(
+                            color: Colors.orange,
+                            onRefresh: () async {
+                              _achievementService.trackRefresh();
+                              if (_viewMode == ScheduleViewMode.history ||
+                                  _viewMode == ScheduleViewMode.yesterday) {
+                                if (_historyDate != null)
+                                  await _loadHistoryData(_historyDate!);
+                              } else {
+                                await _loadData(silent: true);
+                              }
+                            },
+                            child: ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12.0),
+                                  child: _buildGrid(currentDisplay, cols,
+                                      realHourSegments: _realHourSegments),
+                                ),
+                                if (intervals.isNotEmpty)
+                                  const Padding(
+                                    padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+                                    child: Text("Розклад інтервалами:",
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16)),
+                                  ),
+                                if (intervals.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                        12, 0, 12, 40),
+                                    child: Card(
+                                      child: Column(
+                                        children: intervals.map((interval) {
+                                          return GestureDetector(
+                                            onLongPress: () =>
+                                                _showIntervalMenu(
+                                                    context, interval),
+                                            child: Container(
+                                              decoration: const BoxDecoration(
+                                                  border: Border(
+                                                      bottom: BorderSide(
+                                                          color:
+                                                              Colors.white10))),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                      horizontal: 16),
+                                              child: Row(
+                                                children: [
+                                                  SizedBox(
+                                                      width: 120,
+                                                      child: Text(
+                                                          interval.timeRange,
+                                                          style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              color: interval
+                                                                      .statusText
+                                                                      .contains(
+                                                                          "OFF")
+                                                                  ? Colors.red
+                                                                  : (Theme.of(context)
+                                                                              .brightness ==
+                                                                          Brightness
+                                                                              .dark
+                                                                      ? Colors
+                                                                          .white
+                                                                      : Colors
+                                                                          .black87)))),
+                                                  Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
                                                         horizontal: 8,
                                                         vertical: 2),
-                                                decoration: BoxDecoration(
-                                                    color: interval.color
-                                                        .withOpacity(0.2),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            4)),
-                                                child: Text(interval.statusText,
-                                                    style: TextStyle(
-                                                        color: interval.color,
-                                                        fontWeight:
-                                                            FontWeight.bold)),
+                                                    decoration: BoxDecoration(
+                                                        color: interval.color
+                                                            .withOpacity(0.2),
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(4)),
+                                                    child: Text(
+                                                        interval.statusText,
+                                                        style: TextStyle(
+                                                            color:
+                                                                interval.color,
+                                                            fontWeight:
+                                                                FontWeight
+                                                                    .bold)),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Text("(${interval.duration})",
+                                                      style: const TextStyle(
+                                                          color: Colors.grey)),
+                                                ],
                                               ),
-                                              const SizedBox(width: 8),
-                                              Text("(${interval.duration})",
-                                                  style: const TextStyle(
-                                                      color: Colors.grey)),
-                                            ],
-                                          ),
-                                        ),
-                                      );
-                                    }).toList(),
-                                  ),
-                                ),
-                              )
-                          ],
-                        ),
-                      ),
+                                            ),
+                                          );
+                                        }).toList(),
+                                      ),
+                                    ),
+                                  )
+                              ],
+                            ),
+                          ),
+                  ),
+                ],
               ),
+
             ],
           ),
         ),
