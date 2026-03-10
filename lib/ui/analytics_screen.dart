@@ -52,6 +52,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   int _selectedTrendDays = 30;
   int _selectedHeatmapDays = 30;
 
+  // Accuracy Trend
+  List<DailyOutage>? _accuracyTrendReal;
+  List<DailyOutage>? _accuracyTrendPredicted;
+  int _selectedAccuracyTrendDays = 30;
+
   // Productivity
   ProductivityStats? _productivity7d;
 
@@ -123,6 +128,10 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
             mode: _currentMode, groupKey: widget.groupKey), // 10
         _analytics.getProductivityImpact(7,
             mode: _currentMode, groupKey: widget.groupKey), // 11
+        _analytics.getDailyOutageHours(_selectedAccuracyTrendDays,
+            mode: DataSourceMode.real, groupKey: widget.groupKey), // 12
+        _analytics.getDailyOutageHours(_selectedAccuracyTrendDays,
+            mode: DataSourceMode.predicted, groupKey: widget.groupKey), // 13
       ]);
 
       if (mounted) {
@@ -139,6 +148,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           _heatmapData = results[9] as List<List<double>>;
           _dailyTrend = results[10] as List<DailyOutage>;
           _productivity7d = results[11] as ProductivityStats;
+          _accuracyTrendReal = results[12] as List<DailyOutage>;
+          _accuracyTrendPredicted = results[13] as List<DailyOutage>;
           _isLoading = false;
         });
       }
@@ -274,6 +285,28 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       }
     } catch (e) {
       print('Error updating trend chart: $e');
+    }
+  }
+
+  Future<void> _updateAccuracyTrendChart(int days) async {
+    setState(() {
+      _selectedAccuracyTrendDays = days;
+    });
+    try {
+      final results = await Future.wait([
+        _analytics.getDailyOutageHours(days,
+            mode: DataSourceMode.real, groupKey: widget.groupKey),
+        _analytics.getDailyOutageHours(days,
+            mode: DataSourceMode.predicted, groupKey: widget.groupKey),
+      ]);
+      if (mounted) {
+        setState(() {
+          _accuracyTrendReal = results[0];
+          _accuracyTrendPredicted = results[1];
+        });
+      }
+    } catch (e) {
+      print('Error updating accuracy trend chart: $e');
     }
   }
 
@@ -545,6 +578,64 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         _buildAccuracyGauge(isDark, accent),
         const SizedBox(height: 24),
 
+        // Accuracy Trend (Planned vs Real)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildSectionTitle('📈 Тренди порівняння', isDark),
+            CupertinoSlidingSegmentedControl<int>(
+              groupValue: _selectedAccuracyTrendDays,
+              thumbColor: accent,
+              backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
+              padding: const EdgeInsets.all(2),
+              children: {
+                7: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text('Тиждень',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: _selectedAccuracyTrendDays == 7
+                              ? Colors.white
+                              : Colors.grey)),
+                ),
+                30: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text('Місяць',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: _selectedAccuracyTrendDays == 30
+                              ? Colors.white
+                              : Colors.grey)),
+                ),
+                60: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text('60 днів',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: _selectedAccuracyTrendDays == 60
+                              ? Colors.white
+                              : Colors.grey)),
+                ),
+              },
+              onValueChanged: (value) {
+                if (value != null) _updateAccuracyTrendChart(value);
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text('Годин без світла по дням',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        const SizedBox(height: 12),
+        if (_accuracyTrendReal != null &&
+            _accuracyTrendReal!.isNotEmpty &&
+            _accuracyTrendPredicted != null &&
+            _accuracyTrendPredicted!.isNotEmpty)
+          _buildAccuracyTrendChart(isDark, accent)
+        else
+          _buildNoDataWidget(),
+        const SizedBox(height: 24),
+
         // Timeline comparison
         _buildSectionTitle('📊 Реальність vs Графік', isDark),
         const SizedBox(height: 8),
@@ -693,6 +784,167 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     if (pct >= 75) return 'Графік більш-менш відповідає 🤔';
     if (pct >= 50) return 'Графіку вірити не варто 😒';
     return 'Повний обман! 🤥';
+  }
+
+  Widget _buildAccuracyTrendChart(bool isDark, Color accent) {
+    if (_accuracyTrendReal == null ||
+        _accuracyTrendReal!.isEmpty ||
+        _accuracyTrendPredicted == null ||
+        _accuracyTrendPredicted!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final realMax = _accuracyTrendReal!.map((d) => d.outageHours).reduce(max);
+    final predictedMax =
+        _accuracyTrendPredicted!.map((d) => d.outageHours).reduce(max);
+    final maxY = max(realMax, predictedMax);
+
+    final realSpots = <FlSpot>[];
+    for (int i = 0; i < _accuracyTrendReal!.length; i++) {
+      realSpots.add(FlSpot(i.toDouble(), _accuracyTrendReal![i].outageHours));
+    }
+
+    final predictedSpots = <FlSpot>[];
+    for (int i = 0; i < _accuracyTrendPredicted!.length; i++) {
+      predictedSpots
+          .add(FlSpot(i.toDouble(), _accuracyTrendPredicted![i].outageHours));
+    }
+
+    return Column(
+      children: [
+        SizedBox(
+          height: 220,
+          child: LineChart(
+            LineChartData(
+              minY: 0,
+              maxY: maxY > 0 ? maxY * 1.2 : 1,
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (spots) {
+                    return spots.map((spot) {
+                      final isReal = spot.barIndex == 0;
+                      final d = isReal
+                          ? _accuracyTrendReal![spot.spotIndex]
+                          : _accuracyTrendPredicted![spot.spotIndex];
+                      final h = d.outageHours.floor();
+                      final m = ((d.outageHours - h) * 60).round();
+                      final label = isReal ? 'Фактично' : 'За графіком';
+                      return LineTooltipItem(
+                        '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$label\n${h}г ${m}х',
+                        TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      );
+                    }).toList();
+                  },
+                ),
+              ),
+              lineBarsData: [
+                // Green line for Real outages
+                LineChartBarData(
+                  spots: realSpots,
+                  isCurved: true,
+                  curveSmoothness: 0.3,
+                  color: Colors.green.shade400,
+                  barWidth: 2.5,
+                  isStrokeCapRound: true,
+                  dotData: FlDotData(
+                    show: true,
+                    getDotPainter: (spot, percent, barData, index) {
+                      return FlDotCirclePainter(
+                        radius: 2.5,
+                        color: Colors.green.shade400,
+                        strokeWidth: 0,
+                      );
+                    },
+                  ),
+                ),
+                // Red line for Predicted outages
+                LineChartBarData(
+                  spots: predictedSpots,
+                  isCurved: true,
+                  curveSmoothness: 0.3,
+                  color: Colors.red.shade400,
+                  barWidth: 2.5,
+                  isStrokeCapRound: true,
+                  dotData: FlDotData(
+                    show: true,
+                    getDotPainter: (spot, percent, barData, index) {
+                      return FlDotCirclePainter(
+                        radius: 2.5,
+                        color: Colors.red.shade400,
+                        strokeWidth: 0,
+                      );
+                    },
+                  ),
+                ),
+              ],
+              titlesData: FlTitlesData(
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 32,
+                    interval: 6,
+                    getTitlesWidget: (value, meta) {
+                      if (value > 24) return const SizedBox.shrink();
+                      return Text(value.toStringAsFixed(0),
+                          style: TextStyle(
+                              fontSize: 10, color: Colors.grey.shade500));
+                    },
+                  ),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    interval: max(1, (_accuracyTrendReal!.length / 6).ceil())
+                        .toDouble(),
+                    getTitlesWidget: (value, meta) {
+                      final idx = value.toInt();
+                      if (idx < 0 || idx >= _accuracyTrendReal!.length) {
+                        return const SizedBox.shrink();
+                      }
+                      final d = _accuracyTrendReal![idx].date;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                            '${d.day}.${d.month.toString().padLeft(2, '0')}',
+                            style: TextStyle(
+                                fontSize: 9, color: Colors.grey.shade500)),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (value) => FlLine(
+                  color: isDark ? Colors.white10 : Colors.grey.shade200,
+                  strokeWidth: 0.5,
+                ),
+              ),
+              borderData: FlBorderData(show: false),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Legend
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _legendDot(Colors.red.shade400, 'Заплановані відключення'),
+            const SizedBox(width: 16),
+            _legendDot(Colors.green.shade400, 'Реальні відключення'),
+          ],
+        ),
+      ],
+    );
   }
 
   Widget _buildTimelineComparison(bool isDark) {
@@ -1264,27 +1516,24 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           child: Text('2 тижні',
               style: TextStyle(
                   fontSize: 12,
-                  color: _selectedHeatmapDays == 14
-                      ? Colors.white
-                      : Colors.grey)),
+                  color:
+                      _selectedHeatmapDays == 14 ? Colors.white : Colors.grey)),
         ),
         30: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Text('Місяць',
               style: TextStyle(
                   fontSize: 12,
-                  color: _selectedHeatmapDays == 30
-                      ? Colors.white
-                      : Colors.grey)),
+                  color:
+                      _selectedHeatmapDays == 30 ? Colors.white : Colors.grey)),
         ),
         60: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Text('60 днів',
               style: TextStyle(
                   fontSize: 12,
-                  color: _selectedHeatmapDays == 60
-                      ? Colors.white
-                      : Colors.grey)),
+                  color:
+                      _selectedHeatmapDays == 60 ? Colors.white : Colors.grey)),
         ),
       },
       onValueChanged: (value) {
