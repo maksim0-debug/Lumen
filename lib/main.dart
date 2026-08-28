@@ -2101,9 +2101,8 @@ class _HomeScreenState extends State<HomeScreen>
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           IconButton(
-                            icon: Icon(
-                              DarknessThemeService()
-                                  .getArrowIcon(forward: false),
+                            icon: DarknessThemeService().buildArrowIcon(
+                              forward: false,
                               color: Theme.of(context)
                                       .textTheme
                                       .titleLarge
@@ -2190,9 +2189,8 @@ class _HomeScreenState extends State<HomeScreen>
                             ),
                           ),
                           IconButton(
-                            icon: Icon(
-                              DarknessThemeService()
-                                  .getArrowIcon(forward: true),
+                            icon: DarknessThemeService().buildArrowIcon(
+                              forward: true,
                               color: Theme.of(context)
                                       .textTheme
                                       .titleLarge

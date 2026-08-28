@@ -228,8 +228,31 @@ class DarknessThemeService {
             ? Icons.keyboard_double_arrow_right
             : Icons.keyboard_double_arrow_left;
       case DarknessStage.stalker:
-        return forward ? Icons.forward : Icons.reply;
+        return Icons.forward;
     }
+  }
+
+  /// Повертає віджет стрілки для навігації з урахуванням поточної теми та напрямку.
+  /// Для теми S.T.A.L.K.E.R. використовується дзеркальне відображення іконки Icons.forward,
+  /// щоб забезпечити симетричний вигляд однакових стрілок ліворуч та праворуч.
+  Widget buildArrowIcon({
+    bool forward = true,
+    Color? color,
+    double? size,
+  }) {
+    final icon = Icon(
+      getArrowIcon(forward: forward),
+      color: color,
+      size: size,
+    );
+
+    if (_currentStage == DarknessStage.stalker && !forward) {
+      return Transform.flip(
+        flipX: true,
+        child: icon,
+      );
+    }
+    return icon;
   }
 
   ThemeData getThemeForStage(DarknessStage stage) {
