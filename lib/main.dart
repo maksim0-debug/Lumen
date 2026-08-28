@@ -324,6 +324,9 @@ class _HomeScreenState extends State<HomeScreen>
   bool _isLoading = true;
   String _statusMessage = "Завантаження...";
   ScheduleViewMode _viewMode = ScheduleViewMode.today;
+  bool get _isHistoryMode =>
+      _viewMode == ScheduleViewMode.history ||
+      _viewMode == ScheduleViewMode.yesterday;
   DateTime? _historyDate;
   DailySchedule? _historySchedule;
   List<ScheduleVersion> _historyVersions = [];
@@ -337,6 +340,10 @@ class _HomeScreenState extends State<HomeScreen>
 
   bool _isCachedData = false;
   Color _statusColor = Colors.grey;
+
+  bool _isFetching = false;
+  DateTime? _lastFetchTime;
+  static const Duration _fetchCooldown = Duration(seconds: 30);
 
   static const bool _showNotificationTestButton = false;
 
@@ -443,14 +450,36 @@ class _HomeScreenState extends State<HomeScreen>
       // or show an error. For now, just logging.
     }
 
+    final previousGroup = _currentGroup;
+    bool groupChanged = false;
+
     if (prefs != null) {
       final p = prefs;
+      final savedGroup = p.getString('selected_group') ?? "GPV2.1";
+      final savedNotifGroups = p.getStringList('notification_groups') ?? [];
+      groupChanged = savedGroup != previousGroup;
+
       setState(() {
-        _currentGroup = p.getString('selected_group') ?? "GPV2.1";
-        _notificationGroups = p.getStringList('notification_groups') ?? [];
+        _currentGroup = savedGroup;
+        _notificationGroups = savedNotifGroups;
       });
     }
-    _loadData();
+
+    _updateNotificationsOnly();
+
+    if (_isHistoryMode) {
+      if (groupChanged) {
+        final targetDate = _getDisplayDate();
+        await _loadHistoryData(targetDate);
+      }
+      await _loadData(silent: true);
+    } else {
+      if (groupChanged) {
+        await _refreshVersionsForCurrentMode();
+        _updateStatusDate();
+      }
+      await _loadData(silent: false, force: groupChanged);
+    }
   }
 
   Future<void> _changeGroup(String? newGroup) async {
@@ -496,11 +525,9 @@ class _HomeScreenState extends State<HomeScreen>
       } catch (e) {
         AppLogger.e("Error syncing hash", tag: 'Main', error: e);
       }
-    } else if (_viewMode == ScheduleViewMode.history ||
-        _viewMode == ScheduleViewMode.yesterday) {
-      if (_historyDate != null) {
-        _loadHistoryData(_historyDate!);
-      }
+    } else if (_isHistoryMode) {
+      final targetDate = _getDisplayDate();
+      _loadHistoryData(targetDate);
     }
 
     _updateNotificationsOnly();
@@ -647,24 +674,50 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<void> _loadData({bool silent = false}) async {
-    if (!silent) {
-      // First, try to load from cache if we are empty
-      if (_allSchedules.isEmpty) {
-        await _loadCachedData();
-      }
-
-      setState(() {
-        if (_allSchedules.isEmpty) {
-          _isLoading = true; // Show spinner only if no data at all
-        }
-        _statusMessage =
-            _isCachedData ? "Оновлення... (показано архів)" : "Оновлення...";
-        _statusColor = Colors.orange;
-      });
+  Future<void> _loadData({bool silent = false, bool force = false}) async {
+    if (_isFetching) {
+      AppLogger.d("⏳ Fetch already in progress, skipping duplicate request",
+          tag: 'Main');
+      return;
     }
 
+    if (!force &&
+        _allSchedules.isNotEmpty &&
+        _lastFetchTime != null &&
+        DateTime.now().difference(_lastFetchTime!) < _fetchCooldown) {
+      AppLogger.d("⏳ Data is fresh (cooldown active), skipping fetch",
+          tag: 'Main');
+      if (!silent && !_isHistoryMode) {
+        _updateStatusDate();
+        if (_isLoading && mounted) {
+          setState(() => _isLoading = false);
+        }
+      }
+      return;
+    }
+
+    _isFetching = true;
+
     try {
+      if (!silent) {
+        // First, try to load from cache if we are empty
+        if (_allSchedules.isEmpty) {
+          await _loadCachedData();
+          if (!mounted) return;
+        }
+
+        if (mounted && !_isHistoryMode) {
+          setState(() {
+            if (_allSchedules.isEmpty) {
+              _isLoading = true; // Show spinner only if no data at all
+            }
+            _statusMessage = _isCachedData
+                ? "Оновлення... (показано архів)"
+                : "Оновлення...";
+            _statusColor = Colors.orange;
+          });
+        }
+      }
       if (_allSchedules.isNotEmpty) {
         for (var entry in _allSchedules.entries) {
           final group = entry.key;
@@ -679,17 +732,25 @@ class _HomeScreenState extends State<HomeScreen>
       final allData = await _parser.fetchAllSchedules();
       if (allData.isEmpty) throw Exception("Пустий список");
 
-      // await HistoryService().saveHistory(allData);
+      _lastFetchTime = DateTime.now();
 
-      setState(() {
-        _allSchedules = allData;
-        _isLoading = false;
-        _isCachedData = false;
-        _wasUpdated = true;
-        _statusColor = Colors.green;
-      });
-      await _refreshVersionsForCurrentMode();
-      _updateStatusDate();
+      if (mounted) {
+        final currentIsHistory = _isHistoryMode;
+        setState(() {
+          _allSchedules = allData;
+          _isCachedData = false;
+          _wasUpdated = true;
+          if (!currentIsHistory) {
+            _isLoading = false;
+            _statusColor = Colors.green;
+          }
+        });
+
+        if (!currentIsHistory) {
+          await _refreshVersionsForCurrentMode();
+          if (mounted) _updateStatusDate();
+        }
+      }
 
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -760,18 +821,22 @@ class _HomeScreenState extends State<HomeScreen>
       );
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-          if (_isCachedData) {
-            _statusMessage = "Немає зв'язку (Архів)";
-            _statusColor = Colors.red;
-          } else {
-            _statusMessage = "Помилка оновлення";
-            _statusColor = Colors.red;
-          }
-        });
+        if (!_isHistoryMode) {
+          setState(() {
+            _isLoading = false;
+            if (_isCachedData) {
+              _statusMessage = "Немає зв'язку (Архів)";
+              _statusColor = Colors.red;
+            } else {
+              _statusMessage = "Помилка оновлення";
+              _statusColor = Colors.red;
+            }
+          });
+        }
       }
       AppLogger.e("Error loading data", tag: 'Main', error: e);
+    } finally {
+      _isFetching = false;
     }
   }
 
@@ -2017,14 +2082,6 @@ class _HomeScreenState extends State<HomeScreen>
                   color: isDark ? Colors.white : Colors.black87),
               onChanged: (newGroup) async {
                 await _changeGroup(newGroup);
-
-                if (_viewMode == ScheduleViewMode.yesterday &&
-                    _historyDate != null) {
-                  _loadHistoryData(_historyDate!);
-                } else if (_viewMode == ScheduleViewMode.history &&
-                    _historyDate != null) {
-                  _loadHistoryData(_historyDate!);
-                }
               },
               items: ParserService.allGroups.map((String value) {
                 return DropdownMenuItem(
@@ -2053,7 +2110,12 @@ class _HomeScreenState extends State<HomeScreen>
                 icon: Icon(Icons.refresh,
                     color: isDark ? Colors.white : Colors.black87),
                 onPressed: () {
-                  _loadData();
+                  if (_isHistoryMode) {
+                    final targetDate = _getDisplayDate();
+                    _loadHistoryData(targetDate);
+                  } else {
+                    _loadData(force: true);
+                  }
                   if (_powerMonitorEnabled) _powerMonitor.forceRefresh();
                   _achievementService.trackRefresh();
                 },
@@ -2251,13 +2313,11 @@ class _HomeScreenState extends State<HomeScreen>
                             color: Colors.orange,
                             onRefresh: () async {
                               _achievementService.trackRefresh();
-                              if (_viewMode == ScheduleViewMode.history ||
-                                  _viewMode == ScheduleViewMode.yesterday) {
-                                if (_historyDate != null) {
-                                  await _loadHistoryData(_historyDate!);
-                                }
+                              if (_isHistoryMode) {
+                                final targetDate = _getDisplayDate();
+                                await _loadHistoryData(targetDate);
                               } else {
-                                await _loadData(silent: true);
+                                await _loadData(silent: true, force: true);
                               }
                             },
                             child: ListView(
@@ -2395,7 +2455,12 @@ class _HomeScreenState extends State<HomeScreen>
       return RefreshIndicator(
         onRefresh: () async {
           _achievementService.trackRefresh();
-          await _loadData(silent: true);
+          if (_isHistoryMode) {
+            final targetDate = _getDisplayDate();
+            await _loadHistoryData(targetDate);
+          } else {
+            await _loadData(silent: true, force: true);
+          }
         },
         child: const SingleChildScrollView(
           physics: AlwaysScrollableScrollPhysics(),

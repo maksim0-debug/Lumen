@@ -14,7 +14,7 @@ dependencies:
 
   http: ^1.2.0
   html: ^0.15.4
-  intl: ^0.20.2
+  intl: ^0.20.3
   
   flutter_local_notifications: 19.5.0
   timezone: 0.10.1
