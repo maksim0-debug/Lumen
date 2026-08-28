@@ -10,6 +10,12 @@ import 'app_logger.dart';
 import 'history_service.dart';
 
 class ParserService {
+  static final ParserService _instance = ParserService._internal();
+
+  factory ParserService() => _instance;
+
+  ParserService._internal();
+
   static const String _url = "https://www.dtek-krem.com.ua/ua/shutdowns";
   static const String _homeUrl = "https://www.dtek-krem.com.ua/";
 
@@ -29,10 +35,26 @@ class ParserService {
   ];
 
   HeadlessInAppWebView? _headlessWebView;
+  Future<Map<String, FullSchedule>>? _ongoingFetch;
 
   Future<void> init() async {}
 
   Future<Map<String, FullSchedule>> fetchAllSchedules() async {
+    if (_ongoingFetch != null) {
+      AppLogger.d("⏳ Парсинг вже виконується, очікуємо спільний результат...",
+          tag: 'Parser');
+      return _ongoingFetch!;
+    }
+
+    _ongoingFetch = _executeFetchAllSchedules();
+    try {
+      return await _ongoingFetch!;
+    } finally {
+      _ongoingFetch = null;
+    }
+  }
+
+  Future<Map<String, FullSchedule>> _executeFetchAllSchedules() async {
     // 1. Try to fetch via simple HTTP request first (works in background)
     await HistoryService().logAction("Парсер: Старт fetchAllSchedules (v3)");
     final httpResult = await _fetchWithHttpClient();
@@ -48,13 +70,23 @@ class ParserService {
 
     AppLogger.i("🚀 Запуск Headless браузера (Hybrid)...", tag: 'Parser');
     final completer = Completer<Map<String, FullSchedule>>();
+    bool isDisposed = false;
+    bool hasNavigated = false;
+
+    Future<void> safeDispose() async {
+      if (isDisposed) return;
+      isDisposed = true;
+      try {
+        final wv = _headlessWebView;
+        _headlessWebView = null;
+        await wv?.dispose();
+      } catch (_) {}
+    }
 
     if (_headlessWebView != null) {
-      try {
-        await _headlessWebView?.dispose();
-      } catch (_) {}
-      _headlessWebView = null;
+      await safeDispose();
     }
+    isDisposed = false;
 
     _headlessWebView = HeadlessInAppWebView(
       // Крок 1: Спочатку відкриваємо головну сторінку для отримання cookies
@@ -99,10 +131,14 @@ class ParserService {
             level: "ERROR");
       },
       onLoadStop: (controller, url) async {
+        if (isDisposed || completer.isCompleted) return;
         final currentUrl = url?.toString() ?? '';
 
         // Крок 1: Головна сторінка — чекаємо cookies і переходимо до графіків
         if (!currentUrl.contains('/ua/shutdowns')) {
+          if (hasNavigated) return;
+          hasNavigated = true;
+
           AppLogger.d(
               "🏠 Головна сторінка завантажена ($currentUrl). Чекаємо 3 сек для cookies...",
               tag: 'Parser');
@@ -110,13 +146,20 @@ class ParserService {
               "Парсер WebView: Головна сторінка завантажена, очікування cookies");
           await Future.delayed(const Duration(seconds: 3));
 
+          if (isDisposed || completer.isCompleted) return;
+
           AppLogger.d("➡️ Переходимо на сторінку графіків...", tag: 'Parser');
-          await controller.loadUrl(
-            urlRequest: URLRequest(
-              url: WebUri(_url),
-              headers: {'Referer': _homeUrl},
-            ),
-          );
+          try {
+            await controller.loadUrl(
+              urlRequest: URLRequest(
+                url: WebUri(_url),
+                headers: {'Referer': _homeUrl},
+              ),
+            );
+          } catch (e) {
+            AppLogger.w("Помилка навігації на графіки (контролер закрито): $e",
+                tag: 'Parser');
+          }
           return;
         }
 
@@ -125,6 +168,8 @@ class ParserService {
             tag: 'Parser');
 
         for (int i = 0; i < 20; i++) {
+          if (isDisposed || completer.isCompleted) return;
+
           try {
             final jsResult = await controller.evaluateJavascript(
                 source:
@@ -153,8 +198,7 @@ class ParserService {
               var schedules = await _parseAndSaveAllGroups(jsonString);
               if (!completer.isCompleted) completer.complete(schedules);
 
-              await _headlessWebView?.dispose();
-              _headlessWebView = null;
+              await safeDispose();
               return;
             } else {
               AppLogger.d("Спроба ${i + 1}/20: Дані поки не знайдено...",
@@ -165,26 +209,28 @@ class ParserService {
               }
 
               // Debug-логування на першій спробі
-              if (kDebugMode && i == 0) {
-                final debugHtml = await controller.evaluateJavascript(
-                    source: "document.documentElement.outerHTML");
-                if (debugHtml != null) {
-                  String snippet = debugHtml.toString();
-                  if (snippet.length > 500) {
-                    snippet = snippet.substring(0, 500);
-                  }
-                  AppLogger.d("HTML Snippet:\n$snippet...",
-                      tag: 'Parser-DEBUG');
-
-                  if (snippet.contains('cloudflare') ||
-                      snippet.contains('Just a moment')) {
-                    AppLogger.w("⚠️ Виявлено захист Cloudflare!",
+              if (kDebugMode && i == 0 && !isDisposed) {
+                try {
+                  final debugHtml = await controller.evaluateJavascript(
+                      source: "document.documentElement.outerHTML");
+                  if (debugHtml != null) {
+                    String snippet = debugHtml.toString();
+                    if (snippet.length > 500) {
+                      snippet = snippet.substring(0, 500);
+                    }
+                    AppLogger.d("HTML Snippet:\n$snippet...",
                         tag: 'Parser-DEBUG');
-                    await HistoryService().logAction(
-                        "WebView потрапив на екран захисту Cloudflare",
-                        level: "WARN");
+
+                    if (snippet.contains('cloudflare') ||
+                        snippet.contains('Just a moment')) {
+                      AppLogger.w("⚠️ Виявлено захист Cloudflare!",
+                          tag: 'Parser-DEBUG');
+                      await HistoryService().logAction(
+                          "WebView потрапив на екран захисту Cloudflare",
+                          level: "WARN");
+                    }
                   }
-                }
+                } catch (_) {}
               }
             }
           } catch (e) {
@@ -200,21 +246,19 @@ class ParserService {
           await HistoryService()
               .logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
           completer.complete({});
-          await _headlessWebView?.dispose();
-          _headlessWebView = null;
+          await safeDispose();
         }
       },
     );
 
     // Страховочний тайм-аут: 60 секунд на весь процес WebView
-    Future.delayed(const Duration(seconds: 60), () {
+    Future.delayed(const Duration(seconds: 60), () async {
       if (!completer.isCompleted) {
         AppLogger.e("❌ Глобальний тайм-аут WebView (60 сек)", tag: 'Parser');
         HistoryService().logAction("Парсер: Глобальний тайм-аут WebView 60 сек",
             level: "ERROR");
         completer.complete({});
-        _headlessWebView?.dispose();
-        _headlessWebView = null;
+        await safeDispose();
       }
     });
 
@@ -225,6 +269,7 @@ class ParserService {
       await HistoryService()
           .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
       if (!completer.isCompleted) completer.complete({});
+      await safeDispose();
       return {};
     }
 

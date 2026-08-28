@@ -158,16 +158,16 @@ void callbackDispatcher() {
               tag: 'Background');
           await HistoryService()
               .logAction("Помилка: Пустий список графіків", level: "ERROR");
-          return Future.value(false);
+          return false;
         }
       }
     } catch (e) {
       AppLogger.e("❌ Критична помилка", tag: 'Background', error: e);
       await HistoryService().logAction("Помилка виконання: $e", level: "ERROR");
-      return Future.value(false);
+      return false;
     }
 
-    return Future.value(true);
+    return true;
   });
 }
 
