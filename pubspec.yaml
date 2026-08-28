@@ -49,6 +49,8 @@ dev_dependencies:
   # Генератор иконок
   flutter_launcher_icons: ^0.13.1
 
+  path_provider_platform_interface: any
+  plugin_platform_interface: any
 flutter:
   uses-material-design: true
   assets:

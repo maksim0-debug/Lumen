@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
+import '../services/app_logger.dart';
 import '../services/parser_service.dart';
 
 import '../services/backup_service.dart';
@@ -39,7 +39,6 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _enableLogging = true;
   bool _powerMonitorEnabled = false;
   double _uiScale = 1.0;
-  DarknessStage _currentDarknessStage = DarknessStage.solarpunk;
   List<String> _notificationGroups = [];
 
   final TextEditingController _customUrlController = TextEditingController();
@@ -56,7 +55,8 @@ class _SettingsPageState extends State<SettingsPage> {
       try {
         prefs = await PreferencesHelper.getSafeInstance();
       } catch (e) {
-        print("Error getting SharedPreferences in _loadSettings: $e");
+        AppLogger.w("Error getting SharedPreferences in _loadSettings: $e",
+            tag: 'SettingsPage');
       }
 
       // If prefs is null, we can't load settings, but we should not crash.
@@ -67,7 +67,8 @@ class _SettingsPageState extends State<SettingsPage> {
         try {
           launchOnStart = await launchAtStartup.isEnabled();
         } catch (e) {
-          print("Error checking launchAtStartup: $e");
+          AppLogger.e("Error checking launchAtStartup",
+              tag: 'SettingsPage', error: e);
         }
       }
 
@@ -90,7 +91,6 @@ class _SettingsPageState extends State<SettingsPage> {
               prefs.getBool('power_monitor_enabled') ?? false;
           _uiScale = prefs.getDouble('ui_scale') ?? 1.0;
           // _autoDarknessTheme removed
-          _currentDarknessStage = DarknessThemeService().currentStage;
           _notificationGroups =
               prefs.getStringList('notification_groups') ?? [];
 
@@ -108,7 +108,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _isLoading = false;
       });
     } catch (e) {
-      print("Error loading settings: $e");
+      AppLogger.e("Error loading settings", tag: 'SettingsPage', error: e);
       if (mounted) {
         setState(() => _isLoading = false);
       }
@@ -126,7 +126,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setBool(key, value);
     } catch (e) {
-      print("Error saving setting $key: $e");
+      AppLogger.e("Error saving setting $key", tag: 'SettingsPage', error: e);
     }
   }
 
@@ -135,7 +135,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setStringList('notification_groups', _notificationGroups);
     } catch (e) {
-      print("Error saving groups: $e");
+      AppLogger.e("Error saving groups", tag: 'SettingsPage', error: e);
     }
   }
 
@@ -425,7 +425,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           try {
                             setState(() => _isLoading = true);
                             final path = await BackupService().exportDatabase();
-                            if (mounted) {
+                            if (context.mounted) {
                               if (path != null) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
@@ -435,10 +435,11 @@ class _SettingsPageState extends State<SettingsPage> {
                               }
                             }
                           } catch (e) {
-                            if (mounted)
+                            if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                       content: Text("Помилка експорту: $e")));
+                            }
                           } finally {
                             if (mounted) setState(() => _isLoading = false);
                           }
@@ -475,18 +476,19 @@ class _SettingsPageState extends State<SettingsPage> {
                           try {
                             setState(() => _isLoading = true);
                             await BackupService().importDatabase();
-                            if (mounted) {
+                            if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
                                       content: Text(
                                           "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних.")));
                             }
                           } catch (e) {
-                            if (mounted)
+                            if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                       content:
                                           Text("Помилка відновлення: $e")));
+                            }
                           } finally {
                             if (mounted) setState(() => _isLoading = false);
                           }
@@ -511,7 +513,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               final path = await BackupService()
                                   .exportPartialHistory(
                                       picked.start, picked.end);
-                              if (mounted) {
+                              if (context.mounted) {
                                 if (path != null) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -519,9 +521,10 @@ class _SettingsPageState extends State<SettingsPage> {
                                 }
                               }
                             } catch (e) {
-                              if (mounted)
+                              if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(content: Text("Помилка: $e")));
+                              }
                             } finally {
                               if (mounted) setState(() => _isLoading = false);
                             }
@@ -538,16 +541,17 @@ class _SettingsPageState extends State<SettingsPage> {
                             setState(() => _isLoading = true);
                             final count =
                                 await BackupService().importPartialHistory();
-                            if (mounted && count > 0) {
+                            if (context.mounted && count > 0) {
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                                   content: Text(
                                       "Успішно додано записів: $count. Перезапустіть додаток.")));
                             }
                           } catch (e) {
-                            if (mounted)
+                            if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                       content: Text("Помилка імпорту: $e")));
+                            }
                           } finally {
                             if (mounted) setState(() => _isLoading = false);
                           }
@@ -600,9 +604,9 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _buildScaleSelector() {
     return ListTile(
       title: const Text("Масштаб"),
-      subtitle: Text(
+      subtitle: const Text(
         "Розмір елементів інтерфейсу",
-        style: const TextStyle(fontSize: 12, color: Colors.grey),
+        style: TextStyle(fontSize: 12, color: Colors.grey),
       ),
       trailing: DropdownButton<double>(
         value: _uiScale,
@@ -614,7 +618,8 @@ class _SettingsPageState extends State<SettingsPage> {
               final prefs = await PreferencesHelper.getSafeInstance();
               await prefs.setDouble('ui_scale', newValue);
             } catch (e) {
-              print("Error saving ui_scale: $e");
+              AppLogger.e("Error saving ui_scale",
+                  tag: 'SettingsPage', error: e);
             }
             if (widget.onScaleChanged != null) widget.onScaleChanged!();
           }
@@ -653,34 +658,32 @@ class _SettingsPageState extends State<SettingsPage> {
         onChanged: (String? newValue) async {
           if (newValue != null) {
             await DarknessThemeService().setMode(newValue);
-            setState(() {
-              _currentDarknessStage = DarknessThemeService().currentStage;
-            });
+            setState(() {});
             if (widget.onThemeChanged != null) widget.onThemeChanged!();
           }
         },
-        items: [
-          const DropdownMenuItem(
+        items: const [
+          DropdownMenuItem(
             value: 'off',
             child: Text("Вимкнено"),
           ),
-          const DropdownMenuItem(
+          DropdownMenuItem(
             value: 'auto',
             child: Text("Автоматично"),
           ),
-          const DropdownMenuItem(
+          DropdownMenuItem(
             value: 'solarpunk',
             child: Text("🌿 Solarpunk"),
           ),
-          const DropdownMenuItem(
+          DropdownMenuItem(
             value: 'dieselpunk',
             child: Text("⚙️ Dieselpunk"),
           ),
-          const DropdownMenuItem(
+          DropdownMenuItem(
             value: 'cyberpunk',
             child: Text("🌃 Cyberpunk"),
           ),
-          const DropdownMenuItem(
+          DropdownMenuItem(
             value: 'stalker',
             child: Text("☢️ Stalker"),
           ),

@@ -3,7 +3,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:vikl/services/history_service.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
-import 'dart:io';
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Setup Mock for PathProvider (same as history_service_test.dart)
 class MockPathProviderPlatform extends Fake
@@ -19,6 +20,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() {
+    SharedPreferences.setMockInitialValues({'enable_logging': true});
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
     PathProviderPlatform.instance = MockPathProviderPlatform();
@@ -35,7 +37,7 @@ void main() {
       await service.logAction("Test Log 2", level: "ERROR");
 
       final logs = await service.getLogs();
-      
+
       expect(logs.length, 2);
       expect(logs[0]['message'], "Test Log 2"); // Latest first
       expect(logs[0]['level'], "ERROR");
@@ -43,14 +45,14 @@ void main() {
     });
 
     test('Log has timestamp', () async {
-       final service = HistoryService();
-       await service.logAction("Timestamp test");
-       final logs = await service.getLogs(limit: 1);
-       final item = logs.first;
-       
-       expect(item['timestamp'], isNotNull);
-       // Should parse as date
-       expect(DateTime.tryParse(item['timestamp']), isNotNull);
+      final service = HistoryService();
+      await service.logAction("Timestamp test");
+      final logs = await service.getLogs(limit: 1);
+      final item = logs.first;
+
+      expect(item['timestamp'], isNotNull);
+      // Should parse as date
+      expect(DateTime.tryParse(item['timestamp']), isNotNull);
     });
   });
 }

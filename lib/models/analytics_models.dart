@@ -1,4 +1,3 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'schedule_status.dart';
 import 'power_event.dart';
 
@@ -164,8 +163,8 @@ class GroupStats {
     final h = totalOffMinutes ~/ 60;
     final m = totalOffMinutes % 60;
     if (h > 0 && m > 0) return '$hг $mхв';
-    if (h > 0) return '${h}г';
-    return '${m}хв';
+    if (h > 0) return '$hг';
+    return '$mхв';
   }
 }
 

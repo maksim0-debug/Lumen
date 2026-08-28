@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/achievement.dart';
 import '../models/power_event.dart';
 import '../models/schedule_status.dart';
+import 'app_logger.dart';
 import 'history_service.dart';
 import 'power_monitor_service.dart';
 import 'preferences_helper.dart';
@@ -119,8 +118,7 @@ class AchievementService {
     final now = DateTime.now();
     _refreshTimestamps.add(now);
     // Видаляємо старші ніж 60 секунд
-    _refreshTimestamps.removeWhere(
-        (t) => now.difference(t).inSeconds > 60);
+    _refreshTimestamps.removeWhere((t) => now.difference(t).inSeconds > 60);
 
     if (_refreshTimestamps.length >= 20) {
       await _unlock('nervous_tic');
@@ -286,8 +284,9 @@ class AchievementService {
 
       if (hour < 24 && schedule.today.hours[hour] == LightStatus.on) {
         // Перевіряємо, чи offline тривав > 15 хв
-        final nextOnline = events.where((e) =>
-            e.isOnline && e.timestamp.isAfter(event.timestamp)).toList();
+        final nextOnline = events
+            .where((e) => e.isOnline && e.timestamp.isAfter(event.timestamp))
+            .toList();
         if (nextOnline.isEmpty) {
           // Досі offline
           if (DateTime.now().difference(event.timestamp).inMinutes > 15) {
@@ -328,10 +327,12 @@ class AchievementService {
       if (wasOff && isOn) {
         final expectedOnTime = DateTime(today.year, today.month, today.day, h);
         // Знаходимо перший online після expectedOnTime
-        final onlineAfter = events.where((e) =>
-            e.isOnline &&
-            _isSameDay(e.timestamp, today) &&
-            e.timestamp.isAfter(expectedOnTime)).toList();
+        final onlineAfter = events
+            .where((e) =>
+                e.isOnline &&
+                _isSameDay(e.timestamp, today) &&
+                e.timestamp.isAfter(expectedOnTime))
+            .toList();
 
         if (onlineAfter.isNotEmpty) {
           final delay = onlineAfter.first.timestamp.difference(expectedOnTime);
@@ -344,10 +345,12 @@ class AchievementService {
           if (today.isAfter(expectedOnTime) &&
               today.difference(expectedOnTime).inMinutes > 60) {
             // Перевіряємо, чи є offline, що охоплює цей період
-            final offlineBeforeH = events.where((e) =>
-                e.isOffline &&
-                _isSameDay(e.timestamp, today) &&
-                e.timestamp.isBefore(expectedOnTime)).toList();
+            final offlineBeforeH = events
+                .where((e) =>
+                    e.isOffline &&
+                    _isSameDay(e.timestamp, today) &&
+                    e.timestamp.isBefore(expectedOnTime))
+                .toList();
             if (offlineBeforeH.isNotEmpty) {
               await _unlock('hachiko');
               return;
@@ -372,12 +375,10 @@ class AchievementService {
 
       for (int d = 1; d <= 7; d++) {
         final date = DateTime.now().subtract(Duration(days: d));
-        final dateStr =
-            "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
 
         // Отримуємо збережений графік
-        final versions = await HistoryService()
-            .getVersionsForDate(date, currentGroup);
+        final versions =
+            await HistoryService().getVersionsForDate(date, currentGroup);
         if (versions.isEmpty) return; // Немає даних — не рахуємо
 
         final scheduleCode = versions.last.hash;
@@ -397,8 +398,13 @@ class AchievementService {
           if (status == LightStatus.on && offMins <= 10) match = true;
           if (status == LightStatus.off && offMins >= 50) match = true;
           if ((status == LightStatus.semiOn || status == LightStatus.semiOff) &&
-              offMins >= 15 && offMins <= 45) match = true;
-          if (status == LightStatus.maybe) match = true; // "може бути" — завжди OK
+              offMins >= 15 &&
+              offMins <= 45) {
+            match = true;
+          }
+          if (status == LightStatus.maybe) {
+            match = true; // "може бути" — завжди OK
+          }
 
           if (match) matchingHours++;
         }
@@ -514,7 +520,9 @@ class AchievementService {
     if (await isUnlocked('seemed_like')) return;
     final intervals = _buildIntervalsFromEvents(events);
     for (final iv in intervals) {
-      if (iv.end != null && iv.duration.inMinutes < 5 && iv.duration.inMinutes > 0) {
+      if (iv.end != null &&
+          iv.duration.inMinutes < 5 &&
+          iv.duration.inMinutes > 0) {
         await _unlock('seemed_like');
         return;
       }
@@ -629,7 +637,7 @@ class AchievementService {
       onAchievementUnlocked!(def);
     }
 
-    print('[Achievements] 🏆 Unlocked: $achievementId');
+    AppLogger.i('🏆 Unlocked: $achievementId', tag: 'Achievements');
   }
 
   Future<void> _updateProgress(String achievementId, double progress) async {

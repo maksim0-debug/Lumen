@@ -1,4 +1,4 @@
-import 'dart:math';
+import 'dart:io';
 
 // Mock classes
 class PowerEvent {
@@ -51,12 +51,16 @@ List<PowerOutageInterval> getOutageIntervalsForDate(
       isCurrentlyOffline = true;
     } else {
       // Online logic correction
-      if (lastBefore.timestamp.add(Duration(minutes: 6)).isAfter(dayStart)) {
+      if (lastBefore.timestamp
+          .add(const Duration(minutes: 6))
+          .isAfter(dayStart)) {
         // Effectively offline until online+6
         // But let's keep it simple: assume online if online event was long ago
       }
     }
-  } catch (e) {}
+  } catch (_) {
+    // Ignore if no matching event before dayStart.
+  }
 
   for (final event in allEvents) {
     // Calculate effective time (Online + 6m)
@@ -158,7 +162,7 @@ void main() {
   final dailyData = getDailyOutageHours(4, events);
 
   for (final d in dailyData) {
-    print(
+    stdout.writeln(
         'Date: ${d.date.toString().substring(0, 10)} (${d.date.weekday}) - Outage: ${d.outageMinutes} min');
   }
 }

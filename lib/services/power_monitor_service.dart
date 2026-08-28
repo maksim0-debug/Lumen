@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/power_event.dart';
+import 'app_logger.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
 
@@ -35,7 +36,9 @@ class PowerMonitorService {
     try {
       prefs = await PreferencesHelper.getSafeInstance();
     } catch (e) {
-      print("Error loading SharedPreferences in PowerMonitorService.init: $e");
+      AppLogger.w(
+          "Error loading SharedPreferences in PowerMonitorService.init: $e",
+          tag: 'PowerMonitor');
     }
     _isEnabled = prefs?.getBool('power_monitor_enabled') ?? false;
     _customUrl = prefs?.getString('custom_power_monitor_url');
@@ -62,7 +65,8 @@ class PowerMonitorService {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setBool('power_monitor_enabled', enabled);
     } catch (e) {
-      print("Error saving power_monitor_enabled: $e");
+      AppLogger.e("Error saving power_monitor_enabled",
+          tag: 'PowerMonitor', error: e);
     }
 
     if (enabled) {
@@ -105,7 +109,7 @@ class PowerMonitorService {
         _updateCurrentStatus(events);
       }
     } catch (e) {
-      print('[PowerMonitor] Sync error: $e');
+      AppLogger.e('Sync error', tag: 'PowerMonitor', error: e);
       // Fallback: спробувати прочитати з локальної БД
       try {
         final localEvents = await getLocalEvents();
@@ -133,8 +137,8 @@ class PowerMonitorService {
     // But since we just deleted is_manual=0, _saveToLocalDb will just insert them.
     await _saveToLocalDb(firebaseEvents);
 
-    print(
-        '[PowerMonitor] Full sync completed. Loaded ${firebaseEvents.length} events.');
+    AppLogger.i('Full sync completed. Loaded ${firebaseEvents.length} events.',
+        tag: 'PowerMonitor');
   }
 
   // 1. ИСПРАВЛЕННЫЙ МЕТОД ЗАГРУЗКИ (Сортировка по времени, а не ключу)
@@ -153,8 +157,9 @@ class PowerMonitorService {
 
     final response = await http.get(Uri.parse(url));
 
-    if (response.statusCode != 200)
+    if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');
+    }
 
     final contentType = response.headers['content-type'] ?? '';
     if (!contentType.contains('application/json')) {
@@ -173,7 +178,7 @@ class PowerMonitorService {
         try {
           events.add(PowerEvent.fromFirebase(entry.key, entry.value));
         } catch (e) {
-          print('[PowerMonitor] Parse error: $e');
+          AppLogger.e('Parse error', tag: 'PowerMonitor', error: e);
         }
       }
     }
@@ -225,7 +230,7 @@ class PowerMonitorService {
 
       return true;
     } catch (e) {
-      print('[PowerMonitor] testAndSetUrl error: $e');
+      AppLogger.e('testAndSetUrl error', tag: 'PowerMonitor', error: e);
       return false;
     }
   }
@@ -271,7 +276,7 @@ class PowerMonitorService {
       }
     }
 
-    print('[PowerMonitor] Status updated to: $_currentStatus');
+    AppLogger.d('Status updated to: $_currentStatus', tag: 'PowerMonitor');
     if (onStatusChanged != null) {
       onStatusChanged!(_currentStatus);
     }
@@ -304,8 +309,6 @@ class PowerMonitorService {
 
   Future<List<PowerOutageInterval>> getOutageIntervalsForDate(
       DateTime date) async {
-    final db = await HistoryService().database;
-
     // 1. Определяем границы дня
     final dayStart = DateTime(date.year, date.month, date.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
@@ -472,7 +475,7 @@ class PowerMonitorService {
       // Delete events with null ID or weird state
       await db.delete('power_events', where: 'id IS NULL');
     } catch (e) {
-      print("[PowerMonitor] Cleanup error: $e");
+      AppLogger.e("Cleanup error", tag: 'PowerMonitor', error: e);
     }
   }
 

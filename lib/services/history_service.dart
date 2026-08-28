@@ -5,6 +5,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/schedule_status.dart';
+import 'app_logger.dart';
 import 'preferences_helper.dart';
 
 class HistoryService {
@@ -29,7 +30,7 @@ class HistoryService {
     if (_database != null && _database!.isOpen) {
       await _database!.close();
       _database = null;
-      print("[HistoryService] Database closed");
+      AppLogger.d("Database closed", tag: 'HistoryService');
     }
   }
 
@@ -113,7 +114,8 @@ class HistoryService {
     );
   }
 
-  Future<void> logAction(String message, {String level = 'INFO'}) async {
+  /// Direct, low-overhead database insertion for raw logs.
+  Future<void> insertRawLog(String message, {String level = 'INFO'}) async {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       final enabled = prefs.getBool('enable_logging') ?? true;
@@ -125,10 +127,14 @@ class HistoryService {
         'level': level,
         'message': message,
       });
-      print("[HistoryService LOG] $message");
-    } catch (e) {
-      print("[HistoryService] Failed to log: $e");
+    } catch (_) {
+      // Ignored to avoid cascading errors during logging failure
     }
+  }
+
+  Future<void> logAction(String message, {String level = 'INFO'}) async {
+    await insertRawLog(message, level: level);
+    AppLogger.d(message, tag: 'HistoryService LOG');
   }
 
   Future<List<Map<String, dynamic>>> getLogs({int limit = 100}) async {
@@ -166,8 +172,9 @@ class HistoryService {
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
-      print(
-          "[HistoryService] Saved new version for $groupKey ($targetDate): $dtekUpdatedAt");
+      AppLogger.d(
+          "Saved new version for $groupKey ($targetDate): $dtekUpdatedAt",
+          tag: 'HistoryService');
     }
   }
 
@@ -319,12 +326,16 @@ class HistoryService {
             if (item is String) {
               try {
                 versionMap = jsonDecode(item);
-              } catch (e) {}
+              } catch (e) {
+                // Ignore invalid JSON item
+              }
             } else if (item is Map) {
               // Already a map
               try {
                 versionMap = Map<String, dynamic>.from(item);
-              } catch (e) {}
+              } catch (e) {
+                // Ignore invalid map format
+              }
             }
 
             if (versionMap != null) {
@@ -339,7 +350,7 @@ class HistoryService {
                         "${version.savedAt.hour}:${version.savedAt.minute.toString().padLeft(2, '0')}");
                 importedCount++;
               } catch (e) {
-                // print("Item import error: $e");
+                // Item import error ignored
               }
             }
           }
@@ -365,23 +376,23 @@ class HistoryService {
       final msg =
           "Import finished: $importedCount records imported, $skippedCount keys skipped.";
       await logAction(msg);
-      print("[HistoryService] $msg");
+      AppLogger.i(msg, tag: 'HistoryService');
 
       if (importedCount == 0 && data.isNotEmpty) {
         throw Exception(
             "No valid history records found. Checked ${data.length} keys.");
       }
     } catch (e) {
-      print("Import error: $e");
+      AppLogger.e("Import error", tag: 'HistoryService', error: e);
       await logAction("Import error: $e", level: "ERROR");
-      throw e;
+      rethrow;
     }
   }
 
   Future<void> clearPowerEvents() async {
     final db = await database;
     await db.delete('power_events');
-    print("[HistoryService] Cleared power_events table.");
+    AppLogger.d("Cleared power_events table.", tag: 'HistoryService');
   }
 
   Future<String> exportHistoryToJson() async {
@@ -486,7 +497,7 @@ class HistoryService {
             "CheckMigrate: processed $migratedCount records for $groupKey $dateStr");
       }
     } catch (e) {
-      print("Migration error: $e");
+      AppLogger.e("Migration error", tag: 'HistoryService', error: e);
     }
   }
 

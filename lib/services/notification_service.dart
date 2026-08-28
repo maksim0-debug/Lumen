@@ -6,6 +6,7 @@ import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/schedule_status.dart';
+import 'app_logger.dart';
 import 'parser_service.dart';
 import 'preferences_helper.dart';
 
@@ -14,14 +15,14 @@ class NotificationService {
 
   factory NotificationService() {
     if (_instance == null) {
-      print("[NotificationService] Створення нового екземпляра...");
+      AppLogger.d("Створення нового екземпляра...", tag: 'NotificationService');
       _instance = NotificationService._internal();
     }
     return _instance!;
   }
 
   NotificationService._internal() {
-    print("[NotificationService] Конструктор викликано");
+    AppLogger.d("Конструктор викликано", tag: 'NotificationService');
   }
 
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
@@ -32,61 +33,64 @@ class NotificationService {
 
   Future<void> init() async {
     if (_isInitialized) {
-      print("[NotificationService] Вже ініціалізовано");
+      AppLogger.d("Вже ініціалізовано", tag: 'NotificationService');
       return;
     }
 
-    print("[NotificationService] ========== ІНІЦІАЛІЗАЦІЯ ==========");
+    AppLogger.i("========== ІНІЦІАЛІЗАЦІЯ ==========",
+        tag: 'NotificationService');
 
     try {
-      print("[NotificationService] Ініціалізація timezone...");
+      AppLogger.d("Ініціалізація timezone...", tag: 'NotificationService');
       tz.initializeTimeZones();
       try {
         tz.setLocalLocation(tz.getLocation('Europe/Kiev'));
-        print("[NotificationService] ✅ Timezone: Europe/Kiev");
+        AppLogger.i("✅ Timezone: Europe/Kiev", tag: 'NotificationService');
       } catch (e) {
         tz.setLocalLocation(tz.local);
-        print("[NotificationService] ⚠️ Timezone: local");
+        AppLogger.w("⚠️ Timezone: local", tag: 'NotificationService');
       }
 
       const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/launcher_icon');
 
-      final WindowsInitializationSettings windowsSettings =
+      const WindowsInitializationSettings windowsSettings =
           WindowsInitializationSettings(
               appName: 'Lumen',
               appUserModelId: 'Vikl.Lumen.App',
               guid: '27042046-8148-4367-9d7a-757877477430');
 
-      final InitializationSettings settings = InitializationSettings(
+      const InitializationSettings settings = InitializationSettings(
         android: androidSettings,
         windows: windowsSettings,
       );
 
-      print("[NotificationService] Виклик initialize()...");
+      AppLogger.d("Виклик initialize()...", tag: 'NotificationService');
       bool? result = await _notificationsPlugin.initialize(
         settings,
         onDidReceiveNotificationResponse: (details) {
-          print("[NotificationService] Клік по сповіщенню: ${details.payload}");
+          AppLogger.i("Клік по сповіщенню: ${details.payload}",
+              tag: 'NotificationService');
         },
       );
-      print("[NotificationService] initialize() повернув: $result");
+      AppLogger.d("initialize() повернув: $result", tag: 'NotificationService');
 
       if (Platform.isAndroid) {
-        print(
-            "[NotificationService] Платформа: Android. Налаштування каналів...");
+        AppLogger.d("Платформа: Android. Налаштування каналів...",
+            tag: 'NotificationService');
         await _createNotificationChannels();
         await _requestPermissions();
       } else if (Platform.isWindows) {
-        print("[NotificationService] Платформа: Windows. Підготовка іконки...");
+        AppLogger.d("Платформа: Windows. Підготовка іконки...",
+            tag: 'NotificationService');
         await _prepareWindowsIcon();
       }
 
       _isInitialized = true;
-      print("[NotificationService] ✅✅✅ ІНІЦІАЛІЗАЦІЯ ЗАВЕРШЕНА");
+      AppLogger.i("✅✅✅ ІНІЦІАЛІЗАЦІЯ ЗАВЕРШЕНА", tag: 'NotificationService');
     } catch (e, stackTrace) {
-      print("[NotificationService] ❌ ПОМИЛКА ІНІЦІАЛІЗАЦІЇ: $e");
-      print("[NotificationService] StackTrace: $stackTrace");
+      AppLogger.e("ПОМИЛКА ІНІЦІАЛІЗАЦІЇ",
+          tag: 'NotificationService', error: e, stackTrace: stackTrace);
     }
   }
 
@@ -106,14 +110,15 @@ class NotificationService {
               .asUint8List(byteData.offsetInBytes, byteData.lengthInBytes));
         }
         _windowsIconPath = iconFile.path;
-        print(
-            "[NotificationService] Windows icon prepared at: $_windowsIconPath");
+        AppLogger.d("Windows icon prepared at: $_windowsIconPath",
+            tag: 'NotificationService');
       } catch (e) {
-        print(
-            "[NotificationService] ⚠️ Іконка '$assetIcon' не знайдена в асетах. Сповіщення будуть без кастомної іконки. Помилка: $e");
+        AppLogger.w("⚠️ Іконка '$assetIcon' не знайдена в асетах. Помилка: $e",
+            tag: 'NotificationService');
       }
     } catch (e) {
-      print("[NotificationService] Помилка підготовки іконки Windows: $e");
+      AppLogger.e("Помилка підготовки іконки Windows",
+          tag: 'NotificationService', error: e);
     }
   }
 
@@ -151,13 +156,16 @@ class NotificationService {
       );
 
       await androidImpl.createNotificationChannel(immediateChannel);
-      print("[NotificationService] ✅ Канал 'immediate_channel' створено");
+      AppLogger.d("✅ Канал 'immediate_channel' створено",
+          tag: 'NotificationService');
 
       await androidImpl.createNotificationChannel(testChannel);
-      print("[NotificationService] ✅ Канал 'test_channel' створено");
+      AppLogger.d("✅ Канал 'test_channel' створено",
+          tag: 'NotificationService');
 
       await androidImpl.createNotificationChannel(scheduleChannel);
-      print("[NotificationService] ✅ Канал 'schedule_channel' створено");
+      AppLogger.d("✅ Канал 'schedule_channel' створено",
+          tag: 'NotificationService');
     }
   }
 
@@ -170,47 +178,52 @@ class NotificationService {
       if (androidImpl != null) {
         try {
           final notifPerm = await androidImpl.requestNotificationsPermission();
-          print("[NotificationService] Дозвіл на сповіщення (13+): $notifPerm");
+          AppLogger.d("Дозвіл на сповіщення (13+): $notifPerm",
+              tag: 'NotificationService');
         } catch (e) {
-          print(
-              "[NotificationService] requestNotificationsPermission не підтримується (Android <13): $e");
+          AppLogger.w(
+              "requestNotificationsPermission не підтримується (Android <13): $e",
+              tag: 'NotificationService');
         }
 
         try {
           final alarmPerm = await androidImpl.requestExactAlarmsPermission();
-          print(
-              "[NotificationService] Дозвіл на точні будильники (12+): $alarmPerm");
+          AppLogger.d("Дозвіл на точні будильники (12+): $alarmPerm",
+              tag: 'NotificationService');
         } catch (e) {
-          print(
-              "[NotificationService] requestExactAlarmsPermission помилка: $e");
+          AppLogger.w("requestExactAlarmsPermission помилка: $e",
+              tag: 'NotificationService');
         }
 
         try {
           final canSchedule = await androidImpl.canScheduleExactNotifications();
-          print(
-              "[NotificationService] canScheduleExactNotifications: $canSchedule");
+          AppLogger.d("canScheduleExactNotifications: $canSchedule",
+              tag: 'NotificationService');
           if (canSchedule == false) {
-            print(
-                "[NotificationService] ⚠️⚠️⚠️ НЕМАЄ ДОЗВОЛУ НА ТОЧНІ СПОВІЩЕННЯ!");
+            AppLogger.w("⚠️⚠️⚠️ НЕМАЄ ДОЗВОЛУ НА ТОЧНІ СПОВІЩЕННЯ!",
+                tag: 'NotificationService');
           }
         } catch (e) {
-          print(
-              "[NotificationService] canScheduleExactNotifications помилка: $e");
+          AppLogger.w("canScheduleExactNotifications помилка: $e",
+              tag: 'NotificationService');
         }
       }
     } catch (e) {
-      print("[NotificationService] Помилка запиту дозволів: $e");
+      AppLogger.e("Помилка запиту дозволів",
+          tag: 'NotificationService', error: e);
     }
   }
 
   Future<void> showImmediate(String title, String body,
       {String? groupName}) async {
-    print("[NotificationService] ========== showImmediate ==========");
-    print(
-        "[NotificationService] title: '$title', body: '$body', group: '$groupName'");
+    AppLogger.d("========== showImmediate ==========",
+        tag: 'NotificationService');
+    AppLogger.i("title: '$title', body: '$body', group: '$groupName'",
+        tag: 'NotificationService');
 
     if (!_isInitialized) {
-      print("[NotificationService] Не ініціалізовано, викликаємо init()...");
+      AppLogger.d("Не ініціалізовано, викликаємо init()...",
+          tag: 'NotificationService');
       await init();
     }
 
@@ -219,7 +232,8 @@ class NotificationService {
       try {
         prefs = await PreferencesHelper.getSafeInstance();
       } catch (e) {
-        print("Error getting SharedPreferences in showImmediate: $e");
+        AppLogger.w("Error getting SharedPreferences in showImmediate: $e",
+            tag: 'NotificationService');
       }
       final List<String> notificationGroups =
           prefs?.getStringList('notification_groups') ?? [];
@@ -230,7 +244,8 @@ class NotificationService {
         finalTitle = "$formattedGroup: $title";
       }
 
-      print("[NotificationService] Створення Platform-specific details...");
+      AppLogger.d("Створення Platform-specific details...",
+          tag: 'NotificationService');
 
       const AndroidNotificationDetails androidDetails =
           AndroidNotificationDetails(
@@ -242,10 +257,10 @@ class NotificationService {
         icon: '@mipmap/launcher_icon',
       );
 
-      final WindowsNotificationDetails windowsDetails =
+      const WindowsNotificationDetails windowsDetails =
           WindowsNotificationDetails();
 
-      final NotificationDetails details = NotificationDetails(
+      const NotificationDetails details = NotificationDetails(
         android: androidDetails,
         windows: windowsDetails,
       );
@@ -254,7 +269,8 @@ class NotificationService {
       final timeFactor = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final notificationId = timeFactor + uniqueGroupFactor;
 
-      print("[NotificationService] Виклик show() з ID: $notificationId");
+      AppLogger.d("Виклик show() з ID: $notificationId",
+          tag: 'NotificationService');
 
       await _notificationsPlugin.show(
         notificationId,
@@ -263,10 +279,10 @@ class NotificationService {
         details,
       );
 
-      print("[NotificationService] ✅ show() успішно виконано");
+      AppLogger.i("✅ show() успішно виконано", tag: 'NotificationService');
     } catch (e, stackTrace) {
-      print("[NotificationService] ❌ ПОМИЛКА show(): $e");
-      print("[NotificationService] StackTrace: $stackTrace");
+      AppLogger.e("ПОМИЛКА show()",
+          tag: 'NotificationService', error: e, stackTrace: stackTrace);
     }
   }
 
@@ -280,8 +296,9 @@ class NotificationService {
     try {
       prefs = await PreferencesHelper.getSafeInstance();
     } catch (e) {
-      print(
-          "Error getting SharedPreferences in scheduleNotificationsForToday: $e");
+      AppLogger.w(
+          "Error getting SharedPreferences in scheduleNotificationsForToday: $e",
+          tag: 'NotificationService');
     }
 
     final bool fallback = prefs == null ? false : true;
@@ -294,21 +311,22 @@ class NotificationService {
     final List<String> notificationGroups =
         prefs?.getStringList('notification_groups') ?? [];
 
-    print(
-        "[NotificationService] ========== ПЛАНУВАННЯ НА ДЕНЬ ($groupName) ==========");
+    AppLogger.d("========== ПЛАНУВАННЯ НА ДЕНЬ ($groupName) ==========",
+        tag: 'NotificationService');
 
     if (cancelExisting) {
       if (Platform.isAndroid) {
         try {
           final List<PendingNotificationRequest> pending =
               await _notificationsPlugin.pendingNotificationRequests();
-          print(
-              "[NotificationService] Знайдено ${pending.length} запланованих. Скасовуємо...");
+          AppLogger.d("Знайдено ${pending.length} запланованих. Скасовуємо...",
+              tag: 'NotificationService');
           for (var p in pending) {
             await _notificationsPlugin.cancel(p.id);
           }
         } catch (e) {
-          print("[NotificationService] Помилка скасування: $e");
+          AppLogger.e("Помилка скасування",
+              tag: 'NotificationService', error: e);
         }
       } else {
         await _notificationsPlugin.cancelAll();
@@ -316,12 +334,13 @@ class NotificationService {
     }
 
     final now = tz.TZDateTime.now(tz.local);
-    print("[NotificationService] Поточний час: $now");
+    AppLogger.d("Поточний час: $now", tag: 'NotificationService');
 
     final periods = _calculateOutagePeriods(fullSchedule.today,
         nextDaySchedule: fullSchedule.tomorrow);
-    print(
-        "[NotificationService] Знайдено об'єднаних періодів відключення для $groupName: ${periods.length}");
+    AppLogger.d(
+        "Знайдено об'єднаних періодів відключення для $groupName: ${periods.length}",
+        tag: 'NotificationService');
 
     final groupIdx = groupName != null ? _getGroupIndex(groupName) : 0;
     final idPrefix = groupIdx * 100000;
@@ -358,7 +377,7 @@ class NotificationService {
         if (dueTime1h.isAfter(now)) {
           await _scheduleOne(
             id: idPrefix + startHour * 1000 + startMinute * 10 + 1,
-            title: "${titlePrefix}Скоро відключення",
+            title: "$titlePrefixСкоро відключення",
             body: "О $startTimeStr світла не буде (до $endTimeStr)",
             time: dueTime1h,
           );
@@ -373,7 +392,7 @@ class NotificationService {
         if (dueTime30m.isAfter(now)) {
           await _scheduleOne(
             id: idPrefix + startHour * 1000 + startMinute * 10 + 4,
-            title: "${titlePrefix}Скоро відключення",
+            title: "$titlePrefixСкоро відключення",
             body:
                 "Через 30 хвилин ($startTimeStr) вимкнуть світло (до $endTimeStr)",
             time: dueTime30m,
@@ -389,7 +408,7 @@ class NotificationService {
         if (dueTime5m.isAfter(now)) {
           await _scheduleOne(
             id: idPrefix + startHour * 1000 + startMinute * 10 + 2,
-            title: "${titlePrefix}Увага!",
+            title: "$titlePrefixУвага!",
             body: "Відключення через 5 хв ($startTimeStr) до $endTimeStr",
             time: dueTime5m,
           );
@@ -425,13 +444,14 @@ class NotificationService {
           if (dueTimeOn1h.isAfter(now)) {
             await _scheduleOne(
               id: idPrefix + endHour * 1000 + endMinute * 10 + 3,
-              title: "${titlePrefix}Скоро ввімкнення",
-              body: "О $endTimeStr світло мають увімкнути${onUntilStr}",
+              title: "$titlePrefixСкоро ввімкнення",
+              body: "О $endTimeStr світло мають увімкнути$onUntilStr",
               time: dueTimeOn1h,
             );
           }
         } catch (e) {
-          print("[NotificationService] ⚠️ Помилка планування включення 1h: $e");
+          AppLogger.w("⚠️ Помилка планування включення 1h: $e",
+              tag: 'NotificationService');
         }
       }
 
@@ -441,20 +461,21 @@ class NotificationService {
           if (dueTimeOn30m.isAfter(now)) {
             await _scheduleOne(
               id: idPrefix + endHour * 1000 + endMinute * 10 + 5,
-              title: "${titlePrefix}Скоро ввімкнення",
+              title: "$titlePrefixСкоро ввімкнення",
               body:
-                  "Через 30 хвилин ($endTimeStr) світло мають увімкнути${onUntilStr}",
+                  "Через 30 хвилин ($endTimeStr) світло мають увімкнути$onUntilStr",
               time: dueTimeOn30m,
             );
           }
         } catch (e) {
-          print(
-              "[NotificationService] ⚠️ Помилка планування включення 30m: $e");
+          AppLogger.w("⚠️ Помилка планування включення 30m: $e",
+              tag: 'NotificationService');
         }
       }
     }
 
-    print("[NotificationService] Планування для $groupName завершено");
+    AppLogger.i("Планування для $groupName завершено",
+        tag: 'NotificationService');
   }
 
   int _getGroupIndex(String groupName) {
@@ -474,11 +495,13 @@ class NotificationService {
       LightStatus status = schedule.hours[hour];
 
       bool isStrict = false;
-      if (status == LightStatus.off)
+      if (status == LightStatus.off) {
         isStrict = true;
-      else if (status == LightStatus.semiOn && !isSecondHalf)
+      } else if (status == LightStatus.semiOn && !isSecondHalf) {
         isStrict = true;
-      else if (status == LightStatus.semiOff && isSecondHalf) isStrict = true;
+      } else if (status == LightStatus.semiOff && isSecondHalf) {
+        isStrict = true;
+      }
 
       bool isContinuity = isStrict || (status == LightStatus.maybe);
 
@@ -510,12 +533,13 @@ class NotificationService {
           LightStatus status = nextDaySchedule.hours[hour];
 
           bool isStrict = false;
-          if (status == LightStatus.off)
+          if (status == LightStatus.off) {
             isStrict = true;
-          else if (status == LightStatus.semiOn && !isSecondHalf)
+          } else if (status == LightStatus.semiOn && !isSecondHalf) {
             isStrict = true;
-          else if (status == LightStatus.semiOff && isSecondHalf)
+          } else if (status == LightStatus.semiOff && isSecondHalf) {
             isStrict = true;
+          }
 
           bool isContinuity = isStrict || (status == LightStatus.maybe);
 
@@ -536,29 +560,6 @@ class NotificationService {
     }
 
     return periods;
-  }
-
-  bool _isOff(LightStatus status) {
-    return status == LightStatus.off || status == LightStatus.semiOff;
-  }
-
-  bool _isOn(LightStatus status) {
-    return status == LightStatus.on || status == LightStatus.semiOn;
-  }
-
-  String _statusName(LightStatus status) {
-    switch (status) {
-      case LightStatus.on:
-        return 'ON';
-      case LightStatus.off:
-        return 'OFF';
-      case LightStatus.semiOn:
-        return 'SEMI_ON';
-      case LightStatus.semiOff:
-        return 'SEMI_OFF';
-      default:
-        return 'UNKNOWN';
-    }
   }
 
   Future<void> _scheduleOne({
@@ -590,74 +591,89 @@ class NotificationService {
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       );
-      print("[NotificationService] ✅ Заплановано: ID=$id, time=$time");
+      AppLogger.d("✅ Заплановано: ID=$id, time=$time",
+          tag: 'NotificationService');
     } catch (e) {
-      print("[NotificationService] ❌ Помилка планування ID=$id: $e");
+      AppLogger.e("Помилка планування ID=$id",
+          tag: 'NotificationService', error: e);
     }
   }
 
   Future<void> testNotifications() async {
-    print("[NotificationService] ========================================");
-    print("[NotificationService] ========== ТЕСТ СПОВІЩЕНЬ ==========");
-    print("[NotificationService] ========================================");
+    AppLogger.d("========================================",
+        tag: 'NotificationService');
+    AppLogger.d("========== ТЕСТ СПОВІЩЕНЬ ==========",
+        tag: 'NotificationService');
+    AppLogger.d("========================================",
+        tag: 'NotificationService');
 
     if (!_isInitialized) {
-      print("[NotificationService] Виклик init()...");
+      AppLogger.d("Виклик init()...", tag: 'NotificationService');
       await init();
     }
 
-    print("[NotificationService] Статус ініціалізації: $_isInitialized");
+    AppLogger.d("Статус ініціалізації: $_isInitialized",
+        tag: 'NotificationService');
 
-    print("[NotificationService] [1/4] Відправка миттєвого сповіщення...");
+    AppLogger.d("[1/4] Відправка миттєвого сповіщення...",
+        tag: 'NotificationService');
     await showImmediate("Тест", "Миттєве сповіщення працює!");
-    print("[NotificationService] [1/4] ✅ Миттєве відправлено");
+    AppLogger.d("[1/4] ✅ Миттєве відправлено", tag: 'NotificationService');
 
     if (Platform.isWindows) {
-      print("[NotificationService] Windows: тест запланованих...");
+      AppLogger.d("Windows: тест запланованих...", tag: 'NotificationService');
     }
 
     if (Platform.isAndroid || Platform.isWindows) {
-      print("[NotificationService] [2/4] Очистка старих тестових сповіщень...");
+      AppLogger.d("[2/4] Очистка старих тестових сповіщень...",
+          tag: 'NotificationService');
 
-      print("[NotificationService] [2/4] ✅ Очищено");
+      AppLogger.d("[2/4] ✅ Очищено", tag: 'NotificationService');
 
       final now = tz.TZDateTime.now(tz.local);
-      print("[NotificationService] Поточний час: $now");
+      AppLogger.d("Поточний час: $now", tag: 'NotificationService');
 
-      print("[NotificationService] [3/4] Планування: через 10 сек...");
+      AppLogger.d("[3/4] Планування: через 10 сек...",
+          tag: 'NotificationService');
       final in10sec = now.add(const Duration(seconds: 10));
       await _scheduleTest(99991, "Тест 10 сек", "Минуло 10 секунд!", in10sec);
 
-      print("[NotificationService] [3/4] Планування: через 1 мин...");
+      AppLogger.d("[3/4] Планування: через 1 мин...",
+          tag: 'NotificationService');
       final in1min = now.add(const Duration(minutes: 1));
       await _scheduleTest(99993, "Тест 1 хв", "Минула 1 хвилина!", in1min);
 
-      print("[NotificationService] [3/4] ✅ Все заплановано");
+      AppLogger.d("[3/4] ✅ Все заплановано", tag: 'NotificationService');
     }
 
-    print("[NotificationService] [4/4] Перевірка списку запланованих...");
+    AppLogger.d("[4/4] Перевірка списку запланованих...",
+        tag: 'NotificationService');
     try {
       final pending = await _notificationsPlugin.pendingNotificationRequests();
-      print(
-          "[NotificationService] [4/4] Заплановано сповіщень: ${pending.length}");
+      AppLogger.d("[4/4] Заплановано сповіщень: ${pending.length}",
+          tag: 'NotificationService');
       for (var p in pending) {
-        print(
-            "[NotificationService]   - ID: ${p.id}, Title: '${p.title}', Body: '${p.body}'");
+        AppLogger.d("  - ID: ${p.id}, Title: '${p.title}', Body: '${p.body}'",
+            tag: 'NotificationService');
       }
     } catch (e) {
-      print("[NotificationService] [4/4] ❌ Помилка отримання списку: $e");
+      AppLogger.e("[4/4] Помилка отримання списку",
+          tag: 'NotificationService', error: e);
     }
 
-    print("[NotificationService] ========================================");
-    print("[NotificationService] ========== ТЕСТ ЗАВЕРШЕНО ==========");
-    print("[NotificationService] ========================================");
+    AppLogger.d("========================================",
+        tag: 'NotificationService');
+    AppLogger.d("========== ТЕСТ ЗАВЕРШЕНО ==========",
+        tag: 'NotificationService');
+    AppLogger.d("========================================",
+        tag: 'NotificationService');
   }
 
   Future<void> _scheduleTest(
       int id, String title, String body, tz.TZDateTime time) async {
     final diffSec = time.difference(tz.TZDateTime.now(tz.local)).inSeconds;
-    print(
-        "[NotificationService]   Планування ID=$id на $time (через $diffSec сек)");
+    AppLogger.d("  Планування ID=$id на $time (через $diffSec сек)",
+        tag: 'NotificationService');
 
     try {
       await _notificationsPlugin.zonedSchedule(
@@ -682,10 +698,10 @@ class NotificationService {
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       );
-      print("[NotificationService]   ✅ ID=$id успішно заплановано");
+      AppLogger.d("  ✅ ID=$id успішно заплановано", tag: 'NotificationService');
     } catch (e, stackTrace) {
-      print("[NotificationService]   ❌ ID=$id помилка: $e");
-      print("[NotificationService]   StackTrace: $stackTrace");
+      AppLogger.e("ID=$id помилка",
+          tag: 'NotificationService', error: e, stackTrace: stackTrace);
     }
   }
 
@@ -698,7 +714,8 @@ class NotificationService {
           await _notificationsPlugin.cancel(p.id);
         }
       } catch (e) {
-        print("[NotificationService] Помилка cancelAllScheduled: $e");
+        AppLogger.e("Помилка cancelAllScheduled",
+            tag: 'NotificationService', error: e);
       }
     } else {
       await _notificationsPlugin.cancelAll();

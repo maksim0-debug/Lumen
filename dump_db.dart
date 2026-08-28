@@ -9,24 +9,24 @@ void main() async {
   final userProfile = Platform.environment['USERPROFILE'];
   final dbPath = join(userProfile!, 'Documents', 'schedule_history.db');
 
-  print("Opening DB at $dbPath");
+  stdout.writeln("Opening DB at $dbPath");
 
   try {
     final db = await databaseFactory.openDatabase(dbPath);
 
     final countResult = await db.rawQuery('SELECT COUNT(*) FROM power_events');
     final count = countResult.first.values.first as int;
-    print("Total events: $count");
+    stdout.writeln("Total events: $count");
 
     final events = await db.query('power_events', orderBy: 'timestamp ASC');
-    print("\n--- Power Events ---");
+    stdout.writeln("\n--- Power Events ---");
     for (var e in events) {
-      print(
+      stdout.writeln(
           "ID: ${e['id']} | Status: ${e['status']} | TS: ${e['timestamp']} | Manual: ${e['is_manual']} | Key: ${e['firebase_key']}");
     }
 
     await db.close();
   } catch (e) {
-    print("Error: $e");
+    stdout.writeln("Error: $e");
   }
 }

@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart';
 import 'package:intl/intl.dart';
 
+import 'app_logger.dart';
 import 'history_service.dart';
 
 class BackupService {
@@ -47,9 +48,11 @@ class BackupService {
         return finalPath;
       } else {
         // Mobile: Share the file
-        await Share.shareXFiles(
-          [XFile(tempPath)],
-          text: 'Vikl Database Backup',
+        await SharePlus.instance.share(
+          ShareParams(
+            text: 'Vikl Database Backup',
+            files: [XFile(tempPath)],
+          ),
         );
 
         // Re-open DB
@@ -130,7 +133,12 @@ class BackupService {
       await file.copy(finalPath);
       return finalPath;
     } else {
-      await Share.shareXFiles([XFile(tempPath)], text: 'Експорт історії Lumen');
+      await SharePlus.instance.share(
+        ShareParams(
+          text: 'Експорт історії Lumen',
+          files: [XFile(tempPath)],
+        ),
+      );
       return null;
     }
   }
@@ -151,7 +159,7 @@ class BackupService {
 
       return await _historyService.importDataRangeFromJson(content);
     } catch (e) {
-      print("JSON Import error: $e");
+      AppLogger.e("JSON Import error", tag: 'BackupService', error: e);
       rethrow;
     }
   }

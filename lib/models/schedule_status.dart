@@ -4,7 +4,7 @@ enum LightStatus {
   semiOn, // first - Світла немає перші 30 хв (Червоний -> Зелений)
   semiOff, // second - Світла немає другі 30 хв (Зелений -> Червоний)
   maybe, // maybe - Можливе відключення (Сірий)
-  unknown 
+  unknown
 }
 
 class DailySchedule {
@@ -20,10 +20,11 @@ class DailySchedule {
   int get totalOutageMinutes {
     int minutes = 0;
     for (var h in hours) {
-      if (h == LightStatus.off)
+      if (h == LightStatus.off) {
         minutes += 60;
-      else if (h == LightStatus.semiOn || h == LightStatus.semiOff)
+      } else if (h == LightStatus.semiOn || h == LightStatus.semiOff) {
         minutes += 30;
+      }
     }
     return minutes;
   }
@@ -42,10 +43,10 @@ class DailySchedule {
           break;
         case LightStatus.semiOn:
           buffer.write('2');
-          break; 
+          break;
         case LightStatus.semiOff:
           buffer.write('3');
-          break; 
+          break;
         case LightStatus.maybe:
           buffer.write('4');
           break;
@@ -91,7 +92,7 @@ class DailySchedule {
 class FullSchedule {
   final DailySchedule today;
   final DailySchedule tomorrow;
-  final String lastUpdatedSource; 
+  final String lastUpdatedSource;
 
   FullSchedule({
     required this.today,
@@ -109,9 +110,9 @@ class FullSchedule {
 }
 
 class ScheduleVersion {
-  final String hash; 
-  final DateTime savedAt; 
-  final int outageMinutes; 
+  final String hash;
+  final DateTime savedAt;
+  final int outageMinutes;
 
   ScheduleVersion({
     required this.hash,
@@ -122,16 +123,18 @@ class ScheduleVersion {
   DailySchedule toSchedule() => DailySchedule.fromEncodedString(hash);
 
   String get timeString {
-    final timeStr = "${savedAt.hour.toString().padLeft(2, '0')}:${savedAt.minute.toString().padLeft(2, '0')}";
-    final dateStr = "${savedAt.day.toString().padLeft(2, '0')}.${savedAt.month.toString().padLeft(2, '0')}";
+    final timeStr =
+        "${savedAt.hour.toString().padLeft(2, '0')}:${savedAt.minute.toString().padLeft(2, '0')}";
+    final dateStr =
+        "${savedAt.day.toString().padLeft(2, '0')}.${savedAt.month.toString().padLeft(2, '0')}";
     return "$dateStr $timeStr";
   }
 
   String get outageString {
     final hours = outageMinutes ~/ 60;
     final mins = outageMinutes % 60;
-    if (mins == 0) return "${hours}г";
-    return "${hours}г ${mins}хв";
+    if (mins == 0) return "$hoursг";
+    return "$hoursг $minsхв";
   }
 
   Map<String, dynamic> toJson() => {

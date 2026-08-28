@@ -1,6 +1,7 @@
 import '../models/analytics_models.dart';
 import '../models/power_event.dart';
 import '../models/schedule_status.dart';
+import 'app_logger.dart';
 import 'power_monitor_service.dart';
 import 'history_service.dart';
 import 'parser_service.dart';
@@ -83,9 +84,7 @@ class AnalyticsService {
       }
 
       if (isOff) {
-        if (currentStart == null) {
-          currentStart = dayStart.add(Duration(hours: h));
-        }
+        currentStart ??= dayStart.add(Duration(hours: h));
       } else {
         if (currentStart != null) {
           // Close the interval
@@ -263,7 +262,7 @@ class AnalyticsService {
             // Gap found -> This is an Online interval between valid outages!
             // Push previous outage
             offlineIntervals
-                .add(_IntervalData(currentOutageStart, currentOutageEnd!));
+                .add(_IntervalData(currentOutageStart, currentOutageEnd));
 
             // Push online interval
             onlineIntervals.add(_IntervalData(currentOutageEnd, outage.start));
@@ -509,8 +508,10 @@ class AnalyticsService {
       // Clamp to 24 hours (1440 minutes) to prevent crazy values
       int minutes = (totalSeconds / 60).round();
       if (minutes > 1440) {
-        print(
-            '[AnalyticalService] WARNING: Day $date has $minutes minutes outage! Clamping to 1440.');
+        AppLogger.w(
+          'Day $date has $minutes minutes outage! Clamping to 1440.',
+          tag: 'AnalyticsService',
+        );
         minutes = 1440;
       }
 
@@ -547,8 +548,10 @@ class AnalyticsService {
       final sum = entry.value.reduce((a, b) => a + b);
       final avg = sum / entry.value.length;
       result[entry.key] = avg;
-      print(
-          '[WorstDays] Weekday ${entry.key}: count=${entry.value.length}, sum=$sum, avg=$avg, values=${entry.value}');
+      AppLogger.d(
+        'Weekday ${entry.key}: count=${entry.value.length}, sum=$sum, avg=$avg, values=${entry.value}',
+        tag: 'WorstDays',
+      );
     }
 
     return result;
@@ -833,7 +836,7 @@ class AnalyticsService {
   Future<GroupComparisonResult> getGroupComparison(
       {required int startDayOffset, required int endDayOffset}) async {
     final now = DateTime.now();
-    final allGroups = ParserService.allGroups;
+    const allGroups = ParserService.allGroups;
     final Map<String, int> totalOff = {};
     final Map<String, int> daysCount = {};
 

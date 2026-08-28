@@ -44,8 +44,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final unlockedTotal =
-        _states.values.where((s) => s.unlocked).length;
+    final unlockedTotal = _states.values.where((s) => s.unlocked).length;
     final total = AchievementCatalog.all.length;
 
     return Scaffold(
@@ -62,13 +61,13 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: isDark
-                      ? Colors.orange.withOpacity(0.15)
-                      : Colors.deepPurple.withOpacity(0.1),
+                      ? Colors.orange.withValues(alpha: 0.15)
+                      : Colors.deepPurple.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: isDark
-                        ? Colors.orange.withOpacity(0.3)
-                        : Colors.deepPurple.withOpacity(0.3),
+                        ? Colors.orange.withValues(alpha: 0.3)
+                        : Colors.deepPurple.withValues(alpha: 0.3),
                   ),
                 ),
                 child: Text(
@@ -85,8 +84,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
         ],
       ),
       body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Colors.orange))
+          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
           : ListView(
               physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.only(bottom: 40),
@@ -117,14 +115,14 @@ class _AchievementsScreenState extends State<AchievementsScreen>
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isDark
-              ? Colors.orange.withOpacity(0.2)
-              : Colors.deepPurple.withOpacity(0.15),
+              ? Colors.orange.withValues(alpha: 0.2)
+              : Colors.deepPurple.withValues(alpha: 0.15),
         ),
         boxShadow: [
           BoxShadow(
             color: isDark
-                ? Colors.orange.withOpacity(0.05)
-                : Colors.deepPurple.withOpacity(0.08),
+                ? Colors.orange.withValues(alpha: 0.05)
+                : Colors.deepPurple.withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, 4),
           ),
@@ -152,8 +150,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
               value: ratio,
               minHeight: 10,
               backgroundColor: isDark
-                  ? Colors.white.withOpacity(0.1)
-                  : Colors.black.withOpacity(0.08),
+                  ? Colors.white.withValues(alpha: 0.1)
+                  : Colors.black.withValues(alpha: 0.08),
               valueColor: AlwaysStoppedAnimation(
                 isDark ? Colors.orange : Colors.deepPurple,
               ),
@@ -192,9 +190,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
 
   Widget _buildCategorySection(AchievementCategory cat, bool isDark) {
     final achs = AchievementCatalog.byCategory(cat);
-    final unlockedInCat = achs
-        .where((a) => _states[a.id]?.unlocked == true)
-        .length;
+    final unlockedInCat =
+        achs.where((a) => _states[a.id]?.unlocked == true).length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -217,8 +214,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: isDark
-                      ? Colors.white.withOpacity(0.06)
-                      : Colors.black.withOpacity(0.05),
+                      ? Colors.white.withValues(alpha: 0.06)
+                      : Colors.black.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
@@ -261,23 +258,21 @@ class _AchievementsScreenState extends State<AchievementsScreen>
         borderRadius: BorderRadius.circular(16),
         color: unlocked
             ? (isDark
-                ? ach.color.withOpacity(0.12)
-                : ach.color.withOpacity(0.08))
-            : (isDark
-                ? Colors.white.withOpacity(0.04)
-                : Colors.white),
+                ? ach.color.withValues(alpha: 0.12)
+                : ach.color.withValues(alpha: 0.08))
+            : (isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white),
         border: Border.all(
           color: unlocked
-              ? ach.color.withOpacity(0.4)
+              ? ach.color.withValues(alpha: 0.4)
               : (isDark
-                  ? Colors.white.withOpacity(0.06)
-                  : Colors.black.withOpacity(0.06)),
+                  ? Colors.white.withValues(alpha: 0.06)
+                  : Colors.black.withValues(alpha: 0.06)),
           width: unlocked ? 1.5 : 1.0,
         ),
         boxShadow: unlocked
             ? [
                 BoxShadow(
-                  color: ach.color.withOpacity(0.15),
+                  color: ach.color.withValues(alpha: 0.15),
                   blurRadius: 12,
                   offset: const Offset(0, 2),
                 ),
@@ -334,10 +329,10 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                             value: progress,
                             minHeight: 4,
                             backgroundColor: isDark
-                                ? Colors.white.withOpacity(0.08)
-                                : Colors.black.withOpacity(0.06),
-                            valueColor:
-                                AlwaysStoppedAnimation(ach.color.withOpacity(0.6)),
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.black.withValues(alpha: 0.06),
+                            valueColor: AlwaysStoppedAnimation(
+                                ach.color.withValues(alpha: 0.6)),
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -363,8 +358,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                     Icons.lock_outline,
                     size: 18,
                     color: isDark
-                        ? Colors.white.withOpacity(0.15)
-                        : Colors.black.withOpacity(0.12),
+                        ? Colors.white.withValues(alpha: 0.15)
+                        : Colors.black.withValues(alpha: 0.12),
                   ),
               ],
             ),
@@ -383,7 +378,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
         shape: BoxShape.circle,
         gradient: unlocked
             ? LinearGradient(
-                colors: [ach.color, ach.color.withOpacity(0.7)],
+                colors: [ach.color, ach.color.withValues(alpha: 0.7)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               )
@@ -391,12 +386,12 @@ class _AchievementsScreenState extends State<AchievementsScreen>
         color: unlocked
             ? null
             : (isDark
-                ? Colors.white.withOpacity(0.06)
-                : Colors.black.withOpacity(0.05)),
+                ? Colors.white.withValues(alpha: 0.06)
+                : Colors.black.withValues(alpha: 0.05)),
         boxShadow: unlocked
             ? [
                 BoxShadow(
-                  color: ach.color.withOpacity(0.3),
+                  color: ach.color.withValues(alpha: 0.3),
                   blurRadius: 10,
                   offset: const Offset(0, 2),
                 ),
@@ -449,7 +444,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                 shape: BoxShape.circle,
                 gradient: unlocked
                     ? LinearGradient(
-                        colors: [ach.color, ach.color.withOpacity(0.6)],
+                        colors: [ach.color, ach.color.withValues(alpha: 0.6)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       )
@@ -460,7 +455,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                 boxShadow: unlocked
                     ? [
                         BoxShadow(
-                          color: ach.color.withOpacity(0.4),
+                          color: ach.color.withValues(alpha: 0.4),
                           blurRadius: 24,
                         ),
                       ]
@@ -487,10 +482,9 @@ class _AchievementsScreenState extends State<AchievementsScreen>
             const SizedBox(height: 8),
             // Категорія
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
-                color: ach.color.withOpacity(0.15),
+                color: ach.color.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
@@ -523,7 +517,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: isDark
-                      ? Colors.white.withOpacity(0.05)
+                      ? Colors.white.withValues(alpha: 0.05)
                       : Colors.grey[100],
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -556,8 +550,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                   value: state!.progress,
                   minHeight: 8,
                   backgroundColor: isDark
-                      ? Colors.white.withOpacity(0.08)
-                      : Colors.black.withOpacity(0.06),
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.black.withValues(alpha: 0.06),
                   valueColor: AlwaysStoppedAnimation(ach.color),
                 ),
               ),
@@ -677,7 +671,6 @@ class _AchievementToastState extends State<_AchievementToast>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final ach = widget.achievement;
 
     return Positioned(
@@ -704,15 +697,15 @@ class _AchievementToastState extends State<_AchievementToast>
                 borderRadius: BorderRadius.circular(16),
                 gradient: LinearGradient(
                   colors: [
-                    ach.color.withOpacity(0.9),
-                    ach.color.withOpacity(0.7),
+                    ach.color.withValues(alpha: 0.9),
+                    ach.color.withValues(alpha: 0.7),
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: ach.color.withOpacity(0.4),
+                    color: ach.color.withValues(alpha: 0.4),
                     blurRadius: 20,
                     offset: const Offset(0, 4),
                   ),
@@ -725,7 +718,7 @@ class _AchievementToastState extends State<_AchievementToast>
                     height: 48,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(0.2),
+                      color: Colors.white.withValues(alpha: 0.2),
                     ),
                     child: Icon(ach.icon, color: Colors.white, size: 28),
                   ),
@@ -756,7 +749,7 @@ class _AchievementToastState extends State<_AchievementToast>
                           ach.description,
                           style: TextStyle(
                             fontSize: 11,
-                            color: Colors.white.withOpacity(0.8),
+                            color: Colors.white.withValues(alpha: 0.8),
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -773,5 +766,3 @@ class _AchievementToastState extends State<_AchievementToast>
     );
   }
 }
-
-

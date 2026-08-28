@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
-// import 'package:path/path.dart' as p; // Not strictly needed if we construct path manually or just use string concat for simplicity in this specific case, but safer to use join.
 import 'package:path/path.dart' show join;
+import 'app_logger.dart';
 
 class PreferencesHelper {
   /// Otrimaty ekzemplyar SharedPreferences bezpechno.
@@ -12,22 +12,31 @@ class PreferencesHelper {
     try {
       return await SharedPreferences.getInstance();
     } catch (e) {
-      print("[PreferencesHelper] ❌ Error loading SharedPreferences: $e");
+      AppLogger.w(
+        "Error loading SharedPreferences: $e",
+        tag: 'PreferencesHelper',
+      );
       if (e.toString().contains("FormatException") ||
           e.toString().contains("Unexpected character")) {
-        print(
-            "[PreferencesHelper] ⚠️ Detected corruption. Attempting to repair...");
+        AppLogger.w(
+          "Detected corruption. Attempting to repair...",
+          tag: 'PreferencesHelper',
+        );
         await _deletePreferencesFile();
 
         // Try again after deletion
         try {
           return await SharedPreferences.getInstance();
         } catch (e2) {
-          print(
-              "[PreferencesHelper] ❌ Failed to recover SharedPreferences: $e2");
+          AppLogger.e(
+            "Failed to recover SharedPreferences",
+            tag: 'PreferencesHelper',
+            error: e2,
+            persistToHistory: false,
+          );
           // Rethrow or return a mock/empty if feasible?
           // For now, rethrow because app might depend on it.
-          throw e2;
+          rethrow;
         }
       }
       rethrow;
@@ -43,28 +52,29 @@ class PreferencesHelper {
 
         if (await prefsFile.exists()) {
           await prefsFile.delete();
-          print(
-              "[PreferencesHelper] 🧹 Deleted corrupted preferences file at: ${prefsFile.path}");
+          AppLogger.i(
+            "Deleted corrupted preferences file at: ${prefsFile.path}",
+            tag: 'PreferencesHelper',
+          );
         } else {
-          print(
-              "[PreferencesHelper] ⚠️ Preferences file not found at: ${prefsFile.path}");
-          // It might be in a different location depending on the library version/OS
-          // But for shared_preferences_windows it is usually in ApplicationSupport.
+          AppLogger.w(
+            "Preferences file not found at: ${prefsFile.path}",
+            tag: 'PreferencesHelper',
+          );
         }
       } else if (Platform.isAndroid) {
-        // Android corruption is harder to fix programmatically without clear data,
-        // usually requires `pm clear` or reinstall, but `shared_preferences` flutter plugin
-        // might handle some things. Direct file access to xml prefs on Android requires root usually
-        // or execution within app sandbox.
-        // However, Flutter's SharedPreferences implementation on Android uses standard Android SharedPreferences which are XML.
-        // If the XML is corrupt, the Android framework throws.
-        // We can try to clear it via the plugin if it allows, but if getInstance fails, we can't call .clear().
-        // So for Android, we just log.
-        print(
-            "[PreferencesHelper] ⚠️ Cannot auto-delete prefs file on Android safely without access.");
+        AppLogger.w(
+          "Cannot auto-delete prefs file on Android safely without access.",
+          tag: 'PreferencesHelper',
+        );
       }
     } catch (e) {
-      print("[PreferencesHelper] ❌ Failed to delete corrupted file: $e");
+      AppLogger.e(
+        "Failed to delete corrupted file",
+        tag: 'PreferencesHelper',
+        error: e,
+        persistToHistory: false,
+      );
     }
   }
 }

@@ -45,7 +45,7 @@ void main() {
   group('PowerMonitorService Manual Override Tests', () {
     test('Should NOT overwrite manually edited event during sync', () async {
       final service = MockPowerMonitorService();
-      final key = 'event_1';
+      const key = 'event_1';
       final cloudTime = DateTime(2025, 2, 11, 10, 0);
       final userTime = DateTime(2025, 2, 11, 10, 30);
 
@@ -75,7 +75,7 @@ void main() {
 
     test('Should update non-manual events normally', () async {
       final service = MockPowerMonitorService();
-      final key = 'event_2';
+      const key = 'event_2';
       final time1 = DateTime(2025, 2, 11, 10, 0);
       final time2 = DateTime(2025, 2, 11, 11, 0);
 

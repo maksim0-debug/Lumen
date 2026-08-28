@@ -12,6 +12,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:home_widget/home_widget.dart';
 
+import 'services/app_logger.dart';
 import 'services/background_service.dart';
 import 'services/notification_service.dart';
 import 'services/parser_service.dart';
@@ -31,7 +32,7 @@ import 'ui/widgets/theme_animated_cell.dart';
 @pragma('vm:entry-point')
 Future<void> backgroundCallback(Uri? uri) async {
   if (uri?.host == 'refresh') {
-    print("[Background] Refresh triggered from widget");
+    AppLogger.d("Refresh triggered from widget", tag: 'Background');
     // Трекер для ачівки "Завжди перед очима"
     try {
       AchievementService().trackWidgetOpen();
@@ -41,18 +42,12 @@ Future<void> backgroundCallback(Uri? uri) async {
       final parser = ParserService();
       final allSchedules = await parser.fetchAllSchedules();
       if (allSchedules.isNotEmpty) {
-        // History saved in ParserService
-        // try {
-        //   await HistoryService().saveHistory(allSchedules);
-        // } catch (e) {
-        //   print("[Background] Error saving history: $e");
-        // }
         await widgetService.updateWidget(allSchedules);
       } else {
         await widgetService.clearAllLoadingStates();
       }
     } catch (e) {
-      print("[Background] Error refreshing widget: $e");
+      AppLogger.e("Error refreshing widget", tag: 'Background', error: e);
 
       await widgetService.clearAllLoadingStates();
     }
@@ -60,13 +55,13 @@ Future<void> backgroundCallback(Uri? uri) async {
 }
 
 void main() async {
-  print("[MAIN] ========================================");
-  print("[MAIN] ВЕРСИЯ ПРИЛОЖЕНИЯ: 2.3.4 (Fix Saving & UI)");
-  print("[MAIN] ========================================");
+  AppLogger.i("========================================", tag: 'MAIN');
+  AppLogger.i("ВЕРСИЯ ПРИЛОЖЕНИЯ: 2.3.4 (Fix Saving & UI)", tag: 'MAIN');
+  AppLogger.i("========================================", tag: 'MAIN');
   WidgetsFlutterBinding.ensureInitialized();
 
   if (Platform.isAndroid) {
-    HomeWidget.registerBackgroundCallback(backgroundCallback);
+    HomeWidget.registerInteractivityCallback(backgroundCallback);
   }
 
   if (Platform.isWindows) {
@@ -84,7 +79,7 @@ void main() async {
         await windowManager.setPreventClose(true);
       });
     } catch (e) {
-      print("[MAIN] Помилка Window Manager: $e");
+      AppLogger.e("Помилка Window Manager", tag: 'MAIN', error: e);
     }
 
     try {
@@ -103,7 +98,7 @@ void main() async {
         appPath: Platform.resolvedExecutable,
       );
     } catch (e) {
-      print("[MAIN] Помилка автозапуску: $e");
+      AppLogger.e("Помилка автозапуску", tag: 'MAIN', error: e);
     }
   }
 
@@ -111,7 +106,7 @@ void main() async {
     final notificationService = NotificationService();
     await notificationService.init();
   } catch (e) {
-    print("[MAIN] Помилка сповіщень: $e");
+    AppLogger.e("Помилка сповіщень", tag: 'MAIN', error: e);
   }
 
   if (Platform.isAndroid) {
@@ -120,7 +115,7 @@ void main() async {
       await bgManager.init();
       bgManager.registerPeriodicTask();
     } catch (e) {
-      print("[MAIN] Помилка Background: $e");
+      AppLogger.e("Помилка Background", tag: 'MAIN', error: e);
     }
   }
 
@@ -177,7 +172,7 @@ class _MyAppState extends State<MyApp> {
         });
       }
     } catch (e) {
-      print("Error loading theme: $e");
+      AppLogger.e("Error loading theme", tag: 'Main', error: e);
     }
   }
 
@@ -202,7 +197,7 @@ class _MyAppState extends State<MyApp> {
         });
       }
     } catch (e) {
-      print("Error reloading scale: $e");
+      AppLogger.e("Error reloading scale", tag: 'Main', error: e);
     }
   }
 
@@ -398,7 +393,8 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       prefs = await PreferencesHelper.getSafeInstance();
     } catch (e) {
-      print("Error loading SharedPreferences in _initPowerMonitor: $e");
+      AppLogger.w("Error loading SharedPreferences in _initPowerMonitor: $e",
+          tag: 'Main');
     }
 
     _powerMonitorEnabled = prefs?.getBool('power_monitor_enabled') ?? false;
@@ -432,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen>
       _realOutageIntervals =
           await _powerMonitor.getOutageIntervalsForDate(date);
     } catch (e) {
-      print('[Main] Error loading real outage data: $e');
+      AppLogger.e('Error loading real outage data', tag: 'Main', error: e);
       _realOutageIntervals = [];
     }
   }
@@ -442,13 +438,13 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       prefs = await SharedPreferences.getInstance();
     } catch (e) {
-      print("Error loading SharedPreferences: $e");
+      AppLogger.e("Error loading SharedPreferences", tag: 'Main', error: e);
       // If SharedPreferences is corrupt, we might want to let the app continue with defaults
       // or show an error. For now, just logging.
     }
 
     if (prefs != null) {
-      final p = prefs!;
+      final p = prefs;
       setState(() {
         _currentGroup = p.getString('selected_group') ?? "GPV2.1";
         _notificationGroups = p.getStringList('notification_groups') ?? [];
@@ -474,7 +470,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
     } catch (e) {
-      print("Error saving group preference: $e");
+      AppLogger.e("Error saving group preference", tag: 'Main', error: e);
     }
 
     setState(() => _currentGroup = newGroup);
@@ -498,7 +494,7 @@ class _HomeScreenState extends State<HomeScreen>
           await prefs.setString(keyDate, todayStr);
         }
       } catch (e) {
-        print("Error syncing hash: $e");
+        AppLogger.e("Error syncing hash", tag: 'Main', error: e);
       }
     } else if (_viewMode == ScheduleViewMode.history ||
         _viewMode == ScheduleViewMode.yesterday) {
@@ -533,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen>
         await _refreshVersionsForCurrentMode();
       }
     } catch (e) {
-      print("Error loading cached data: $e");
+      AppLogger.e("Error loading cached data", tag: 'Main', error: e);
     }
   }
 
@@ -573,7 +569,9 @@ class _HomeScreenState extends State<HomeScreen>
     if (menuItem.key == 'show_window') {
       windowManager.show();
       windowManager.focus();
-    } else if (menuItem.key == 'exit_app') windowManager.destroy();
+    } else if (menuItem.key == 'exit_app') {
+      windowManager.destroy();
+    }
   }
 
   @override
@@ -698,8 +696,7 @@ class _HomeScreenState extends State<HomeScreen>
         final notifyChange = prefs.getBool('notify_schedule_change') ?? true;
         final now = DateTime.now();
 
-        final groupsToCheck =
-            Set<String>.from([..._notificationGroups, _currentGroup]);
+        final groupsToCheck = <String>{..._notificationGroups, _currentGroup};
 
         for (final group in groupsToCheck) {
           if (!allData.containsKey(group)) continue;
@@ -723,9 +720,11 @@ class _HomeScreenState extends State<HomeScreen>
 
               for (int i = 0; i < oldHash.length && i < 24; i++) {
                 final char = oldHash[i];
-                if (char == '1')
+                if (char == '1') {
                   oldMinutes += 60;
-                else if (char == '2' || char == '3') oldMinutes += 30;
+                } else if (char == '2' || char == '3') {
+                  oldMinutes += 30;
+                }
               }
 
               final diff = newMinutes - oldMinutes;
@@ -748,7 +747,7 @@ class _HomeScreenState extends State<HomeScreen>
           await prefs.setString(keyDate, todayStr);
         }
       } catch (e) {
-        print("Error syncing hash: $e");
+        AppLogger.e("Error syncing hash", tag: 'Main', error: e);
       }
 
       _updateNotificationsOnly();
@@ -760,7 +759,7 @@ class _HomeScreenState extends State<HomeScreen>
         currentGroup: _currentGroup,
       );
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _isLoading = false;
           if (_isCachedData) {
@@ -771,7 +770,8 @@ class _HomeScreenState extends State<HomeScreen>
             _statusColor = Colors.red;
           }
         });
-      print("Error loading data: $e");
+      }
+      AppLogger.e("Error loading data", tag: 'Main', error: e);
     }
   }
 
@@ -923,11 +923,11 @@ class _HomeScreenState extends State<HomeScreen>
       final m = realMinutes % 60;
       String timeStr;
       if (h > 0 && m > 0) {
-        timeStr = '${h}г ${m}хв';
+        timeStr = '$hг $mхв';
       } else if (h > 0) {
-        timeStr = '${h}г';
+        timeStr = '$hг';
       } else {
-        timeStr = '${m}хв';
+        timeStr = '$mхв';
       }
       return "Час без світла: $timeStr ($percent%)";
     }
@@ -991,7 +991,9 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       prefs = await PreferencesHelper.getSafeInstance();
     } catch (e) {
-      print("Error loading SharedPreferences in _updateNotificationsOnly: $e");
+      AppLogger.w(
+          "Error loading SharedPreferences in _updateNotificationsOnly: $e",
+          tag: 'Main');
       return;
     }
 
@@ -1090,9 +1092,9 @@ class _HomeScreenState extends State<HomeScreen>
   String _formatDuration(int totalMinutes) {
     int hours = totalMinutes ~/ 60;
     int minutes = totalMinutes % 60;
-    if (hours > 0 && minutes > 0) return "${hours}г ${minutes}хв";
-    if (hours > 0) return "${hours}г";
-    return "${minutes}хв";
+    if (hours > 0 && minutes > 0) return "$hoursг $minutesхв";
+    if (hours > 0) return "$hoursг";
+    return "$minutesхв";
   }
 
   /// Побудувати DailySchedule з реальних інтервалів відключень (для grid).
@@ -1199,7 +1201,7 @@ class _HomeScreenState extends State<HomeScreen>
     final redColor = Colors.red.shade400;
     final greenColor = Colors.green.shade400;
     final greyColor = Colors.grey.shade500;
-    final noDataColor = Colors.grey.shade800.withOpacity(0.3);
+    final noDataColor = Colors.grey.shade800.withValues(alpha: 0.3);
 
     List<List<HourSegment>> allSegments = [];
 
@@ -1214,27 +1216,30 @@ class _HomeScreenState extends State<HomeScreen>
           final fStatus = forecast.hours[h];
           switch (fStatus) {
             case LightStatus.on:
-              allSegments.add([HourSegment(0, 1, greenColor.withOpacity(0.3))]);
+              allSegments
+                  .add([HourSegment(0, 1, greenColor.withValues(alpha: 0.3))]);
               break;
             case LightStatus.off:
-              allSegments.add([HourSegment(0, 1, redColor.withOpacity(0.3))]);
+              allSegments
+                  .add([HourSegment(0, 1, redColor.withValues(alpha: 0.3))]);
               break;
             case LightStatus.semiOn:
               // Red -> Green
               allSegments.add([
-                HourSegment(0, 0.5, redColor.withOpacity(0.3)),
-                HourSegment(0.5, 1, greenColor.withOpacity(0.3))
+                HourSegment(0, 0.5, redColor.withValues(alpha: 0.3)),
+                HourSegment(0.5, 1, greenColor.withValues(alpha: 0.3))
               ]);
               break;
             case LightStatus.semiOff:
               // Green -> Red
               allSegments.add([
-                HourSegment(0, 0.5, greenColor.withOpacity(0.3)),
-                HourSegment(0.5, 1, redColor.withOpacity(0.3))
+                HourSegment(0, 0.5, greenColor.withValues(alpha: 0.3)),
+                HourSegment(0.5, 1, redColor.withValues(alpha: 0.3))
               ]);
               break;
             case LightStatus.maybe:
-              allSegments.add([HourSegment(0, 1, greyColor.withOpacity(0.4))]);
+              allSegments
+                  .add([HourSegment(0, 1, greyColor.withValues(alpha: 0.4))]);
               break;
             default:
               allSegments.add([HourSegment(0, 1, noDataColor)]);
@@ -1259,8 +1264,10 @@ class _HomeScreenState extends State<HomeScreen>
       List<_OffRange> offRanges = [];
       for (final interval in intervals) {
         final intervalEnd = interval.end ?? now;
-        if (interval.start.isAfter(hourEnd) || intervalEnd.isBefore(hourStart))
+        if (interval.start.isAfter(hourEnd) ||
+            intervalEnd.isBefore(hourStart)) {
           continue;
+        }
 
         final effectiveStart =
             interval.start.isAfter(hourStart) ? interval.start : hourStart;
@@ -1307,7 +1314,7 @@ class _HomeScreenState extends State<HomeScreen>
             final double s = start < factEndFraction ? factEndFraction : start;
             final double e = end; // end is always 0.5 or 1.0
             if (e > s) {
-              segments.add(HourSegment(s, e, c.withOpacity(0.3)));
+              segments.add(HourSegment(s, e, c.withValues(alpha: 0.3)));
             }
           }
 
@@ -1476,17 +1483,17 @@ class _HomeScreenState extends State<HomeScreen>
     final IconData icon;
 
     if (isOnline) {
-      bgColor = Colors.green.withOpacity(0.15);
+      bgColor = Colors.green.withValues(alpha: 0.15);
       textColor = Colors.green;
       label = "ON";
       icon = Icons.power;
     } else if (isOffline) {
-      bgColor = Colors.red.withOpacity(0.15);
+      bgColor = Colors.red.withValues(alpha: 0.15);
       textColor = Colors.red;
       label = "OFF";
       icon = Icons.power_off;
     } else {
-      bgColor = Colors.grey.withOpacity(0.15);
+      bgColor = Colors.grey.withValues(alpha: 0.15);
       textColor = Colors.grey;
       label = "...";
       icon = Icons.pending;
@@ -1498,7 +1505,7 @@ class _HomeScreenState extends State<HomeScreen>
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: textColor.withOpacity(0.3)),
+        border: Border.all(color: textColor.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1522,10 +1529,8 @@ class _HomeScreenState extends State<HomeScreen>
     final icon = DarknessThemeService.stageIcon(stage);
     final name = DarknessThemeService.stageName(stage);
     final subtitle = DarknessThemeService.stageSubtitle(stage);
-    final desc = DarknessThemeService.stageDescription(stage);
     final accent = DarknessThemeService.stageAccentColor(stage);
     final secondary = DarknessThemeService.stageSecondaryColor(stage);
-    final bg = DarknessThemeService.stageBackgroundColor(stage);
     final flutterIcon = DarknessThemeService.stageFlutterIcon(stage);
 
     // Stalker mode: более жёсткий и тревожный стиль
@@ -1543,16 +1548,18 @@ class _HomeScreenState extends State<HomeScreen>
             ? Colors.black
             : isCyberpunk
                 ? const Color(0xFF08081A)
-                : accent.withOpacity(0.08),
+                : accent.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(isStalker ? 2 : 10),
         border: Border.all(
-          color: isStalker ? accent.withOpacity(0.6) : accent.withOpacity(0.3),
+          color: isStalker
+              ? accent.withValues(alpha: 0.6)
+              : accent.withValues(alpha: 0.3),
           width: isStalker ? 1.5 : 1,
         ),
         boxShadow: isCyberpunk || isStalker
             ? [
                 BoxShadow(
-                  color: accent.withOpacity(isStalker ? 0.15 : 0.2),
+                  color: accent.withValues(alpha: isStalker ? 0.15 : 0.2),
                   blurRadius: isStalker ? 8 : 12,
                   spreadRadius: 0,
                 ),
@@ -1587,7 +1594,7 @@ class _HomeScreenState extends State<HomeScreen>
                   isStalker ? subtitle.toUpperCase() : subtitle,
                   style: TextStyle(
                     fontSize: 9,
-                    color: accent.withOpacity(0.6),
+                    color: accent.withValues(alpha: 0.6),
                     fontFamily: isStalker ? 'monospace' : null,
                     letterSpacing: isStalker ? 1.5 : 0,
                   ),
@@ -1620,7 +1627,7 @@ class _HomeScreenState extends State<HomeScreen>
           ChoiceChip(
             label: const Text('📋 Прогноз'),
             selected: _dataSourceMode == DataSourceMode.predicted,
-            selectedColor: Colors.orange.withOpacity(0.3),
+            selectedColor: Colors.orange.withValues(alpha: 0.3),
             onSelected: (selected) {
               if (selected) {
                 setState(() => _dataSourceMode = DataSourceMode.predicted);
@@ -1631,7 +1638,7 @@ class _HomeScreenState extends State<HomeScreen>
           ChoiceChip(
             label: const Text('⚡ Реальне'),
             selected: _dataSourceMode == DataSourceMode.real,
-            selectedColor: Colors.amber.withOpacity(0.3),
+            selectedColor: Colors.amber.withValues(alpha: 0.3),
             onSelected: (selected) {
               if (selected) {
                 setState(() => _dataSourceMode = DataSourceMode.real);
@@ -1661,8 +1668,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildCountdownWidget(FullSchedule? fullSchedule) {
-    if (fullSchedule == null || _viewMode != ScheduleViewMode.today)
+    if (fullSchedule == null || _viewMode != ScheduleViewMode.today) {
       return const SizedBox.shrink();
+    }
 
     final now = DateTime.now();
     final currentMinuteOfDay = now.hour * 60 + now.minute;
@@ -1703,8 +1711,8 @@ class _HomeScreenState extends State<HomeScreen>
     final minutes = minutesToNextChange % 60;
 
     String timeStr = "";
-    if (hours > 0) timeStr += "${hours}г ";
-    timeStr += "${minutes}хв";
+    if (hours > 0) timeStr += "$hoursг ";
+    timeStr += "$minutesхв";
 
     String msg = "";
     if (currentStatus == SlotStatus.on) {
@@ -1731,13 +1739,13 @@ class _HomeScreenState extends State<HomeScreen>
 
     switch (stage) {
       case DarknessStage.solarpunk:
-        containerColor = const Color(0xFF1B5E20).withOpacity(0.85);
+        containerColor = const Color(0xFF1B5E20).withValues(alpha: 0.85);
         textColor = const Color(0xFFE8F5E9);
         iconColor = const Color(0xFF66BB6A);
         borderRadiusVal = 16;
         shadows = [
           BoxShadow(
-            color: const Color(0xFF66BB6A).withOpacity(0.2),
+            color: const Color(0xFF66BB6A).withValues(alpha: 0.2),
             blurRadius: 8,
             spreadRadius: 1,
           ),
@@ -1749,12 +1757,12 @@ class _HomeScreenState extends State<HomeScreen>
         iconColor = const Color(0xFFFF9800);
         borderRadiusVal = 4;
         border = Border.all(
-          color: const Color(0xFFFF9800).withOpacity(0.35),
+          color: const Color(0xFFFF9800).withValues(alpha: 0.35),
           width: 1.5,
         );
         shadows = [
           BoxShadow(
-            color: Colors.black.withOpacity(0.6),
+            color: Colors.black.withValues(alpha: 0.6),
             blurRadius: 4,
             offset: const Offset(2, 2),
           ),
@@ -1770,12 +1778,12 @@ class _HomeScreenState extends State<HomeScreen>
         iconColor = const Color(0xFFFF0080);
         borderRadiusVal = 8;
         border = Border.all(
-          color: const Color(0xFF00FFFF).withOpacity(0.4),
+          color: const Color(0xFF00FFFF).withValues(alpha: 0.4),
           width: 1,
         );
         shadows = [
           BoxShadow(
-            color: const Color(0xFF00FFFF).withOpacity(0.2),
+            color: const Color(0xFF00FFFF).withValues(alpha: 0.2),
             blurRadius: 12,
             spreadRadius: 1,
           ),
@@ -1791,15 +1799,15 @@ class _HomeScreenState extends State<HomeScreen>
         iconColor = const Color(0xFF39FF14);
         borderRadiusVal = 2;
         border = Border.all(
-          color: const Color(0xFF39FF14).withOpacity(0.3),
+          color: const Color(0xFF39FF14).withValues(alpha: 0.3),
           width: 1,
         );
-        extraStyle = TextStyle(
+        extraStyle = const TextStyle(
           fontWeight: FontWeight.bold,
           fontFamily: 'monospace',
           letterSpacing: 2,
           shadows: [
-            Shadow(blurRadius: 4, color: const Color(0xFF39FF14)),
+            Shadow(blurRadius: 4, color: Color(0xFF39FF14)),
           ],
         );
         break;
@@ -2033,7 +2041,7 @@ class _HomeScreenState extends State<HomeScreen>
                   tooltip: "Тест сповіщень",
                   onPressed: () async {
                     await _notifier.testNotifications();
-                    if (mounted) {
+                    if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                             content: Text('Тестові сповіщення відправлено')),
@@ -2074,7 +2082,6 @@ class _HomeScreenState extends State<HomeScreen>
                         builder: (context) => SettingsPage(
                             onThemeChanged: widget.onThemeChanged,
                             onScaleChanged: widget.onScaleChanged)),
-
                   );
                   _loadPreferencesAndData();
                   _initPowerMonitor();
@@ -2212,7 +2219,7 @@ class _HomeScreenState extends State<HomeScreen>
                                 color: _statusColor,
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold)),
-                        if (_historyVersions.length > 0)
+                        if (_historyVersions.isNotEmpty)
                           const Icon(Icons.arrow_drop_down,
                               color: Colors.grey, size: 16),
                       ],
@@ -2248,8 +2255,9 @@ class _HomeScreenState extends State<HomeScreen>
                               _achievementService.trackRefresh();
                               if (_viewMode == ScheduleViewMode.history ||
                                   _viewMode == ScheduleViewMode.yesterday) {
-                                if (_historyDate != null)
+                                if (_historyDate != null) {
                                   await _loadHistoryData(_historyDate!);
+                                }
                               } else {
                                 await _loadData(silent: true);
                               }
@@ -2323,7 +2331,8 @@ class _HomeScreenState extends State<HomeScreen>
                                                         vertical: 2),
                                                     decoration: BoxDecoration(
                                                         color: interval.color
-                                                            .withOpacity(0.2),
+                                                            .withValues(
+                                                                alpha: 0.2),
                                                         borderRadius:
                                                             BorderRadius
                                                                 .circular(4)),
@@ -2354,7 +2363,6 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ],
               ),
-
             ],
           ),
         ),
@@ -2496,12 +2504,13 @@ class _HomeScreenState extends State<HomeScreen>
         nowLineColor = const Color(0xFFFF1744);
         break;
       default:
-        nowLineColor = Colors.white.withOpacity(0.9);
+        nowLineColor = Colors.white.withValues(alpha: 0.9);
     }
 
     // Helper to determine if a color represents "ON" state
     bool isOn(Color c) {
-      return c.green > 100 && c.red < 150;
+      return (c.g * 255.0).round().clamp(0, 255) > 100 &&
+          (c.r * 255.0).round().clamp(0, 255) < 150;
     }
 
     // Build timeline segments
@@ -2537,7 +2546,6 @@ class _HomeScreenState extends State<HomeScreen>
           }
         } else {
           // Past hour or Future hour
-          final isFutureHour = hour > now.hour;
           // If hour is today and > now.hour => Future
           // If hour is tomorrow => Future (but we only show 24h usually, assumes index 0..23 is today)
           // Wait, _buildRealModeCell is used in today view?
@@ -2578,22 +2586,22 @@ class _HomeScreenState extends State<HomeScreen>
               case DarknessStage.solarpunk:
                 // Blueprint / Potential: Semi-transparent grid
                 segDecoration = BoxDecoration(
-                    color: themeColor.withOpacity(0.35),
+                    color: themeColor.withValues(alpha: 0.35),
                     border: Border.all(
-                        color: themeColor.withOpacity(0.5), width: 0.5));
+                        color: themeColor.withValues(alpha: 0.5), width: 0.5));
                 overlay = CustomPaint(
                     painter: _GridOverlayPainter(
-                        color: themeColor.withOpacity(0.15)));
+                        color: themeColor.withValues(alpha: 0.15)));
                 break;
               case DarknessStage.dieselpunk:
                 // Draft / Paper: Diagonal hatching (dense)
                 segDecoration = BoxDecoration(
-                  color: themeColor.withOpacity(0.5),
+                  color: themeColor.withValues(alpha: 0.5),
                 );
                 overlay = ClipRect(
                   child: CustomPaint(
                     painter: _DiagonalStripesPainter(
-                      color: Colors.black.withOpacity(0.2), // Darker etch
+                      color: Colors.black.withValues(alpha: 0.2), // Darker etch
                       spacing: 4, // Denser
                     ),
                   ),
@@ -2602,7 +2610,7 @@ class _HomeScreenState extends State<HomeScreen>
               case DarknessStage.cyberpunk:
                 // Simulation / Hologram: Vertical scanlines
                 segDecoration = BoxDecoration(
-                  color: themeColor.withOpacity(0.2),
+                  color: themeColor.withValues(alpha: 0.2),
                   border: Border.all(color: themeColor, width: 1),
                 );
                 overlay = Column(
@@ -2611,7 +2619,7 @@ class _HomeScreenState extends State<HomeScreen>
                       (index) => Expanded(
                               child: Container(
                             margin: const EdgeInsets.only(bottom: 1),
-                            color: themeColor.withOpacity(0.1),
+                            color: themeColor.withValues(alpha: 0.1),
                           ))),
                 );
                 break;
@@ -2619,7 +2627,7 @@ class _HomeScreenState extends State<HomeScreen>
                 // Fog / Anomaly: Static noise + Desaturated
                 segDecoration = BoxDecoration(
                   color: Color.lerp(themeColor, Colors.grey, 0.7)!
-                      .withOpacity(0.4),
+                      .withValues(alpha: 0.4),
                 );
                 overlay = CustomPaint(
                   painter: _NoisePainter(
@@ -2628,7 +2636,7 @@ class _HomeScreenState extends State<HomeScreen>
                 break;
               default:
                 segDecoration = BoxDecoration(
-                  color: themeColor.withOpacity(0.4),
+                  color: themeColor.withValues(alpha: 0.4),
                 );
                 overlay = const Icon(Icons.help_outline,
                     size: 12, color: Colors.white24);
@@ -2660,7 +2668,7 @@ class _HomeScreenState extends State<HomeScreen>
                       color: (isSegmentOn
                               ? const Color(0xFF00FFFF)
                               : const Color(0xFFFF0080))
-                          .withOpacity(0.5),
+                          .withValues(alpha: 0.5),
                       width: 1,
                     ),
                   ),
@@ -2683,25 +2691,27 @@ class _HomeScreenState extends State<HomeScreen>
           if (!part.isFuture) {
             List<Widget> extras = [segmentWidget];
             // Dieselpunk: diagonal stripes for OFF FACT
-            if (stage == DarknessStage.dieselpunk && !isSegmentOn)
+            if (stage == DarknessStage.dieselpunk && !isSegmentOn) {
               extras.add(Positioned.fill(
                 child: ClipRect(
                   child: CustomPaint(
                     painter: _DiagonalStripesPainter(
-                      color: const Color(0xFFFF9800).withOpacity(0.08),
+                      color: const Color(0xFFFF9800).withValues(alpha: 0.08),
                     ),
                   ),
                 ),
               ));
+            }
             // Stalker: scanlines for OFF FACT
-            if (stage == DarknessStage.stalker && !isSegmentOn)
+            if (stage == DarknessStage.stalker && !isSegmentOn) {
               extras.add(Positioned.fill(
                 child: CustomPaint(
                   painter: _ScanlinePainter(
-                    color: const Color(0xFFFF1744).withOpacity(0.06),
+                    color: const Color(0xFFFF1744).withValues(alpha: 0.06),
                   ),
                 ),
               ));
+            }
 
             children.add(Positioned(
               left: leftOffset(),
@@ -2745,7 +2755,7 @@ class _HomeScreenState extends State<HomeScreen>
                   boxShadow: stage == DarknessStage.cyberpunk
                       ? [
                           BoxShadow(
-                            color: nowLineColor.withOpacity(0.6),
+                            color: nowLineColor.withValues(alpha: 0.6),
                             blurRadius: 6,
                             spreadRadius: 1,
                           ),
@@ -2761,14 +2771,14 @@ class _HomeScreenState extends State<HomeScreen>
               "$hour:00",
               style: textStyle.copyWith(
                 shadows: [
-                  Shadow(
+                  const Shadow(
                       blurRadius: 4,
                       color: Colors.black87,
-                      offset: const Offset(0, 0)),
-                  Shadow(
+                      offset: Offset(0, 0)),
+                  const Shadow(
                       blurRadius: 8,
                       color: Colors.black54,
-                      offset: const Offset(0, 0)),
+                      offset: Offset(0, 0)),
                   if (stage == DarknessStage.stalker)
                     const Shadow(
                         blurRadius: 4,
@@ -2787,7 +2797,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: Icon(
                 Icons.radio_button_checked,
                 size: 8,
-                color: const Color(0xFF39FF14).withOpacity(0.2),
+                color: const Color(0xFF39FF14).withValues(alpha: 0.2),
               ),
             ),
         ],
@@ -2805,7 +2815,7 @@ class _HomeScreenState extends State<HomeScreen>
           color: const Color(0xFF2E2E2E), // Base background
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.2),
+              color: Colors.black.withValues(alpha: 0.2),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),
@@ -2817,7 +2827,7 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(radius),
           color: const Color(0xFF1A1A1A),
           border: Border.all(
-            color: const Color(0xFFFF9800).withOpacity(0.2),
+            color: const Color(0xFFFF9800).withValues(alpha: 0.2),
             width: 1,
           ),
         );
@@ -2832,7 +2842,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF00FFFF).withOpacity(0.08),
+              color: const Color(0xFF00FFFF).withValues(alpha: 0.08),
               blurRadius: 6,
             ),
           ],
@@ -2843,7 +2853,7 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(radius),
           color: const Color(0xFF050505),
           border: Border.all(
-            color: const Color(0xFF39FF14).withOpacity(0.2),
+            color: const Color(0xFF39FF14).withValues(alpha: 0.2),
             width: 1,
           ),
         );
@@ -2889,23 +2899,23 @@ class _HomeScreenState extends State<HomeScreen>
     switch (stage) {
       case DarknessStage.solarpunk:
         icon = isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined;
-        iconColor = Colors.white.withOpacity(0.25);
+        iconColor = Colors.white.withValues(alpha: 0.25);
         break;
       case DarknessStage.dieselpunk:
         icon = isOn
             ? Icons.settings_outlined
             : Icons.local_fire_department_outlined;
-        iconColor = const Color(0xFFFF9800).withOpacity(0.2);
+        iconColor = const Color(0xFFFF9800).withValues(alpha: 0.2);
         break;
       case DarknessStage.cyberpunk:
         icon = isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined;
-        iconColor = const Color(0xFFFF0080).withOpacity(0.25);
+        iconColor = const Color(0xFFFF0080).withValues(alpha: 0.25);
         break;
       case DarknessStage.stalker:
         icon = isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded;
         iconColor = isOn
-            ? const Color(0xFF39FF14).withOpacity(0.15)
-            : const Color(0xFFFF1744).withOpacity(0.25);
+            ? const Color(0xFF39FF14).withValues(alpha: 0.15)
+            : const Color(0xFFFF1744).withValues(alpha: 0.25);
         break;
       default:
         icon = null;
@@ -2926,7 +2936,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           boxShadow: [
             BoxShadow(
-              color: color.withOpacity(0.25),
+              color: color.withValues(alpha: 0.25),
               blurRadius: 6,
               offset: const Offset(0, 2),
             ),
@@ -2938,12 +2948,12 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(radius),
           color: color,
           border: Border.all(
-            color: const Color(0xFFFF9800).withOpacity(0.3),
+            color: const Color(0xFFFF9800).withValues(alpha: 0.3),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withValues(alpha: 0.5),
               blurRadius: 4,
               offset: const Offset(2, 2),
             ),
@@ -2957,12 +2967,12 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(radius),
           color: color,
           border: Border.all(
-            color: neonColor.withOpacity(0.5),
+            color: neonColor.withValues(alpha: 0.5),
             width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: neonColor.withOpacity(0.2),
+              color: neonColor.withValues(alpha: 0.2),
               blurRadius: 10,
               spreadRadius: 1,
             ),
@@ -2971,8 +2981,8 @@ class _HomeScreenState extends State<HomeScreen>
         break;
       case DarknessStage.stalker:
         final borderColor = isOn
-            ? const Color(0xFF39FF14).withOpacity(0.4)
-            : const Color(0xFFFF1744).withOpacity(0.5);
+            ? const Color(0xFF39FF14).withValues(alpha: 0.4)
+            : const Color(0xFFFF1744).withValues(alpha: 0.5);
         decoration = BoxDecoration(
           borderRadius: BorderRadius.circular(radius),
           color: isOn ? const Color(0xFF0A1F0A) : const Color(0xFF1A0000),
@@ -3014,7 +3024,7 @@ class _HomeScreenState extends State<HomeScreen>
             Positioned.fill(
               child: CustomPaint(
                 painter: _ScanlinePainter(
-                  color: const Color(0xFFFF1744).withOpacity(0.06),
+                  color: const Color(0xFFFF1744).withValues(alpha: 0.06),
                 ),
               ),
             ),
@@ -3026,7 +3036,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: Icon(
                 Icons.warning_amber_rounded,
                 size: 10,
-                color: const Color(0xFFFF1744).withOpacity(0.4),
+                color: const Color(0xFFFF1744).withValues(alpha: 0.4),
               ),
             ),
           // Cyberpunk: subtle inner glow line at top
@@ -3042,7 +3052,7 @@ class _HomeScreenState extends State<HomeScreen>
                     colors: [
                       Colors.transparent,
                       (isOn ? const Color(0xFF00FFFF) : const Color(0xFFFF0080))
-                          .withOpacity(0.5),
+                          .withValues(alpha: 0.5),
                       Colors.transparent,
                     ],
                   ),
@@ -3056,7 +3066,7 @@ class _HomeScreenState extends State<HomeScreen>
                 borderRadius: BorderRadius.circular(radius),
                 child: CustomPaint(
                   painter: _DiagonalStripesPainter(
-                    color: const Color(0xFFFF9800).withOpacity(0.08),
+                    color: const Color(0xFFFF9800).withValues(alpha: 0.08),
                   ),
                 ),
               ),
@@ -3088,26 +3098,26 @@ class _HomeScreenState extends State<HomeScreen>
         case DarknessStage.solarpunk:
           return (
             isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined,
-            Colors.white.withOpacity(0.25)
+            Colors.white.withValues(alpha: 0.25)
           );
         case DarknessStage.dieselpunk:
           return (
             isOn
                 ? Icons.settings_outlined
                 : Icons.local_fire_department_outlined,
-            const Color(0xFFFF9800).withOpacity(0.2)
+            const Color(0xFFFF9800).withValues(alpha: 0.2)
           );
         case DarknessStage.cyberpunk:
           return (
             isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined,
-            const Color(0xFFFF0080).withOpacity(0.25)
+            const Color(0xFFFF0080).withValues(alpha: 0.25)
           );
         case DarknessStage.stalker:
           return (
             isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded,
             isOn
-                ? const Color(0xFF39FF14).withOpacity(0.15)
-                : const Color(0xFFFF1744).withOpacity(0.25)
+                ? const Color(0xFF39FF14).withValues(alpha: 0.15)
+                : const Color(0xFFFF1744).withValues(alpha: 0.25)
           );
         default:
           return (null, Colors.white24);
@@ -3149,7 +3159,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           boxShadow: [
             BoxShadow(
-              color: onColor.withOpacity(0.2),
+              color: onColor.withValues(alpha: 0.2),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),
@@ -3165,12 +3175,12 @@ class _HomeScreenState extends State<HomeScreen>
             stops: const [0.5, 0.5],
           ),
           border: Border.all(
-            color: const Color(0xFFFF9800).withOpacity(0.3),
+            color: const Color(0xFFFF9800).withValues(alpha: 0.3),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.4),
+              color: Colors.black.withValues(alpha: 0.4),
               blurRadius: 3,
               offset: const Offset(1, 1),
             ),
@@ -3186,12 +3196,12 @@ class _HomeScreenState extends State<HomeScreen>
             stops: const [0.5, 0.5],
           ),
           border: Border.all(
-            color: const Color(0xFFBB86FC).withOpacity(0.4),
+            color: const Color(0xFFBB86FC).withValues(alpha: 0.4),
             width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFFBB86FC).withOpacity(0.15),
+              color: const Color(0xFFBB86FC).withValues(alpha: 0.15),
               blurRadius: 8,
               spreadRadius: 1,
             ),
@@ -3200,8 +3210,8 @@ class _HomeScreenState extends State<HomeScreen>
         break;
       case DarknessStage.stalker:
         displayText = isSemiOn ? '$text ?' : text;
-        final cOn = const Color(0xFF0A1F0A);
-        final cOff = const Color(0xFF1A0000);
+        const cOn = Color(0xFF0A1F0A);
+        const cOff = Color(0xFF1A0000);
         decoration = BoxDecoration(
           borderRadius: BorderRadius.circular(radius),
           gradient: LinearGradient(
@@ -3209,7 +3219,7 @@ class _HomeScreenState extends State<HomeScreen>
             stops: const [0.5, 0.5],
           ),
           border: Border.all(
-            color: const Color(0xFFFFD600).withOpacity(0.4),
+            color: const Color(0xFFFFD600).withValues(alpha: 0.4),
             width: 1,
           ),
         );
@@ -3244,7 +3254,7 @@ class _HomeScreenState extends State<HomeScreen>
             Positioned.fill(
               child: CustomPaint(
                 painter: _ScanlinePainter(
-                  color: const Color(0xFFFFD600).withOpacity(0.04),
+                  color: const Color(0xFFFFD600).withValues(alpha: 0.04),
                 ),
               ),
             ),
@@ -3274,7 +3284,8 @@ class _HomeScreenState extends State<HomeScreen>
                           bottomRight: Radius.circular(radius)),
                       child: CustomPaint(
                         painter: _DiagonalStripesPainter(
-                          color: const Color(0xFFFF9800).withOpacity(0.08),
+                          color:
+                              const Color(0xFFFF9800).withValues(alpha: 0.08),
                         ),
                       ),
                     ),
@@ -3296,7 +3307,8 @@ class _HomeScreenState extends State<HomeScreen>
                           bottomLeft: Radius.circular(radius)),
                       child: CustomPaint(
                         painter: _DiagonalStripesPainter(
-                          color: const Color(0xFFFF9800).withOpacity(0.08),
+                          color:
+                              const Color(0xFFFF9800).withValues(alpha: 0.08),
                         ),
                       ),
                     ),
@@ -3337,7 +3349,7 @@ class _HomeScreenState extends State<HomeScreen>
           color: const Color(0xFFBDBDBD),
           boxShadow: [
             BoxShadow(
-              color: Colors.grey.withOpacity(0.2),
+              color: Colors.grey.withValues(alpha: 0.2),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),
@@ -3349,7 +3361,7 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(radius),
           color: const Color(0xFF3E2723),
           border: Border.all(
-            color: const Color(0xFF795548).withOpacity(0.4),
+            color: const Color(0xFF795548).withValues(alpha: 0.4),
             width: 1,
           ),
         );
@@ -3369,7 +3381,7 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(radius),
           color: const Color(0xFF0A0A0A),
           border: Border.all(
-            color: const Color(0xFF39FF14).withOpacity(0.15),
+            color: const Color(0xFF39FF14).withValues(alpha: 0.15),
             width: 1,
           ),
         );
@@ -3392,7 +3404,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: Icon(
                 Icons.help_outline,
                 size: 12,
-                color: const Color(0xFF39FF14).withOpacity(0.15),
+                color: const Color(0xFF39FF14).withValues(alpha: 0.15),
               ),
             ),
           Center(
@@ -3400,7 +3412,7 @@ class _HomeScreenState extends State<HomeScreen>
               '$text ?',
               style: stage == DarknessStage.stalker
                   ? textStyle.copyWith(
-                      color: const Color(0xFF39FF14).withOpacity(0.5),
+                      color: const Color(0xFF39FF14).withValues(alpha: 0.5),
                     )
                   : (stage == DarknessStage.cyberpunk
                       ? textStyle.copyWith(
@@ -3434,7 +3446,7 @@ class _HomeScreenState extends State<HomeScreen>
         dotSize = 10;
         shadows = [
           BoxShadow(
-            color: const Color(0xFF2E7D32).withOpacity(0.3),
+            color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
             blurRadius: 8,
             spreadRadius: 1,
           ),
@@ -3448,7 +3460,7 @@ class _HomeScreenState extends State<HomeScreen>
         dotIcon = Icons.circle;
         shadows = [
           BoxShadow(
-            color: const Color(0xFFFF9800).withOpacity(0.3),
+            color: const Color(0xFFFF9800).withValues(alpha: 0.3),
             blurRadius: 6,
           ),
         ];
@@ -3462,12 +3474,12 @@ class _HomeScreenState extends State<HomeScreen>
         dotSize = 6;
         shadows = [
           BoxShadow(
-            color: const Color(0xFF00FFFF).withOpacity(0.4),
+            color: const Color(0xFF00FFFF).withValues(alpha: 0.4),
             blurRadius: 12,
             spreadRadius: 2,
           ),
           BoxShadow(
-            color: const Color(0xFFFF0080).withOpacity(0.15),
+            color: const Color(0xFFFF0080).withValues(alpha: 0.15),
             blurRadius: 8,
           ),
         ];
@@ -3481,7 +3493,7 @@ class _HomeScreenState extends State<HomeScreen>
         dotSize = 10;
         shadows = [
           BoxShadow(
-            color: const Color(0xFFFF1744).withOpacity(0.3),
+            color: const Color(0xFFFF1744).withValues(alpha: 0.3),
             blurRadius: 6,
           ),
         ];
@@ -3745,7 +3757,7 @@ class _NoisePainter extends CustomPainter {
     final paint = Paint()..strokeWidth = 1;
 
     for (int i = 0; i < 100; i++) {
-      paint.color = Colors.white.withOpacity(random.nextDouble() * 0.1);
+      paint.color = Colors.white.withValues(alpha: random.nextDouble() * 0.1);
       final x = random.nextDouble() * size.width;
       final y = random.nextDouble() * size.height;
       canvas.drawPoints(PointMode.points, [Offset(x, y)], paint);

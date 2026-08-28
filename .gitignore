@@ -78,3 +78,5 @@ nuget.exe
 
 # Tests
 test/
+changes.txt
+Changelog.md

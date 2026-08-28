@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'app_logger.dart';
 import 'power_monitor_service.dart';
 import 'preferences_helper.dart';
 
@@ -83,7 +83,7 @@ class DarknessThemeService {
 
       _animationsEnabled = prefs.getBool(_prefKeyAnimations) ?? true;
     } catch (e) {
-      print('[DarknessTheme] Error loading prefs: $e');
+      AppLogger.e('Error loading prefs', tag: 'DarknessTheme', error: e);
     }
 
     if (_mode == 'auto') {
@@ -126,7 +126,8 @@ class DarknessThemeService {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setBool(_prefKeyAnimations, enabled);
     } catch (e) {
-      print('[DarknessTheme] Error saving animations pref: $e');
+      AppLogger.e('Error saving animations pref',
+          tag: 'DarknessTheme', error: e);
     }
     // Сповістити про зміну, щоб UI оновився
     onStageChanged?.call(currentStage);
@@ -141,7 +142,7 @@ class DarknessThemeService {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setString(_prefKeyMode, newMode);
     } catch (e) {
-      print('[DarknessTheme] Error saving pref: $e');
+      AppLogger.e('Error saving pref', tag: 'DarknessTheme', error: e);
     }
 
     if (_mode == 'auto') {
@@ -175,7 +176,7 @@ class DarknessThemeService {
       final hours = totalMinutes / 60.0;
       _setStage(_classifyStage(hours));
     } catch (e) {
-      print('[DarknessTheme] Error computing stage: $e');
+      AppLogger.e('Error computing stage', tag: 'DarknessTheme', error: e);
     }
   }
 
@@ -395,7 +396,7 @@ class DarknessThemeService {
     cardTheme: CardThemeData(
       color: Colors.white,
       elevation: 2,
-      shadowColor: const Color(0xFF2E7D32).withOpacity(0.12),
+      shadowColor: const Color(0xFF2E7D32).withValues(alpha: 0.12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
     chipTheme: ChipThemeData(
@@ -484,14 +485,14 @@ class DarknessThemeService {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(
-            color: const Color(0xFFFF9800).withOpacity(0.25), width: 1),
+            color: const Color(0xFFFF9800).withValues(alpha: 0.25), width: 1),
       ),
     ),
     chipTheme: ChipThemeData(
       backgroundColor: const Color(0xFF333333),
       selectedColor: const Color(0xFFFF9800),
       labelStyle: const TextStyle(color: Color(0xFFBDBDBD)),
-      side: BorderSide(color: const Color(0xFF795548).withOpacity(0.5)),
+      side: BorderSide(color: const Color(0xFF795548).withValues(alpha: 0.5)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
     ),
     switchTheme: SwitchThemeData(
@@ -501,7 +502,7 @@ class DarknessThemeService {
               : const Color(0xFF757575)),
       trackColor: WidgetStateProperty.resolveWith((states) =>
           states.contains(WidgetState.selected)
-              ? const Color(0xFFFF9800).withOpacity(0.4)
+              ? const Color(0xFFFF9800).withValues(alpha: 0.4)
               : const Color(0xFF424242)),
     ),
     floatingActionButtonTheme: const FloatingActionButtonThemeData(
@@ -540,7 +541,7 @@ class DarknessThemeService {
       backgroundColor: const Color(0xFF2C2C2C),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: const Color(0xFFFF9800).withOpacity(0.3)),
+        side: BorderSide(color: const Color(0xFFFF9800).withValues(alpha: 0.3)),
       ),
     ),
     useMaterial3: true,
@@ -578,7 +579,7 @@ class DarknessThemeService {
     cardTheme: CardThemeData(
       color: const Color(0xFF0E1025),
       elevation: 8,
-      shadowColor: const Color(0xFFFF0080).withOpacity(0.25),
+      shadowColor: const Color(0xFFFF0080).withValues(alpha: 0.25),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: Color(0xFF2A1040), width: 1),
@@ -598,7 +599,7 @@ class DarknessThemeService {
               : const Color(0xFF00FFFF)),
       trackColor: WidgetStateProperty.resolveWith((states) =>
           states.contains(WidgetState.selected)
-              ? const Color(0xFFFF0080).withOpacity(0.35)
+              ? const Color(0xFFFF0080).withValues(alpha: 0.35)
               : const Color(0xFF0E0E1A)),
     ),
     floatingActionButtonTheme: const FloatingActionButtonThemeData(
@@ -687,14 +688,14 @@ class DarknessThemeService {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(2),
         side: BorderSide(
-          color: const Color(0xFF39FF14).withOpacity(0.4),
+          color: const Color(0xFF39FF14).withValues(alpha: 0.4),
           width: 1,
         ),
       ),
     ),
     chipTheme: ChipThemeData(
       backgroundColor: Colors.black,
-      selectedColor: const Color(0xFF39FF14).withOpacity(0.2),
+      selectedColor: const Color(0xFF39FF14).withValues(alpha: 0.2),
       labelStyle: const TextStyle(
         color: Color(0xFF39FF14),
         fontFamily: 'monospace',
@@ -711,12 +712,12 @@ class DarknessThemeService {
               : const Color(0xFFFF1744)),
       trackColor: WidgetStateProperty.resolveWith((states) =>
           states.contains(WidgetState.selected)
-              ? const Color(0xFF39FF14).withOpacity(0.2)
+              ? const Color(0xFF39FF14).withValues(alpha: 0.2)
               : const Color(0xFF1A0000)),
       trackOutlineColor: WidgetStateProperty.resolveWith((states) =>
           states.contains(WidgetState.selected)
-              ? const Color(0xFF39FF14).withOpacity(0.5)
-              : const Color(0xFFFF1744).withOpacity(0.3)),
+              ? const Color(0xFF39FF14).withValues(alpha: 0.5)
+              : const Color(0xFFFF1744).withValues(alpha: 0.3)),
     ),
     floatingActionButtonTheme: const FloatingActionButtonThemeData(
       backgroundColor: Color(0xFF39FF14),
@@ -799,9 +800,9 @@ class DarknessThemeService {
         side: const BorderSide(color: Color(0xFFFF1744), width: 1),
       ),
     ),
-    bottomSheetTheme: BottomSheetThemeData(
+    bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: Colors.black,
-      shape: const RoundedRectangleBorder(
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(2)),
         side: BorderSide(color: Color(0xFF39FF14), width: 1),
       ),
@@ -831,7 +832,7 @@ class DarknessThemeService {
       labelStyle:
           const TextStyle(color: Color(0xFF39FF14), fontFamily: 'monospace'),
       hintStyle: TextStyle(
-          color: const Color(0xFF39FF14).withOpacity(0.3),
+          color: const Color(0xFF39FF14).withValues(alpha: 0.3),
           fontFamily: 'monospace'),
       enabledBorder: const OutlineInputBorder(
         borderSide: BorderSide(color: Color(0xFF39FF14), width: 1),

@@ -115,9 +115,9 @@ class PowerOutageInterval {
     final d = duration;
     final hours = d.inHours;
     final minutes = d.inMinutes % 60;
-    if (hours > 0 && minutes > 0) return '${hours}г ${minutes}хв';
-    if (hours > 0) return '${hours}г';
-    return '${minutes}хв';
+    if (hours > 0 && minutes > 0) return '$hoursг $minutesхв';
+    if (hours > 0) return '$hoursг';
+    return '$minutesхв';
   }
 
   /// Чи перетинається цей інтервал з вказаною датою.

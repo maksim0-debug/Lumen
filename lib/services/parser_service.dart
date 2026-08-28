@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:intl/intl.dart';
 import '../models/schedule_status.dart';
+import 'app_logger.dart';
 import 'history_service.dart';
 
 class ParserService {
@@ -41,10 +42,11 @@ class ParserService {
       return httpResult;
     }
 
-    print("[Parser] 🌍 HTTP не спрацював, запускаємо Headless WebView...");
+    AppLogger.i("🌍 HTTP не спрацював, запускаємо Headless WebView...",
+        tag: 'Parser');
     await HistoryService().logAction("Парсер: HTTP не вдалося, запуск WebView");
 
-    print("[Parser] 🚀 Запуск Headless браузера (Hybrid)...");
+    AppLogger.i("🚀 Запуск Headless браузера (Hybrid)...", tag: 'Parser');
     final completer = Completer<Map<String, FullSchedule>>();
 
     if (_headlessWebView != null) {
@@ -78,17 +80,22 @@ class ParserService {
       onReceivedHttpError: (controller, request, errorResponse) async {
         final reqUrl = request.url.toString();
         final statusCode = errorResponse.statusCode;
-        if (reqUrl == _url || reqUrl == _homeUrl || reqUrl == _homeUrl.replaceAll(RegExp(r'/$'), '')) {
-          print("[Parser] ⛔ WebView HTTP помилка: $statusCode для $reqUrl");
+        if (reqUrl == _url ||
+            reqUrl == _homeUrl ||
+            reqUrl == _homeUrl.replaceAll(RegExp(r'/$'), '')) {
+          AppLogger.w("⛔ WebView HTTP помилка: $statusCode для $reqUrl",
+              tag: 'Parser');
           await HistoryService().logAction(
               "Парсер WebView помилка: HTTP $statusCode ($reqUrl)",
               level: "ERROR");
         }
       },
-      onLoadError: (controller, url, code, message) async {
-        print("[Parser] ⛔ WebView помилка мережі: $code — $message");
+      onReceivedError: (controller, request, error) async {
+        AppLogger.e(
+            "⛔ WebView помилка мережі: ${error.type} — ${error.description}",
+            tag: 'Parser');
         await HistoryService().logAction(
-            "Парсер WebView помилка мережі: $code — $message",
+            "Парсер WebView помилка мережі: ${error.type} — ${error.description}",
             level: "ERROR");
       },
       onLoadStop: (controller, url) async {
@@ -96,13 +103,14 @@ class ParserService {
 
         // Крок 1: Головна сторінка — чекаємо cookies і переходимо до графіків
         if (!currentUrl.contains('/ua/shutdowns')) {
-          print(
-              "[Parser] \u{1F3E0} Головна сторінка завантажена ($currentUrl). Чекаємо 3 сек для cookies...");
+          AppLogger.d(
+              "🏠 Головна сторінка завантажена ($currentUrl). Чекаємо 3 сек для cookies...",
+              tag: 'Parser');
           await HistoryService().logAction(
               "Парсер WebView: Головна сторінка завантажена, очікування cookies");
           await Future.delayed(const Duration(seconds: 3));
 
-          print("[Parser] ➡️ Переходимо на сторінку графіків...");
+          AppLogger.d("➡️ Переходимо на сторінку графіків...", tag: 'Parser');
           await controller.loadUrl(
             urlRequest: URLRequest(
               url: WebUri(_url),
@@ -113,8 +121,8 @@ class ParserService {
         }
 
         // Крок 2: Сторінка графіків завантажена — шукаємо дані
-        print(
-            "[Parser] \u{1F4CA} Сторінка графіків завантажена. Шукаємо дані...");
+        AppLogger.d("📊 Сторінка графіків завантажена. Шукаємо дані...",
+            tag: 'Parser');
 
         for (int i = 0; i < 20; i++) {
           try {
@@ -127,7 +135,7 @@ class ParserService {
             if (jsResult != null &&
                 jsResult != "null" &&
                 jsResult.toString().length > 100) {
-              print("[Parser] ✅ Дані знайдено через JS змінну!");
+              AppLogger.i("✅ Дані знайдено через JS змінну!", tag: 'Parser');
               jsonString = jsResult.toString();
             } else {
               final html = await controller.evaluateJavascript(
@@ -135,7 +143,8 @@ class ParserService {
               if (html != null) {
                 jsonString = _extractJsonFromHtml(html.toString());
                 if (jsonString.isNotEmpty) {
-                  print("[Parser] ✅ Дані знайдено через пошук у HTML!");
+                  AppLogger.i("✅ Дані знайдено через пошук у HTML!",
+                      tag: 'Parser');
                 }
               }
             }
@@ -148,7 +157,8 @@ class ParserService {
               _headlessWebView = null;
               return;
             } else {
-              print("[Parser] Спроба ${i + 1}/20: Дані поки не знайдено...");
+              AppLogger.d("Спроба ${i + 1}/20: Дані поки не знайдено...",
+                  tag: 'Parser');
               if ((i + 1) % 5 == 0) {
                 await HistoryService()
                     .logAction("Парсер: спроба ${i + 1}/20 - дані не знайдено");
@@ -163,11 +173,13 @@ class ParserService {
                   if (snippet.length > 500) {
                     snippet = snippet.substring(0, 500);
                   }
-                  print("[Parser-DEBUG] HTML Snippet:\n$snippet...");
+                  AppLogger.d("HTML Snippet:\n$snippet...",
+                      tag: 'Parser-DEBUG');
 
                   if (snippet.contains('cloudflare') ||
                       snippet.contains('Just a moment')) {
-                    print("[Parser-DEBUG] ⚠️ Виявлено захист Cloudflare!");
+                    AppLogger.w("⚠️ Виявлено захист Cloudflare!",
+                        tag: 'Parser-DEBUG');
                     await HistoryService().logAction(
                         "WebView потрапив на екран захисту Cloudflare",
                         level: "WARN");
@@ -176,7 +188,7 @@ class ParserService {
               }
             }
           } catch (e) {
-            print("[Parser] Помилка ітерації: $e");
+            AppLogger.e("Помилка ітерації", tag: 'Parser', error: e);
             await HistoryService()
                 .logAction("Парсер помилка ітерації: $e", level: "ERROR");
           }
@@ -184,7 +196,7 @@ class ParserService {
         }
 
         if (!completer.isCompleted) {
-          print("[Parser] ❌ Тайм-аут");
+          AppLogger.w("❌ Тайм-аут", tag: 'Parser');
           await HistoryService()
               .logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
           completer.complete({});
@@ -197,9 +209,8 @@ class ParserService {
     // Страховочний тайм-аут: 60 секунд на весь процес WebView
     Future.delayed(const Duration(seconds: 60), () {
       if (!completer.isCompleted) {
-        print("[Parser] ❌ Глобальний тайм-аут WebView (60 сек)");
-        HistoryService().logAction(
-            "Парсер: Глобальний тайм-аут WebView 60 сек",
+        AppLogger.e("❌ Глобальний тайм-аут WebView (60 сек)", tag: 'Parser');
+        HistoryService().logAction("Парсер: Глобальний тайм-аут WebView 60 сек",
             level: "ERROR");
         completer.complete({});
         _headlessWebView?.dispose();
@@ -210,7 +221,7 @@ class ParserService {
     try {
       await _headlessWebView?.run();
     } catch (e) {
-      print("[Parser] ❌ Помилка запуску WebView: $e");
+      AppLogger.e("❌ Помилка запуску WebView", tag: 'Parser', error: e);
       await HistoryService()
           .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
       if (!completer.isCompleted) completer.complete({});
@@ -224,8 +235,8 @@ class ParserService {
   void _setHttpHeaders(HttpClientRequest request, {String? referer}) {
     request.headers.set('Accept',
         'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7');
-    request.headers.set(
-        'Accept-Language', 'uk,ru-RU;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6');
+    request.headers
+        .set('Accept-Language', 'uk,ru-RU;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6');
     request.headers.set('Accept-Encoding', 'gzip, deflate');
     request.headers.set('Cache-Control', 'max-age=0');
     request.headers.set('Connection', 'keep-alive');
@@ -247,7 +258,7 @@ class ParserService {
 
   Future<Map<String, FullSchedule>?> _fetchWithHttpClient() async {
     try {
-      print("[Parser] 🌍 Пробуємо HTTP запит (двокроковий)...");
+      AppLogger.i("🌍 Пробуємо HTTP запит (двокроковий)...", tag: 'Parser');
       await HistoryService().logAction("Парсер: Старт HTTP запиту (v2)");
       final client = HttpClient();
       client.userAgent =
@@ -255,7 +266,7 @@ class ParserService {
       client.connectionTimeout = const Duration(seconds: 15);
 
       // === Крок 1: Відвідуємо головну сторінку для отримання cookies ===
-      print("[Parser] HTTP Крок 1: Запит головної сторінки...");
+      AppLogger.d("HTTP Крок 1: Запит головної сторінки...", tag: 'Parser');
       final homeRequest = await client.getUrl(Uri.parse(_homeUrl));
       _setHttpHeaders(homeRequest);
       final homeResponse = await homeRequest.close();
@@ -265,18 +276,20 @@ class ParserService {
       await homeResponse.drain<void>();
 
       if (kDebugMode) {
-        print(
-            "[Parser-DEBUG] HTTP Головна: статус=$homeStatus, cookies=${cookies.length}");
+        AppLogger.d(
+            "HTTP Головна: статус=$homeStatus, cookies=${cookies.length}",
+            tag: 'Parser-DEBUG');
         for (var c in cookies) {
-          print(
-              "[Parser-DEBUG]   Cookie: ${c.name}=${c.value.length > 20 ? '${c.value.substring(0, 20)}...' : c.value}");
+          AppLogger.d(
+              "  Cookie: ${c.name}=${c.value.length > 20 ? '${c.value.substring(0, 20)}...' : c.value}",
+              tag: 'Parser-DEBUG');
         }
       }
       await HistoryService().logAction(
           "Парсер HTTP: Головна сторінка: $homeStatus, cookies: ${cookies.length}");
 
       // === Крок 2: Запитуємо цільову сторінку з cookies і Referer ===
-      print("[Parser] HTTP Крок 2: Запит сторінки графіків...");
+      AppLogger.d("HTTP Крок 2: Запит сторінки графіків...", tag: 'Parser');
       final request = await client.getUrl(Uri.parse(_url));
       _setHttpHeaders(request, referer: _homeUrl);
 
@@ -297,7 +310,7 @@ class ParserService {
 
         final jsonString = _extractJsonFromHtml(html);
         if (jsonString.isNotEmpty) {
-          print("[Parser] ✅ Дані знайдено через HTTP!");
+          AppLogger.i("✅ Дані знайдено через HTTP!", tag: 'Parser');
           if (jsonString.length > 50) {
             await HistoryService().logAction(
                 "Парсер HTTP: JSON знайдено (${jsonString.length} симв.)");
@@ -319,18 +332,19 @@ class ParserService {
             rethrow;
           }
         } else {
-          print("[Parser] HTTP: HTML отримано, але JSON не знайдено");
+          AppLogger.w("HTTP: HTML отримано, але JSON не знайдено",
+              tag: 'Parser');
           await HistoryService()
               .logAction("Парсер HTTP: JSON не знайдено в HTML", level: "WARN");
 
           if (kDebugMode) {
             String snippet = html;
             if (snippet.length > 500) snippet = snippet.substring(0, 500);
-            print("[Parser-DEBUG] HTTP HTML Snippet:\n$snippet...");
+            AppLogger.d("HTTP HTML Snippet:\n$snippet...", tag: 'Parser-DEBUG');
           }
         }
       } else {
-        print("[Parser] HTTP: Status code ${response.statusCode}");
+        AppLogger.w("HTTP: Status code ${response.statusCode}", tag: 'Parser');
         await HistoryService().logAction(
             "Парсер HTTP: Не-200 відповідь: ${response.statusCode}",
             level: "WARN");
@@ -340,12 +354,12 @@ class ParserService {
             final errorBody = await response.transform(utf8.decoder).join();
             String snippet = errorBody;
             if (snippet.length > 500) snippet = snippet.substring(0, 500);
-            print("[Parser-DEBUG] HTTP Error Body:\n$snippet...");
+            AppLogger.d("HTTP Error Body:\n$snippet...", tag: 'Parser-DEBUG');
           } catch (_) {}
         }
       }
     } catch (e) {
-      print("[Parser] HTTP Error: $e");
+      AppLogger.e("HTTP Error", tag: 'Parser', error: e);
       await HistoryService()
           .logAction("Парсер HTTP Критична помилка: $e", level: "ERROR");
     }
@@ -439,7 +453,7 @@ class ParserService {
       }
       return result;
     } catch (e) {
-      print("[Parser] Помилка парсингу JSON: $e");
+      AppLogger.e("Помилка парсингу JSON", tag: 'Parser', error: e);
       await HistoryService()
           .logAction("Парсер: Помилка парсингу JSON: $e", level: "ERROR");
       return {};

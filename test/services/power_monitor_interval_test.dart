@@ -38,7 +38,7 @@ List<PowerOutageInterval> calculateIntervals(
       }
     } else if (event.isOnline && offlineStart != null) {
       intervals.add(PowerOutageInterval(
-        start: offlineStart!,
+        start: offlineStart,
         end: event.timestamp,
         startEventId: offlineStartId,
         endEventId: event.id,
@@ -50,7 +50,7 @@ List<PowerOutageInterval> calculateIntervals(
 
   if (offlineStart != null) {
     intervals.add(PowerOutageInterval(
-      start: offlineStart!,
+      start: offlineStart,
       end: null,
       startEventId: offlineStartId,
       endEventId: null,

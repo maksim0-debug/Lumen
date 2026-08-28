@@ -1,19 +1,19 @@
 import 'package:workmanager/workmanager.dart';
 import 'package:flutter/foundation.dart';
 
+import 'app_logger.dart';
 import 'parser_service.dart';
 import 'widget_service.dart';
 import 'notification_service.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
-import '../models/schedule_status.dart';
 
 const String taskUpdateSchedule = "taskUpdateSchedule";
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
-    print("[Background] 🕒 Запуск фонового завдання: $task");
+    AppLogger.i("🕒 Запуск фонового завдання: $task", tag: 'Background');
     await HistoryService().logAction("Бекграунд завдання запущено: $task");
 
     try {
@@ -27,7 +27,8 @@ void callbackDispatcher() {
           notificationGroups = [selectedGroup];
         }
 
-        print("[Background] Групи для сповіщень: $notificationGroups");
+        AppLogger.i("Групи для сповіщень: $notificationGroups",
+            tag: 'Background');
         await HistoryService()
             .logAction("Групи для оновлення: $notificationGroups");
 
@@ -58,7 +59,8 @@ void callbackDispatcher() {
                   groupName: group,
                   cancelExisting: first);
               first = false;
-              print("[Background] 🔔 Сповіщення оновлено для $group");
+              AppLogger.i("🔔 Сповіщення оновлено для $group",
+                  tag: 'Background');
 
               final bool notifyChange =
                   prefs.getBool('notify_schedule_change') ?? true;
@@ -78,7 +80,7 @@ void callbackDispatcher() {
                 final newHash = mySchedule.today.scheduleHash;
                 final newMinutes = mySchedule.today.totalOutageMinutes;
 
-                final cooldownMs = 5 * 60 * 1000;
+                const cooldownMs = 5 * 60 * 1000;
                 final canNotify = (nowMs - lastNotifTime) > cooldownMs;
 
                 bool shouldUpdateMetadata = true;
@@ -90,9 +92,11 @@ void callbackDispatcher() {
                     int oldMinutes = 0;
                     for (int i = 0; i < oldHash.length && i < 24; i++) {
                       final char = oldHash[i];
-                      if (char == '1')
+                      if (char == '1') {
                         oldMinutes += 60;
-                      else if (char == '2' || char == '3') oldMinutes += 30;
+                      } else if (char == '2' || char == '3') {
+                        oldMinutes += 30;
+                      }
                     }
 
                     final diff = newMinutes - oldMinutes;
@@ -105,8 +109,8 @@ void callbackDispatcher() {
                           ? "Світла стало МЕНШЕ на $diffStr год. 😔"
                           : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
 
-                      print(
-                          "[Background] 📢 Виявлено зміну графіку для $group: $msg");
+                      AppLogger.i("📢 Виявлено зміну графіку для $group: $msg",
+                          tag: 'Background');
 
                       try {
                         await notificationService.showImmediate(
@@ -123,15 +127,17 @@ void callbackDispatcher() {
                       await prefs.setInt(keyLastNotif, nowMs);
                     }
                   } else {
-                    print(
-                        "[Background] ⏳ Зміни є ($group), але охолодження. Чекаємо...");
+                    AppLogger.i(
+                        "⏳ Зміни є ($group), але охолодження. Чекаємо...",
+                        tag: 'Background');
                     await HistoryService().logAction(
                         "Зміни є, але спрацювало обмеження (cooldown)");
                     shouldUpdateMetadata = false;
                   }
                 } else if (savedDate != todayStr) {
-                  print(
-                      "[Background] 📅 Новий день ($savedDate -> $todayStr). База оновлена без сповіщень.");
+                  AppLogger.i(
+                      "📅 Новий день ($savedDate -> $todayStr). База оновлена без сповіщень.",
+                      tag: 'Background');
                   await HistoryService().logAction(
                       "Новий день ($savedDate -> $todayStr). База оновлена.");
                 }
@@ -145,17 +151,18 @@ void callbackDispatcher() {
             }
           }
 
-          print("[Background] ✅ Фонову задачу успішно виконано");
+          AppLogger.i("✅ Фонову задачу успішно виконано", tag: 'Background');
           await HistoryService().logAction("Бекграунд завдання завершено");
         } else {
-          print("[Background] ⚠️ Дані не отримано (порожній список)");
+          AppLogger.w("⚠️ Дані не отримано (порожній список)",
+              tag: 'Background');
           await HistoryService()
               .logAction("Помилка: Пустий список графіків", level: "ERROR");
           return Future.value(false);
         }
       }
     } catch (e) {
-      print("[Background] ❌ Критична помилка: $e");
+      AppLogger.e("❌ Критична помилка", tag: 'Background', error: e);
       await HistoryService().logAction("Помилка виконання: $e", level: "ERROR");
       return Future.value(false);
     }
@@ -175,11 +182,10 @@ class BackgroundManager {
     try {
       await Workmanager().initialize(
         callbackDispatcher,
-        isInDebugMode: false,
       );
-      print("[BackgroundManager] Ініціалізація успішна");
+      AppLogger.i("Ініціалізація успішна", tag: 'BackgroundManager');
     } catch (e) {
-      print("[BackgroundManager] Помилка ініціалізації: $e");
+      AppLogger.e("Помилка ініціалізації", tag: 'BackgroundManager', error: e);
     }
   }
 
@@ -197,9 +203,10 @@ class BackgroundManager {
         existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
         initialDelay: const Duration(seconds: 10),
       );
-      print("[BackgroundManager] Періодичну задачу зареєстровано");
+      AppLogger.i("Періодичну задачу зареєстровано", tag: 'BackgroundManager');
     } catch (e) {
-      print("[BackgroundManager] Помилка реєстрації задачі: $e");
+      AppLogger.e("Помилка реєстрації задачі",
+          tag: 'BackgroundManager', error: e);
     }
   }
 }

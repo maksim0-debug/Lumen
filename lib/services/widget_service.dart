@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:home_widget/home_widget.dart';
 import '../models/schedule_status.dart';
+import 'app_logger.dart';
 
 class WidgetService {
   static final WidgetService _instance = WidgetService._internal();
@@ -10,11 +11,11 @@ class WidgetService {
   Future<void> updateWidget(Map<String, FullSchedule> allSchedules) async {
     if (!Platform.isAndroid) return;
 
-    print("[WidgetService] Оновлення даних для віджетів...");
+    AppLogger.d("Оновлення даних для віджетів...", tag: 'WidgetService');
 
     try {
       for (var entry in allSchedules.entries) {
-        String groupKey = entry.key; 
+        String groupKey = entry.key;
         FullSchedule schedule = entry.value;
 
         await HomeWidget.saveWidgetData<String>(
@@ -60,9 +61,10 @@ class WidgetService {
         );
       }
 
-      print("[WidgetService] ✅ Дані всіх груп збережено для віджетів");
+      AppLogger.i("✅ Дані всіх груп збережено для віджетів",
+          tag: 'WidgetService');
     } catch (e) {
-      print("[WidgetService] ❌ Помилка: $e");
+      AppLogger.e("Помилка оновлення віджетів", tag: 'WidgetService', error: e);
     }
   }
 
@@ -93,36 +95,10 @@ class WidgetService {
           androidName: provider,
         );
       }
-      print("[WidgetService] 🔄 Стан завантаження скинуто");
+      AppLogger.d("🔄 Стан завантаження скинуто", tag: 'WidgetService');
     } catch (e) {
-      print("[WidgetService] ❌ Помилка скидання завантаження: $e");
+      AppLogger.e("Помилка скидання завантаження",
+          tag: 'WidgetService', error: e);
     }
-  }
-
-  String _encodeSchedule(DailySchedule schedule) {
-    final buffer = StringBuffer();
-    for (var status in schedule.hours) {
-      switch (status) {
-        case LightStatus.on:
-          buffer.write('0');
-          break;
-        case LightStatus.off:
-          buffer.write('1');
-          break;
-        case LightStatus.semiOn:
-          buffer.write('2');
-          break;
-        case LightStatus.semiOff:
-          buffer.write('3');
-          break;
-        case LightStatus.maybe:
-          buffer.write('4');
-          break; 
-        default:
-          buffer.write('9');
-          break;
-      }
-    }
-    return buffer.toString();
   }
 }

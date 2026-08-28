@@ -2,10 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:vikl/services/history_service.dart';
-import 'package:vikl/models/schedule_status.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
-import 'dart:io';
 
 class MockPathProviderPlatform extends Fake
     with MockPlatformInterfaceMixin
@@ -31,10 +29,10 @@ void main() {
       // Ensure DB is initialized
       await service.database;
 
-      final group = "GPVTest";
-      final date = "2026-01-29";
-      final code = "000000000000000000000000"; // All ON
-      final updated = "12:00";
+      const group = "GPVTest";
+      const date = "2026-01-29";
+      const code = "000000000000000000000000"; // All ON
+      const updated = "12:00";
 
       await service.persistVersion(
         groupKey: group,
@@ -53,11 +51,11 @@ void main() {
 
     test('getVersionsForDate retrieves versions', () async {
        final service = HistoryService();
-       final group = "GPVTest2";
+       const group = "GPVTest2";
        final dateObj = DateTime(2026, 1, 30);
-       final dateStr = "2026-01-30";
-       final code = "111111111111111111111111"; // All OFF
-       final updated = "10:00";
+       const dateStr = "2026-01-30";
+       const code = "111111111111111111111111"; // All OFF
+       const updated = "10:00";
 
        await service.persistVersion(
         groupKey: group,
@@ -76,10 +74,10 @@ void main() {
     
     test('Duplicate version is ignored', () async {
       final service = HistoryService();
-      final group = "GPVTest3";
-      final date = "2026-01-29";
-      final code = "0000001111000000";
-      final updated = "13:00";
+      const group = "GPVTest3";
+      const date = "2026-01-29";
+      const code = "0000001111000000";
+      const updated = "13:00";
 
       await service.persistVersion(
         groupKey: group,

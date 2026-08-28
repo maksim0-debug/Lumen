@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/schedule_status.dart';
+import '../services/app_logger.dart';
 import '../services/history_service.dart';
 import '../services/parser_service.dart';
 import '../services/preferences_helper.dart';
@@ -61,7 +62,8 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
         _schedule = List.filled(24, LightStatus.on);
       }
     } catch (e) {
-      print("Error fetching schedule: $e");
+      AppLogger.e("Error fetching schedule",
+          tag: 'ManualScheduleEditor', error: e);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text("Error loading data: $e")));
@@ -96,7 +98,8 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
         Navigator.pop(context);
       }
     } catch (e) {
-      print("Error saving schedule: $e");
+      AppLogger.e("Error saving schedule",
+          tag: 'ManualScheduleEditor', error: e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Помилка збереження: $e")),
@@ -391,10 +394,10 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
             color: gradient == null ? color : null,
             gradient: gradient,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.grey.withOpacity(0.3)),
+            border: Border.all(color: Colors.grey.withValues(alpha: 0.3)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
+                color: Colors.black.withValues(alpha: 0.1),
                 blurRadius: 2,
                 offset: const Offset(0, 1),
               )
@@ -418,7 +421,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
                 Icons.touch_app,
                 size: 10,
                 color: (status == LightStatus.off ? Colors.white : Colors.black)
-                    .withOpacity(0.3),
+                    .withValues(alpha: 0.3),
               ),
             ),
           ],
@@ -440,8 +443,6 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
       case LightStatus.maybe:
         return Colors.grey[400]!;
       case LightStatus.unknown:
-        return Colors.grey[200]!;
-      default:
         return Colors.grey[200]!;
     }
   }

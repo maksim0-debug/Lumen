@@ -63,7 +63,7 @@ class _LogsPageState extends State<LogsPage> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _logs.isEmpty
-            ? Center(child: Text("Пусто", style: TextStyle(color: Colors.grey)))
+            ? const Center(child: Text("Пусто", style: TextStyle(color: Colors.grey)))
             : ListView.builder(
                 itemCount: _logs.length,
                 itemBuilder: (context, index) {
@@ -83,7 +83,7 @@ class _LogsPageState extends State<LogsPage> {
                   return ListTile(
                     dense: true,
                     title: Text(message, style: TextStyle(color: color, fontSize: 13)),
-                    subtitle: Text("$timeStr [$level]", style: TextStyle(fontSize: 10)),
+                    subtitle: Text("$timeStr [$level]", style: const TextStyle(fontSize: 10)),
                   );
                 },
               ),

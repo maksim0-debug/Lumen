@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import '../services/preferences_helper.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../services/app_logger.dart';
 import '../services/analytics_service.dart';
 import '../models/analytics_models.dart';
 import '../models/schedule_status.dart';
@@ -41,7 +42,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   double _accuracy7d = -1;
   TimelineComparisonData? _timeline;
   SwitchLag? _switchLag;
-  int _selectedLagDays = 7;
+  int _selectedLagDays = 2; // 2 = Вчора
 
   // Records
   OutageRecords? _records;
@@ -49,13 +50,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   // Charts
   List<List<double>>? _heatmapData;
   List<DailyOutage>? _dailyTrend;
-  int _selectedTrendDays = 30;
+  int _selectedTrendDays = 7;
   int _selectedHeatmapDays = 30;
 
   // Accuracy Trend
   List<DailyOutage>? _accuracyTrendReal;
   List<DailyOutage>? _accuracyTrendPredicted;
-  int _selectedAccuracyTrendDays = 30;
+  int _selectedAccuracyTrendDays = 7;
 
   // Productivity
   ProductivityStats? _productivity7d;
@@ -84,7 +85,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         });
       }
     } catch (e) {
-      print('Error loading saved mode: $e');
+      AppLogger.w('Error loading saved mode: $e', tag: 'AnalyticsScreen');
     }
     _loadAllData();
   }
@@ -266,7 +267,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setInt('analytics_mode', mode.index);
     } catch (e) {
-      print('Error saving mode: $e');
+      AppLogger.e('Error saving mode', tag: 'AnalyticsScreen', error: e);
     }
   }
 
@@ -284,7 +285,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         });
       }
     } catch (e) {
-      print('Error updating trend chart: $e');
+      AppLogger.e('Error updating trend chart',
+          tag: 'AnalyticsScreen', error: e);
     }
   }
 
@@ -306,7 +308,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         });
       }
     } catch (e) {
-      print('Error updating accuracy trend chart: $e');
+      AppLogger.e('Error updating accuracy trend chart',
+          tag: 'AnalyticsScreen', error: e);
     }
   }
 
@@ -325,7 +328,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         });
       }
     } catch (e) {
-      print('Error updating lag chart: $e');
+      AppLogger.e('Error updating lag chart', tag: 'AnalyticsScreen', error: e);
     }
   }
 
@@ -460,7 +463,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                 final hours = rod.toY;
                 final h = hours.floor();
                 final m = ((hours - h) * 60).round();
-                final timeStr = h > 0 ? '${h}г ${m}хв' : '${m}хв';
+                final timeStr = h > 0 ? '$hг $mхв' : '$mхв';
 
                 return BarTooltipItem(
                   timeStr,
@@ -830,7 +833,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                       final m = ((d.outageHours - h) * 60).round();
                       final label = isReal ? 'Фактично' : 'За графіком';
                       return LineTooltipItem(
-                        '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$label\n${h}г ${m}х',
+                        '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$label\n$hг $mх',
                         TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
                           fontSize: 11,
@@ -1409,7 +1412,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                   final h = d.outageHours.floor();
                   final m = ((d.outageHours - h) * 60).round();
                   return LineTooltipItem(
-                    '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n${h}г ${m}х',
+                    '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$hг $mх',
                     TextStyle(
                       color: isDark ? Colors.white : Colors.black87,
                       fontSize: 11,
@@ -2252,7 +2255,7 @@ class ScheduleTimelinePainter extends CustomPainter {
     paint.color = isDark ? Colors.white10 : Colors.grey.shade300;
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), paint);
 
-    final totalMinutes = 24 * 60;
+    const totalMinutes = 24 * 60;
     final minuteWidth = w / totalMinutes;
 
     for (int hour = 0; hour < 24; hour++) {
@@ -2336,7 +2339,7 @@ class RealityTimelinePainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
     final now = DateTime.now();
-    final totalMinutes = 24 * 60;
+    const totalMinutes = 24 * 60;
     final minuteWidth = w / totalMinutes;
 
     // Draw background (Green implies online by default, or Grey if unknown?

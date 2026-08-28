@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../../services/darkness_theme_service.dart';
 
@@ -278,7 +277,7 @@ class _ThemeAnimatedCellState extends State<ThemeAnimatedCell>
               borderRadius: BorderRadius.circular(14),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF66BB6A).withOpacity(shadowOpacity),
+                  color: const Color(0xFF66BB6A).withValues(alpha: shadowOpacity),
                   blurRadius: shadowBlur,
                   spreadRadius: pulse * 3,
                 ),
@@ -425,7 +424,7 @@ class _InterferencePainter extends CustomPainter {
     final y = yFraction * size.height;
 
     final paint = Paint()
-      ..color = const Color(0xFF39FF14).withOpacity(0.12)
+      ..color = const Color(0xFF39FF14).withValues(alpha: 0.12)
       ..style = PaintingStyle.fill;
 
     canvas.drawRect(
@@ -435,7 +434,7 @@ class _InterferencePainter extends CustomPainter {
 
     // Thin bright line at bar top
     final linePaint = Paint()
-      ..color = const Color(0xFF39FF14).withOpacity(0.25)
+      ..color = const Color(0xFF39FF14).withValues(alpha: 0.25)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 

@@ -115,7 +115,7 @@ class PowerMonitorGuideScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(0.1),
+                  color: Colors.amber.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8)),
               child: const Row(
                 children: [
@@ -157,7 +157,7 @@ class PowerMonitorGuideScreen extends StatelessWidget {
               decoration: BoxDecoration(
                   color: Theme.of(context).brightness == Brightness.dark
                       ? Colors.black26
-                      : Colors.black.withOpacity(0.05),
+                      : Colors.black.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(4)),
               child: const Text(
                 '{\n  "status": "offline",\n  "timestamp": "[year]-[month_digit]-[dayofmonth] [hour]:[minute]:[second]",\n  "device": "old_phone"\n}',
@@ -197,7 +197,7 @@ class PowerMonitorGuideScreen extends StatelessWidget {
               decoration: BoxDecoration(
                   color: Theme.of(context).brightness == Brightness.dark
                       ? Colors.black26
-                      : Colors.black.withOpacity(0.05),
+                      : Colors.black.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(4)),
               child: const Text(
                 '{\n  "status": "online",\n  "timestamp": "[lv=fixed_timestamp]",\n  "device": "old_phone"\n}',
