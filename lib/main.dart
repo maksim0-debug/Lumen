@@ -32,6 +32,7 @@ import 'ui/widgets/theme_animated_cell.dart';
 
 @pragma('vm:entry-point')
 Future<void> backgroundCallback(Uri? uri) async {
+  WidgetsFlutterBinding.ensureInitialized();
   if (uri?.host == 'refresh') {
     AppLogger.d("Refresh triggered from widget", tag: 'Background');
     // Трекер для ачівки "Завжди перед очима"
@@ -144,6 +145,12 @@ class _MyAppState extends State<MyApp> {
     _initDarknessTheme();
   }
 
+  @override
+  void dispose() {
+    _darknessThemeService.onStageChanged = null;
+    super.dispose();
+  }
+
   Future<void> _initDarknessTheme() async {
     _darknessThemeService.onStageChanged = (stage) {
       if (mounted) {
@@ -163,7 +170,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _loadTheme() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await PreferencesHelper.getSafeInstance();
       if (mounted) {
         setState(() {
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
@@ -191,7 +198,7 @@ class _MyAppState extends State<MyApp> {
 
   void _reloadScale() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await PreferencesHelper.getSafeInstance();
       if (mounted) {
         setState(() {
           _uiScale = prefs.getDouble('ui_scale') ?? 1.0;
@@ -301,6 +308,194 @@ class _OffRange {
   _OffRange(this.start, this.end);
 }
 
+class CountdownCard extends StatefulWidget {
+  final FullSchedule? fullSchedule;
+
+  const CountdownCard({
+    super.key,
+    required this.fullSchedule,
+  });
+
+  @override
+  State<CountdownCard> createState() => _CountdownCardState();
+}
+
+class _CountdownCardState extends State<CountdownCard> {
+  Timer? _ticker;
+  int _lastRenderedMinute = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastRenderedMinute = DateTime.now().minute;
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.fullSchedule != null) {
+        final currentMinute = DateTime.now().minute;
+        if (currentMinute != _lastRenderedMinute) {
+          _lastRenderedMinute = currentMinute;
+          setState(() {});
+        }
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant CountdownCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.fullSchedule != widget.fullSchedule) {
+      _lastRenderedMinute = DateTime.now().minute;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.fullSchedule == null) {
+      return const SizedBox.shrink();
+    }
+
+    final countdown = CountdownService.calculateCountdown(
+      today: widget.fullSchedule!.today,
+      tomorrow: widget.fullSchedule!.tomorrow,
+      now: DateTime.now(),
+    );
+
+    if (countdown == null) return const SizedBox.shrink();
+
+    final msg = countdown.message;
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final darknessService = DarknessThemeService();
+    final stage =
+        darknessService.isEnabled ? darknessService.currentStage : null;
+
+    // Resolve colors per theme
+    Color containerColor;
+    Color textColor;
+    Color iconColor;
+    double borderRadiusVal;
+    Border? border;
+    List<BoxShadow>? shadows;
+    TextStyle? extraStyle;
+
+    switch (stage) {
+      case DarknessStage.solarpunk:
+        containerColor = const Color(0xFF1B5E20).withValues(alpha: 0.85);
+        textColor = const Color(0xFFE8F5E9);
+        iconColor = const Color(0xFF66BB6A);
+        borderRadiusVal = 16;
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFF66BB6A).withValues(alpha: 0.2),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
+        ];
+        break;
+      case DarknessStage.dieselpunk:
+        containerColor = const Color(0xFF1A1A1A);
+        textColor = const Color(0xFFFFD54F);
+        iconColor = const Color(0xFFFF9800);
+        borderRadiusVal = 4;
+        border = Border.all(
+          color: const Color(0xFFFF9800).withValues(alpha: 0.35),
+          width: 1.5,
+        );
+        shadows = [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.6),
+            blurRadius: 4,
+            offset: const Offset(2, 2),
+          ),
+        ];
+        extraStyle = const TextStyle(
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.5,
+        );
+        break;
+      case DarknessStage.cyberpunk:
+        containerColor = const Color(0xFF0A0E21);
+        textColor = const Color(0xFF00FFFF);
+        iconColor = const Color(0xFFFF0080);
+        borderRadiusVal = 8;
+        border = Border.all(
+          color: const Color(0xFF00FFFF).withValues(alpha: 0.4),
+          width: 1,
+        );
+        shadows = [
+          BoxShadow(
+            color: const Color(0xFF00FFFF).withValues(alpha: 0.2),
+            blurRadius: 12,
+            spreadRadius: 1,
+          ),
+        ];
+        extraStyle = const TextStyle(
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.5,
+        );
+        break;
+      case DarknessStage.stalker:
+        containerColor = const Color(0xFF050505);
+        textColor = const Color(0xFF39FF14);
+        iconColor = const Color(0xFF39FF14);
+        borderRadiusVal = 2;
+        border = Border.all(
+          color: const Color(0xFF39FF14).withValues(alpha: 0.3),
+          width: 1,
+        );
+        extraStyle = const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontFamily: 'monospace',
+          letterSpacing: 2,
+          shadows: [
+            Shadow(blurRadius: 4, color: Color(0xFF39FF14)),
+          ],
+        );
+        break;
+      default:
+        containerColor =
+            isDark ? const Color(0xFF2C2C2C) : Colors.grey.shade300;
+        textColor = isDark ? Colors.white : Colors.black87;
+        iconColor = Colors.orange;
+        borderRadiusVal = 12;
+    }
+
+    final baseTextStyle = TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.bold,
+      color: textColor,
+    );
+    final finalTextStyle =
+        extraStyle != null ? baseTextStyle.merge(extraStyle) : baseTextStyle;
+
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: containerColor,
+          borderRadius: BorderRadius.circular(borderRadiusVal),
+          border: border,
+          boxShadow: shadows,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.timer_outlined, color: iconColor, size: 24),
+            const SizedBox(width: 8),
+            Text(msg, style: finalTextStyle),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   final VoidCallback? onThemeChanged;
   final VoidCallback? onScaleChanged;
@@ -332,6 +527,7 @@ class _HomeScreenState extends State<HomeScreen>
   int _selectedVersionIndex = -1;
 
   int _lastAutoRefreshMinute = -1;
+  int _lastRenderedMinute = -1;
   Timer? _timer;
 
   final Map<String, int> _lastUpdateOldStats = {};
@@ -354,8 +550,58 @@ class _HomeScreenState extends State<HomeScreen>
   String _powerStatus = 'unknown'; // 'online' / 'offline' / 'unknown'
   List<List<HourSegment>>? _realHourSegments;
 
+  // --- Precomputed Display Data ---
+  DailySchedule? _currentDisplaySchedule;
+  List<IntervalInfo> _cachedIntervals = [];
+
   final AchievementService _achievementService = AchievementService();
   final FocusNode _focusNode = FocusNode();
+
+  String _formatDateKey(DateTime dt) {
+    return "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}";
+  }
+
+  void _recalculateDisplayData() {
+    final displayDate = _getDisplayDate();
+    DailySchedule? currentDisplay;
+
+    if (_viewMode == ScheduleViewMode.today) {
+      if (_historyVersions.isNotEmpty &&
+          _selectedVersionIndex >= 0 &&
+          _historySchedule != null) {
+        currentDisplay = _historySchedule;
+      } else {
+        currentDisplay = _allSchedules[_currentGroup]?.today;
+      }
+    } else if (_viewMode == ScheduleViewMode.tomorrow) {
+      if (_historyVersions.isNotEmpty &&
+          _selectedVersionIndex >= 0 &&
+          _historySchedule != null) {
+        currentDisplay = _historySchedule;
+      } else {
+        currentDisplay = _allSchedules[_currentGroup]?.tomorrow;
+      }
+    } else if (_viewMode == ScheduleViewMode.yesterday ||
+        _viewMode == ScheduleViewMode.history) {
+      currentDisplay = _historySchedule;
+    }
+
+    if (_powerMonitorEnabled && _dataSourceMode == DataSourceMode.real) {
+      _currentDisplaySchedule = _buildRealScheduleFromIntervals(
+        _realOutageIntervals,
+        displayDate,
+        baseSchedule: currentDisplay,
+      );
+      _cachedIntervals =
+          _generateRealIntervals(_realOutageIntervals, displayDate);
+      _realHourSegments =
+          _computeAllHourSegments(_realOutageIntervals, displayDate);
+    } else {
+      _currentDisplaySchedule = currentDisplay;
+      _cachedIntervals = _generateIntervals(currentDisplay);
+      _realHourSegments = null;
+    }
+  }
 
   @override
   void initState() {
@@ -378,7 +624,14 @@ class _HomeScreenState extends State<HomeScreen>
         _loadData(silent: true);
       }
 
-      if (mounted) setState(() {});
+      if (now.minute != _lastRenderedMinute) {
+        _lastRenderedMinute = now.minute;
+        if (mounted) {
+          setState(() {
+            _recalculateDisplayData();
+          });
+        }
+      }
     });
   }
 
@@ -390,6 +643,7 @@ class _HomeScreenState extends State<HomeScreen>
     };
     // Початкове завантаження стану
     await _achievementService.loadAllStates();
+    if (!mounted) return;
     // Трекер сесії ("Контроль ситуації")
     _achievementService.trackAppSession();
   }
@@ -402,6 +656,7 @@ class _HomeScreenState extends State<HomeScreen>
       AppLogger.w("Error loading SharedPreferences in _initPowerMonitor: $e",
           tag: 'Main');
     }
+    if (!mounted) return;
 
     _powerMonitorEnabled = prefs?.getBool('power_monitor_enabled') ?? false;
 
@@ -412,6 +667,7 @@ class _HomeScreenState extends State<HomeScreen>
           if (mounted) {
             setState(() {
               _powerStatus = status;
+              _recalculateDisplayData();
             });
           }
           // Оновити стадію тьми при зміні статусу живлення
@@ -422,32 +678,51 @@ class _HomeScreenState extends State<HomeScreen>
 
     if (_powerMonitorEnabled) {
       await _powerMonitor.init();
+      if (!mounted) return;
       _powerStatus = _powerMonitor.currentStatus;
-      await _loadRealOutageData(DateTime.now());
-      if (mounted) setState(() {});
+      await _loadRealOutageData(_getDisplayDate());
+      if (mounted) {
+        setState(() {
+          _recalculateDisplayData();
+        });
+      }
+    } else {
+      _dataSourceMode = DataSourceMode.predicted;
+      _powerStatus = 'unknown';
+      if (mounted) {
+        setState(() {
+          _recalculateDisplayData();
+        });
+      }
     }
   }
 
   Future<void> _loadRealOutageData(DateTime date) async {
     if (!_powerMonitorEnabled) return;
+    final dateAtCall = date;
     try {
-      _realOutageIntervals =
-          await _powerMonitor.getOutageIntervalsForDate(date);
+      final intervals = await _powerMonitor.getOutageIntervalsForDate(date);
+      if (!mounted) return;
+      if (!DateUtils.isSameDay(dateAtCall, _getDisplayDate())) return;
+      _realOutageIntervals = intervals;
     } catch (e) {
       AppLogger.e('Error loading real outage data', tag: 'Main', error: e);
-      _realOutageIntervals = [];
+      if (mounted && DateUtils.isSameDay(dateAtCall, _getDisplayDate())) {
+        _realOutageIntervals = [];
+      }
     }
   }
 
   Future<void> _loadPreferencesAndData() async {
     SharedPreferences? prefs;
     try {
-      prefs = await SharedPreferences.getInstance();
+      prefs = await PreferencesHelper.getSafeInstance();
     } catch (e) {
       AppLogger.e("Error loading SharedPreferences", tag: 'Main', error: e);
       // If SharedPreferences is corrupt, we might want to let the app continue with defaults
       // or show an error. For now, just logging.
     }
+    if (!mounted) return;
 
     final previousGroup = _currentGroup;
     bool groupChanged = false;
@@ -470,11 +745,13 @@ class _HomeScreenState extends State<HomeScreen>
       if (groupChanged) {
         final targetDate = _getDisplayDate();
         await _loadHistoryData(targetDate);
+        if (!mounted) return;
       }
       await _loadData(silent: true);
     } else {
       if (groupChanged) {
         await _refreshVersionsForCurrentMode();
+        if (!mounted) return;
         _updateStatusDate();
       }
       await _loadData(silent: false, force: groupChanged);
@@ -485,7 +762,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (newGroup == null || newGroup == _currentGroup) return;
 
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setString('selected_group', newGroup);
 
       List<String> notifGroups =
@@ -493,15 +770,25 @@ class _HomeScreenState extends State<HomeScreen>
       if (notifGroups.isEmpty ||
           (notifGroups.length == 1 && notifGroups.contains(_currentGroup))) {
         await prefs.setStringList('notification_groups', [newGroup]);
-        setState(() {
-          _notificationGroups = [newGroup];
-        });
+        if (mounted) {
+          setState(() {
+            _notificationGroups = [newGroup];
+          });
+        }
       }
     } catch (e) {
       AppLogger.e("Error saving group preference", tag: 'Main', error: e);
     }
+    if (!mounted) return;
 
-    setState(() => _currentGroup = newGroup);
+    _wasUpdated = false;
+    setState(() {
+      _currentGroup = newGroup;
+      _historyVersions = [];
+      _selectedVersionIndex = -1;
+      _historySchedule = null;
+      _recalculateDisplayData();
+    });
     // Трекер для ачівки "Громадянин"
     _achievementService.trackGroupChange();
 
@@ -509,14 +796,15 @@ class _HomeScreenState extends State<HomeScreen>
         _viewMode == ScheduleViewMode.tomorrow) {
       final now = DateTime.now();
       await _refreshVersionsForCurrentMode();
+      if (!mounted) return;
 
       try {
-        final prefs = await SharedPreferences.getInstance();
+        final prefs = await PreferencesHelper.getSafeInstance();
         if (_allSchedules.containsKey(newGroup)) {
           final schedule = _allSchedules[newGroup]!;
           final keyHash = "prev_hash_${newGroup}_today";
           final keyDate = "prev_date_${newGroup}_today";
-          final todayStr = "${now.year}-${now.month}-${now.day}";
+          final todayStr = _formatDateKey(now);
 
           await prefs.setString(keyHash, schedule.today.scheduleHash);
           await prefs.setString(keyDate, todayStr);
@@ -526,17 +814,24 @@ class _HomeScreenState extends State<HomeScreen>
       }
     } else if (_isHistoryMode) {
       final targetDate = _getDisplayDate();
-      _loadHistoryData(targetDate);
+      await _loadHistoryData(targetDate);
+      if (!mounted) return;
     }
 
     _updateNotificationsOnly();
     _updateStatusDate();
+    if (mounted) {
+      setState(() {
+        _recalculateDisplayData();
+      });
+    }
   }
 
   Future<void> _loadCachedData() async {
     try {
       final cached = await HistoryService().getLastKnownSchedules();
       if (cached.isNotEmpty && mounted) {
+        _wasUpdated = false;
         setState(() {
           _allSchedules = cached;
           _isLoading = false;
@@ -549,6 +844,7 @@ class _HomeScreenState extends State<HomeScreen>
           } else {
             _statusMessage = "З пам'яті (дані завантажено)";
           }
+          _recalculateDisplayData();
         });
 
         // Load history versions for the cached data to populate dropdown if needed
@@ -567,6 +863,8 @@ class _HomeScreenState extends State<HomeScreen>
       trayManager.removeListener(this);
     }
     _timer?.cancel();
+    _achievementService.onAchievementUnlocked = null;
+    _powerMonitor.onStatusChanged = null;
     super.dispose();
   }
 
@@ -607,34 +905,37 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _refreshVersionsForCurrentMode() async {
     final targetDate = _getDisplayDate();
+    final groupAtCall = _currentGroup;
     final versions =
         await HistoryService().getVersionsForDate(targetDate, _currentGroup);
-    if (mounted) {
-      setState(() {
-        _historyVersions = versions;
-        if (_historyVersions.isNotEmpty) {
-          _selectedVersionIndex = _historyVersions.length - 1;
-          _historySchedule = _historyVersions.last.toSchedule();
-        } else {
-          _selectedVersionIndex = -1;
-          _historySchedule = null;
-        }
-      });
-    }
+    if (!mounted) return;
+    if (_currentGroup != groupAtCall) return;
+    if (!DateUtils.isSameDay(targetDate, _getDisplayDate())) return;
+    setState(() {
+      _historyVersions = versions;
+      if (_historyVersions.isNotEmpty) {
+        _selectedVersionIndex = _historyVersions.length - 1;
+        _historySchedule = _historyVersions.last.toSchedule();
+      } else {
+        _selectedVersionIndex = -1;
+        _historySchedule = null;
+      }
+      _recalculateDisplayData();
+    });
   }
 
   Future<void> _updateStatusDate() async {
+    final now = DateTime.now();
     DateTime targetDate;
     if (_viewMode == ScheduleViewMode.today) {
-      targetDate = DateTime.now();
+      targetDate = DateTime(now.year, now.month, now.day);
     } else if (_viewMode == ScheduleViewMode.tomorrow) {
-      targetDate = DateTime.now().add(const Duration(days: 1));
+      targetDate = DateTime(now.year, now.month, now.day + 1);
     } else {
       return;
     }
 
-    final dateStr =
-        "${targetDate.year}-${targetDate.month.toString().padLeft(2, '0')}-${targetDate.day.toString().padLeft(2, '0')}";
+    final dateStr = _formatDateKey(targetDate);
     final updateTime = await HistoryService().getLatestUpdatedAt(
       groupKey: _currentGroup,
       targetDate: dateStr,
@@ -645,8 +946,11 @@ class _HomeScreenState extends State<HomeScreen>
       Color color = Colors.grey;
 
       if (_historyVersions.isNotEmpty) {
-        // Prefer history version time string which includes date
-        msg = "Оновлено ДТЕК: ${_historyVersions.last.timeString}";
+        final version = (_selectedVersionIndex >= 0 &&
+                _selectedVersionIndex < _historyVersions.length)
+            ? _historyVersions[_selectedVersionIndex]
+            : _historyVersions.last;
+        msg = "Оновлено ДТЕК: ${version.timeString}";
         color = Colors.green;
       } else if (updateTime != null) {
         msg = "Оновлено ДТЕК: $updateTime";
@@ -743,6 +1047,7 @@ class _HomeScreenState extends State<HomeScreen>
             _isLoading = false;
             _statusColor = Colors.green;
           }
+          _recalculateDisplayData();
         });
 
         if (!currentIsHistory) {
@@ -752,7 +1057,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
 
       try {
-        final prefs = await SharedPreferences.getInstance();
+        final prefs = await PreferencesHelper.getSafeInstance();
         final notifyChange = prefs.getBool('notify_schedule_change') ?? true;
         final now = DateTime.now();
 
@@ -764,7 +1069,7 @@ class _HomeScreenState extends State<HomeScreen>
           final schedule = allData[group]!;
           final keyHash = "prev_hash_${group}_today";
           final keyDate = "prev_date_${group}_today";
-          final todayStr = "${now.year}-${now.month}-${now.day}";
+          final todayStr = _formatDateKey(now);
 
           final oldHash = prefs.getString(keyHash);
           final savedDate = prefs.getString(keyDate);
@@ -840,6 +1145,8 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _loadHistoryData(DateTime date) async {
+    final groupAtCall = _currentGroup;
+    final dateAtCall = date;
     setState(() {
       _isLoading = true;
       _statusMessage = "Завантаження архіву...";
@@ -850,6 +1157,10 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final versions =
           await HistoryService().getVersionsForDate(date, _currentGroup);
+      if (!mounted) return;
+      if (_currentGroup != groupAtCall) return;
+      if (!DateUtils.isSameDay(dateAtCall, _getDisplayDate())) return;
+
       setState(() {
         _historyVersions = versions;
         _isLoading = false;
@@ -865,18 +1176,30 @@ class _HomeScreenState extends State<HomeScreen>
           _statusMessage =
               "Архів за $dateStr ($versionCount ${_pluralVersions(versionCount)})";
         }
+        _recalculateDisplayData();
       });
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _statusMessage = "Помилка завантаження архіву";
-      });
+      if (mounted &&
+          _currentGroup == groupAtCall &&
+          DateUtils.isSameDay(dateAtCall, _getDisplayDate())) {
+        setState(() {
+          _isLoading = false;
+          _historySchedule = null;
+          _historyVersions = [];
+          _selectedVersionIndex = -1;
+          _statusMessage = "Помилка завантаження архіву";
+          _recalculateDisplayData();
+        });
+      }
     }
   }
 
   String _pluralVersions(int count) {
-    if (count == 1) return "версія";
-    if (count >= 2 && count <= 4) return "версії";
+    final mod10 = count % 10;
+    final mod100 = count % 100;
+    if (mod100 >= 11 && mod100 <= 14) return "версій";
+    if (mod10 == 1) return "версія";
+    if (mod10 >= 2 && mod10 <= 4) return "версії";
     return "версій";
   }
 
@@ -885,6 +1208,10 @@ class _HomeScreenState extends State<HomeScreen>
     setState(() {
       _selectedVersionIndex = index;
       _historySchedule = _historyVersions[index].toSchedule();
+      if (!_isHistoryMode) {
+        _statusMessage = "Оновлено ДТЕК: ${_historyVersions[index].timeString}";
+      }
+      _recalculateDisplayData();
     });
   }
 
@@ -940,25 +1267,48 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _selectDateAndLoad() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final firstAllowed = DateTime(2024);
+    DateTime defaultInitial =
+        _historyDate ?? DateTime(now.year, now.month, now.day - 2);
+    if (defaultInitial.isAfter(today)) {
+      defaultInitial = today;
+    }
+    if (defaultInitial.isBefore(firstAllowed)) {
+      defaultInitial = firstAllowed;
+    }
+
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate:
-          _historyDate ?? DateTime.now().subtract(const Duration(days: 2)),
-      firstDate: DateTime(2024),
-      lastDate: DateTime.now().subtract(const Duration(days: 0)),
+      initialDate: defaultInitial,
+      firstDate: firstAllowed,
+      lastDate: today,
       locale: const Locale("uk", "UA"),
     );
     if (picked != null) {
+      _wasUpdated = false;
       setState(() {
         _viewMode = ScheduleViewMode.history;
         _historyDate = picked;
+        _historyVersions = [];
+        _selectedVersionIndex = -1;
+        _historySchedule = null;
+        _recalculateDisplayData();
       });
       await _loadHistoryData(picked);
+      if (!mounted) return;
       // Трекер для ачівки "Архіваріус"
       _achievementService.trackHistoryView(picked);
     } else {
       if (_viewMode == ScheduleViewMode.history && _historyDate == null) {
-        setState(() => _viewMode = ScheduleViewMode.today);
+        setState(() {
+          _viewMode = ScheduleViewMode.today;
+          _historyVersions = [];
+          _selectedVersionIndex = -1;
+          _historySchedule = null;
+          _recalculateDisplayData();
+        });
       }
     }
   }
@@ -1672,7 +2022,7 @@ class _HomeScreenState extends State<HomeScreen>
             selectedColor: Colors.orange.withValues(alpha: 0.3),
             onSelected: (selected) {
               if (selected) {
-                setState(() => _dataSourceMode = DataSourceMode.predicted);
+                _setDataSourceMode(DataSourceMode.predicted);
               }
             },
           ),
@@ -1683,10 +2033,7 @@ class _HomeScreenState extends State<HomeScreen>
             selectedColor: Colors.amber.withValues(alpha: 0.3),
             onSelected: (selected) {
               if (selected) {
-                setState(() => _dataSourceMode = DataSourceMode.real);
-                _loadRealOutageData(_getDisplayDate()).then((_) {
-                  if (mounted) setState(() {});
-                });
+                _setDataSourceMode(DataSourceMode.real);
               }
             },
           ),
@@ -1699,226 +2046,141 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Отримати дату, яку зараз переглядає користувач.
   DateTime _getDisplayDate() {
-    if (_viewMode == ScheduleViewMode.today) return DateTime.now();
+    final now = DateTime.now();
+    if (_viewMode == ScheduleViewMode.today) {
+      return DateTime(now.year, now.month, now.day);
+    }
     if (_viewMode == ScheduleViewMode.tomorrow) {
-      return DateTime.now().add(const Duration(days: 1));
+      return DateTime(now.year, now.month, now.day + 1);
     }
     if (_viewMode == ScheduleViewMode.yesterday) {
-      return DateTime.now().subtract(const Duration(days: 1));
+      return DateTime(now.year, now.month, now.day - 1);
     }
-    return _historyDate ?? DateTime.now();
+    return _historyDate ?? DateTime(now.year, now.month, now.day);
   }
 
-  Widget _buildCountdownWidget(FullSchedule? fullSchedule) {
-    if (fullSchedule == null || _viewMode != ScheduleViewMode.today) {
-      return const SizedBox.shrink();
-    }
-
-    final countdown = CountdownService.calculateCountdown(
-      today: fullSchedule.today,
-      tomorrow: fullSchedule.tomorrow,
-      now: DateTime.now(),
-    );
-
-    if (countdown == null) return const SizedBox.shrink();
-
-    final msg = countdown.message;
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final darknessService = DarknessThemeService();
-    final stage =
-        darknessService.isEnabled ? darknessService.currentStage : null;
-
-    // Resolve colors per theme
-    Color containerColor;
-    Color textColor;
-    Color iconColor;
-    double borderRadiusVal;
-    Border? border;
-    List<BoxShadow>? shadows;
-    TextStyle? extraStyle;
-
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        containerColor = const Color(0xFF1B5E20).withValues(alpha: 0.85);
-        textColor = const Color(0xFFE8F5E9);
-        iconColor = const Color(0xFF66BB6A);
-        borderRadiusVal = 16;
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFF66BB6A).withValues(alpha: 0.2),
-            blurRadius: 8,
-            spreadRadius: 1,
-          ),
-        ];
-        break;
-      case DarknessStage.dieselpunk:
-        containerColor = const Color(0xFF1A1A1A);
-        textColor = const Color(0xFFFFD54F);
-        iconColor = const Color(0xFFFF9800);
-        borderRadiusVal = 4;
-        border = Border.all(
-          color: const Color(0xFFFF9800).withValues(alpha: 0.35),
-          width: 1.5,
-        );
-        shadows = [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.6),
-            blurRadius: 4,
-            offset: const Offset(2, 2),
-          ),
-        ];
-        extraStyle = const TextStyle(
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.5,
-        );
-        break;
-      case DarknessStage.cyberpunk:
-        containerColor = const Color(0xFF0A0E21);
-        textColor = const Color(0xFF00FFFF);
-        iconColor = const Color(0xFFFF0080);
-        borderRadiusVal = 8;
-        border = Border.all(
-          color: const Color(0xFF00FFFF).withValues(alpha: 0.4),
-          width: 1,
-        );
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFF00FFFF).withValues(alpha: 0.2),
-            blurRadius: 12,
-            spreadRadius: 1,
-          ),
-        ];
-        extraStyle = const TextStyle(
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.5,
-        );
-        break;
-      case DarknessStage.stalker:
-        containerColor = const Color(0xFF050505);
-        textColor = const Color(0xFF39FF14);
-        iconColor = const Color(0xFF39FF14);
-        borderRadiusVal = 2;
-        border = Border.all(
-          color: const Color(0xFF39FF14).withValues(alpha: 0.3),
-          width: 1,
-        );
-        extraStyle = const TextStyle(
-          fontWeight: FontWeight.bold,
-          fontFamily: 'monospace',
-          letterSpacing: 2,
-          shadows: [
-            Shadow(blurRadius: 4, color: Color(0xFF39FF14)),
-          ],
-        );
-        break;
-      default:
-        containerColor =
-            isDark ? const Color(0xFF2C2C2C) : Colors.grey.shade300;
-        textColor = isDark ? Colors.white : Colors.black87;
-        iconColor = Colors.orange;
-        borderRadiusVal = 12;
-    }
-
-    final baseTextStyle = TextStyle(
-      fontSize: 18,
-      fontWeight: FontWeight.bold,
-      color: textColor,
-    );
-    final finalTextStyle =
-        extraStyle != null ? baseTextStyle.merge(extraStyle) : baseTextStyle;
-
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: containerColor,
-          borderRadius: BorderRadius.circular(borderRadiusVal),
-          border: border,
-          boxShadow: shadows,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.timer_outlined, color: iconColor, size: 24),
-            const SizedBox(width: 8),
-            Text(msg, style: finalTextStyle),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _setDataSourceMode(DataSourceMode mode) {
+  void _setDataSourceMode(DataSourceMode mode) async {
     if (!_powerMonitorEnabled) return;
     if (_dataSourceMode == mode) return;
 
-    setState(() => _dataSourceMode = mode);
+    setState(() {
+      _dataSourceMode = mode;
+      _recalculateDisplayData();
+    });
     if (mode == DataSourceMode.real) {
-      _loadRealOutageData(_getDisplayDate()).then((_) {
-        if (mounted) setState(() {});
-      });
+      await _loadRealOutageData(_getDisplayDate());
+      if (mounted) {
+        setState(() {
+          _recalculateDisplayData();
+        });
+      }
     }
+  }
+
+  bool get _isAtEarliestDate {
+    final displayDate = _getDisplayDate();
+    final firstAllowed = DateTime(2024);
+    return displayDate.isBefore(firstAllowed) ||
+        DateUtils.isSameDay(displayDate, firstAllowed);
   }
 
   Future<void> _navigateDate(int offset) async {
     if (offset == 0) return;
 
+    final now = DateTime.now();
+    final firstAllowed = DateTime(2024);
     DateTime current;
     switch (_viewMode) {
       case ScheduleViewMode.today:
-        current = DateTime.now();
+        current = DateTime(now.year, now.month, now.day);
         break;
       case ScheduleViewMode.yesterday:
-        current = DateTime.now().subtract(const Duration(days: 1));
+        current = DateTime(now.year, now.month, now.day - 1);
         break;
       case ScheduleViewMode.tomorrow:
-        current = DateTime.now().add(const Duration(days: 1));
+        current = DateTime(now.year, now.month, now.day + 1);
         break;
       case ScheduleViewMode.history:
-        current =
-            _historyDate ?? DateTime.now().subtract(const Duration(days: 2));
+        current = _historyDate ?? DateTime(now.year, now.month, now.day - 2);
         break;
     }
 
-    final newDate = current.add(Duration(days: offset));
-    final now = DateTime.now();
-    final yesterday = now.subtract(const Duration(days: 1));
-    final tomorrow = now.add(const Duration(days: 1));
+    final newDate = DateTime(current.year, current.month, current.day + offset);
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = DateTime(now.year, now.month, now.day - 1);
+    final tomorrow = DateTime(now.year, now.month, now.day + 1);
 
-    if (DateUtils.isSameDay(newDate, now)) {
-      setState(() => _viewMode = ScheduleViewMode.today);
-      _updateStatusDate();
+    if (offset > 0 &&
+        (_viewMode == ScheduleViewMode.tomorrow || newDate.isAfter(tomorrow))) {
+      return;
+    }
+    if (offset < 0 && (newDate.isBefore(firstAllowed) || _isAtEarliestDate)) {
+      return;
+    }
+
+    _wasUpdated = false;
+
+    if (DateUtils.isSameDay(newDate, today)) {
+      setState(() {
+        _viewMode = ScheduleViewMode.today;
+        _historyVersions = [];
+        _selectedVersionIndex = -1;
+        _historySchedule = null;
+        _recalculateDisplayData();
+      });
       await _refreshVersionsForCurrentMode();
+      if (!mounted) return;
+      _updateStatusDate();
 
       if (_dataSourceMode == DataSourceMode.real) {
-        _loadRealOutageData(newDate).then((_) => setState(() {}));
+        await _loadRealOutageData(newDate);
+        if (mounted) setState(() => _recalculateDisplayData());
       }
     } else if (DateUtils.isSameDay(newDate, yesterday)) {
       setState(() {
         _viewMode = ScheduleViewMode.yesterday;
         _historyDate = newDate;
+        _historyVersions = [];
+        _selectedVersionIndex = -1;
+        _historySchedule = null;
+        _recalculateDisplayData();
       });
-      _loadHistoryData(newDate);
+      await _loadHistoryData(newDate);
+      if (!mounted) return;
       if (_dataSourceMode == DataSourceMode.real) {
-        _loadRealOutageData(newDate).then((_) => setState(() {}));
+        await _loadRealOutageData(newDate);
+        if (mounted) setState(() => _recalculateDisplayData());
       }
     } else if (DateUtils.isSameDay(newDate, tomorrow)) {
-      setState(() => _viewMode = ScheduleViewMode.tomorrow);
-      _updateStatusDate();
+      setState(() {
+        _viewMode = ScheduleViewMode.tomorrow;
+        _historyVersions = [];
+        _selectedVersionIndex = -1;
+        _historySchedule = null;
+        _recalculateDisplayData();
+      });
       await _refreshVersionsForCurrentMode();
+      if (!mounted) return;
+      _updateStatusDate();
+
       if (_dataSourceMode == DataSourceMode.real) {
-        _loadRealOutageData(newDate).then((_) => setState(() {}));
+        await _loadRealOutageData(newDate);
+        if (mounted) setState(() => _recalculateDisplayData());
       }
     } else {
       setState(() {
         _viewMode = ScheduleViewMode.history;
         _historyDate = newDate;
+        _historyVersions = [];
+        _selectedVersionIndex = -1;
+        _historySchedule = null;
+        _recalculateDisplayData();
       });
-      _loadHistoryData(newDate);
+      await _loadHistoryData(newDate);
+      if (!mounted) return;
       if (_dataSourceMode == DataSourceMode.real) {
-        _loadRealOutageData(newDate).then((_) => setState(() {}));
+        await _loadRealOutageData(newDate);
+        if (mounted) setState(() => _recalculateDisplayData());
       }
     }
   }
@@ -1928,44 +2190,8 @@ class _HomeScreenState extends State<HomeScreen>
     final screenWidth = MediaQuery.of(context).size.width;
     final int cols = screenWidth > 800 ? 8 : (screenWidth > 600 ? 6 : 4);
 
-    DailySchedule? currentDisplay;
-    final displayDate = _getDisplayDate();
-
-    if (_viewMode == ScheduleViewMode.today) {
-      if (_historyVersions.isNotEmpty &&
-          _selectedVersionIndex >= 0 &&
-          _historySchedule != null) {
-        currentDisplay = _historySchedule;
-      } else {
-        currentDisplay = _allSchedules[_currentGroup]?.today;
-      }
-    } else if (_viewMode == ScheduleViewMode.tomorrow) {
-      if (_historyVersions.isNotEmpty &&
-          _selectedVersionIndex >= 0 &&
-          _historySchedule != null) {
-        currentDisplay = _historySchedule;
-      } else {
-        currentDisplay = _allSchedules[_currentGroup]?.tomorrow;
-      }
-    } else if (_viewMode == ScheduleViewMode.yesterday) {
-      currentDisplay = _historySchedule;
-    } else if (_viewMode == ScheduleViewMode.history) {
-      currentDisplay = _historySchedule;
-    }
-
-    // Override with real data if in real mode
-    List<IntervalInfo> intervals;
-    _realHourSegments = null;
-    if (_powerMonitorEnabled && _dataSourceMode == DataSourceMode.real) {
-      currentDisplay = _buildRealScheduleFromIntervals(
-          _realOutageIntervals, displayDate,
-          baseSchedule: currentDisplay);
-      intervals = _generateRealIntervals(_realOutageIntervals, displayDate);
-      _realHourSegments =
-          _computeAllHourSegments(_realOutageIntervals, displayDate);
-    } else {
-      intervals = _generateIntervals(currentDisplay);
-    }
+    final currentDisplay = _currentDisplaySchedule;
+    final intervals = _cachedIntervals;
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -2045,14 +2271,20 @@ class _HomeScreenState extends State<HomeScreen>
               IconButton(
                 icon: Icon(Icons.refresh,
                     color: isDark ? Colors.white : Colors.black87),
-                onPressed: () {
+                onPressed: () async {
                   if (_isHistoryMode) {
                     final targetDate = _getDisplayDate();
-                    _loadHistoryData(targetDate);
+                    await _loadHistoryData(targetDate);
                   } else {
-                    _loadData(force: true);
+                    await _loadData(force: true);
                   }
-                  if (_powerMonitorEnabled) _powerMonitor.forceRefresh();
+                  if (_powerMonitorEnabled) {
+                    _powerMonitor.forceRefresh();
+                    if (_dataSourceMode == DataSourceMode.real) {
+                      await _loadRealOutageData(_getDisplayDate());
+                      if (mounted) setState(() => _recalculateDisplayData());
+                    }
+                  }
                   _achievementService.trackRefresh();
                 },
               ),
@@ -2081,6 +2313,7 @@ class _HomeScreenState extends State<HomeScreen>
                             onThemeChanged: widget.onThemeChanged,
                             onScaleChanged: widget.onScaleChanged)),
                   );
+                  if (!mounted) return;
                   _loadPreferencesAndData();
                   _initPowerMonitor();
                 },
@@ -2101,13 +2334,22 @@ class _HomeScreenState extends State<HomeScreen>
                           IconButton(
                             icon: DarknessThemeService().buildArrowIcon(
                               forward: false,
-                              color: Theme.of(context)
-                                      .textTheme
-                                      .titleLarge
-                                      ?.color ??
-                                  Colors.white,
+                              color: _isAtEarliestDate
+                                  ? (Theme.of(context)
+                                              .textTheme
+                                              .titleLarge
+                                              ?.color ??
+                                          Colors.white)
+                                      .withValues(alpha: 0.3)
+                                  : (Theme.of(context)
+                                          .textTheme
+                                          .titleLarge
+                                          ?.color ??
+                                      Colors.white),
                             ),
-                            onPressed: () => _navigateDate(-1),
+                            onPressed: _isAtEarliestDate
+                                ? null
+                                : () => _navigateDate(-1),
                           ),
                           Padding(
                             padding:
@@ -2115,13 +2357,15 @@ class _HomeScreenState extends State<HomeScreen>
                             child: ChoiceChip(
                               label: const Text('Минуле'),
                               selected: _viewMode == ScheduleViewMode.history,
-                              onSelected: (bool selected) {
-                                _selectDateAndLoad().then((_) {
-                                  if (_dataSourceMode == DataSourceMode.real) {
-                                    _loadRealOutageData(_getDisplayDate())
-                                        .then((_) => setState(() {}));
+                              onSelected: (bool selected) async {
+                                await _selectDateAndLoad();
+                                if (!mounted) return;
+                                if (_dataSourceMode == DataSourceMode.real) {
+                                  await _loadRealOutageData(_getDisplayDate());
+                                  if (mounted) {
+                                    setState(() => _recalculateDisplayData());
                                   }
-                                });
+                                }
                               },
                             ),
                           ),
@@ -2131,17 +2375,27 @@ class _HomeScreenState extends State<HomeScreen>
                             child: ChoiceChip(
                               label: const Text('Вчора'),
                               selected: _viewMode == ScheduleViewMode.yesterday,
-                              onSelected: (bool selected) {
+                              onSelected: (bool selected) async {
                                 if (selected) {
+                                  final now = DateTime.now();
+                                  final yDate = DateTime(
+                                      now.year, now.month, now.day - 1);
+                                  _wasUpdated = false;
                                   setState(() {
                                     _viewMode = ScheduleViewMode.yesterday;
-                                    _historyDate = DateTime.now()
-                                        .subtract(const Duration(days: 1));
+                                    _historyDate = yDate;
+                                    _historyVersions = [];
+                                    _selectedVersionIndex = -1;
+                                    _historySchedule = null;
+                                    _recalculateDisplayData();
                                   });
-                                  _loadHistoryData(_historyDate!);
+                                  await _loadHistoryData(yDate);
+                                  if (!mounted) return;
                                   if (_dataSourceMode == DataSourceMode.real) {
-                                    _loadRealOutageData(_historyDate!)
-                                        .then((_) => setState(() {}));
+                                    await _loadRealOutageData(yDate);
+                                    if (mounted) {
+                                      setState(() => _recalculateDisplayData());
+                                    }
                                   }
                                 }
                               },
@@ -2153,15 +2407,26 @@ class _HomeScreenState extends State<HomeScreen>
                             child: ChoiceChip(
                               label: const Text('Сьогодні'),
                               selected: _viewMode == ScheduleViewMode.today,
-                              onSelected: (bool selected) {
-                                setState(() {
-                                  _viewMode = ScheduleViewMode.today;
-                                });
-                                _updateStatusDate();
-                                _refreshVersionsForCurrentMode();
-                                if (_dataSourceMode == DataSourceMode.real) {
-                                  _loadRealOutageData(DateTime.now())
-                                      .then((_) => setState(() {}));
+                              onSelected: (bool selected) async {
+                                if (selected &&
+                                    _viewMode != ScheduleViewMode.today) {
+                                  _wasUpdated = false;
+                                  setState(() {
+                                    _viewMode = ScheduleViewMode.today;
+                                    _historyVersions = [];
+                                    _selectedVersionIndex = -1;
+                                    _historySchedule = null;
+                                    _recalculateDisplayData();
+                                  });
+                                  await _refreshVersionsForCurrentMode();
+                                  if (!mounted) return;
+                                  _updateStatusDate();
+                                  if (_dataSourceMode == DataSourceMode.real) {
+                                    await _loadRealOutageData(DateTime.now());
+                                    if (mounted) {
+                                      setState(() => _recalculateDisplayData());
+                                    }
+                                  }
                                 }
                               },
                             ),
@@ -2172,16 +2437,29 @@ class _HomeScreenState extends State<HomeScreen>
                             child: ChoiceChip(
                               label: const Text('Завтра'),
                               selected: _viewMode == ScheduleViewMode.tomorrow,
-                              onSelected: (bool selected) {
-                                setState(() {
-                                  _viewMode = ScheduleViewMode.tomorrow;
-                                });
-                                _updateStatusDate();
-                                _refreshVersionsForCurrentMode();
-                                if (_dataSourceMode == DataSourceMode.real) {
-                                  _loadRealOutageData(DateTime.now()
-                                          .add(const Duration(days: 1)))
-                                      .then((_) => setState(() {}));
+                              onSelected: (bool selected) async {
+                                if (selected &&
+                                    _viewMode != ScheduleViewMode.tomorrow) {
+                                  final now = DateTime.now();
+                                  final tDate = DateTime(
+                                      now.year, now.month, now.day + 1);
+                                  _wasUpdated = false;
+                                  setState(() {
+                                    _viewMode = ScheduleViewMode.tomorrow;
+                                    _historyVersions = [];
+                                    _selectedVersionIndex = -1;
+                                    _historySchedule = null;
+                                    _recalculateDisplayData();
+                                  });
+                                  await _refreshVersionsForCurrentMode();
+                                  if (!mounted) return;
+                                  _updateStatusDate();
+                                  if (_dataSourceMode == DataSourceMode.real) {
+                                    await _loadRealOutageData(tDate);
+                                    if (mounted) {
+                                      setState(() => _recalculateDisplayData());
+                                    }
+                                  }
                                 }
                               },
                             ),
@@ -2189,13 +2467,22 @@ class _HomeScreenState extends State<HomeScreen>
                           IconButton(
                             icon: DarknessThemeService().buildArrowIcon(
                               forward: true,
-                              color: Theme.of(context)
-                                      .textTheme
-                                      .titleLarge
-                                      ?.color ??
-                                  Colors.white,
+                              color: _viewMode == ScheduleViewMode.tomorrow
+                                  ? (Theme.of(context)
+                                              .textTheme
+                                              .titleLarge
+                                              ?.color ??
+                                          Colors.white)
+                                      .withValues(alpha: 0.3)
+                                  : (Theme.of(context)
+                                          .textTheme
+                                          .titleLarge
+                                          ?.color ??
+                                      Colors.white),
                             ),
-                            onPressed: () => _navigateDate(1),
+                            onPressed: _viewMode == ScheduleViewMode.tomorrow
+                                ? null
+                                : () => _navigateDate(1),
                           ),
                         ],
                       ),
@@ -2222,9 +2509,12 @@ class _HomeScreenState extends State<HomeScreen>
                     ),
                   ),
                   if (!_isLoading) ...[
-                    const SizedBox(height: 8),
-                    if (_viewMode == ScheduleViewMode.today)
-                      _buildCountdownWidget(_allSchedules[_currentGroup]),
+                    if (_viewMode == ScheduleViewMode.today) ...[
+                      const SizedBox(height: 8),
+                      CountdownCard(
+                        fullSchedule: _allSchedules[_currentGroup],
+                      ),
+                    ],
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8.0),
                       child: Text(
@@ -2253,6 +2543,14 @@ class _HomeScreenState extends State<HomeScreen>
                                 await _loadHistoryData(targetDate);
                               } else {
                                 await _loadData(silent: true, force: true);
+                              }
+                              if (_powerMonitorEnabled &&
+                                  _dataSourceMode == DataSourceMode.real) {
+                                _powerMonitor.forceRefresh();
+                                await _loadRealOutageData(_getDisplayDate());
+                                if (mounted) {
+                                  setState(() => _recalculateDisplayData());
+                                }
                               }
                             },
                             child: ListView(
