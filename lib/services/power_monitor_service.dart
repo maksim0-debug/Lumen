@@ -20,8 +20,39 @@ class PowerMonitorService {
   DateTime? _lastEventTime;
   bool _isEnabled = false;
 
-  // Callbacks для UI
-  void Function(String status)? onStatusChanged;
+  final List<void Function(String status)> _statusListeners = [];
+
+  void addStatusListener(void Function(String status) listener) {
+    if (!_statusListeners.contains(listener)) {
+      _statusListeners.add(listener);
+    }
+  }
+
+  void removeStatusListener(void Function(String status) listener) {
+    _statusListeners.remove(listener);
+  }
+
+  void Function(String status)? _onStatusChangedLegacy;
+  void Function(String status)? get onStatusChanged => _onStatusChangedLegacy;
+  set onStatusChanged(void Function(String status)? callback) {
+    if (_onStatusChangedLegacy != null) {
+      _statusListeners.remove(_onStatusChangedLegacy);
+    }
+    _onStatusChangedLegacy = callback;
+    if (callback != null) {
+      _statusListeners.add(callback);
+    }
+  }
+
+  void _notifyStatusChanged(String status) {
+    for (final listener in List.of(_statusListeners)) {
+      try {
+        listener(status);
+      } catch (e) {
+        AppLogger.e('Error in status listener', tag: 'PowerMonitor', error: e);
+      }
+    }
+  }
 
   String get currentStatus => _currentStatus;
   DateTime? get lastEventTime => _lastEventTime;
@@ -75,7 +106,7 @@ class PowerMonitorService {
     } else {
       stopPolling();
       _currentStatus = 'unknown';
-      onStatusChanged?.call(_currentStatus);
+      _notifyStatusChanged(_currentStatus);
     }
   }
 
@@ -277,9 +308,7 @@ class PowerMonitorService {
     }
 
     AppLogger.d('Status updated to: $_currentStatus', tag: 'PowerMonitor');
-    if (onStatusChanged != null) {
-      onStatusChanged!(_currentStatus);
-    }
+    _notifyStatusChanged(_currentStatus);
   }
 
   /// Отримати всі події з локальної БД (відсортовані за timestamp).

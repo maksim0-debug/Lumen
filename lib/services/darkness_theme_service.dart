@@ -39,8 +39,40 @@ class DarknessThemeService {
   DarknessStage _currentStage = DarknessStage.solarpunk;
   Timer? _refreshTimer;
 
-  /// Callback — викликається коли стадія змінилася і потрібно оновити тему.
-  void Function(DarknessStage stage)? onStageChanged;
+  final List<void Function(DarknessStage stage)> _stageListeners = [];
+
+  void addStageListener(void Function(DarknessStage stage) listener) {
+    if (!_stageListeners.contains(listener)) {
+      _stageListeners.add(listener);
+    }
+  }
+
+  void removeStageListener(void Function(DarknessStage stage) listener) {
+    _stageListeners.remove(listener);
+  }
+
+  void Function(DarknessStage stage)? _onStageChangedLegacy;
+  void Function(DarknessStage stage)? get onStageChanged =>
+      _onStageChangedLegacy;
+  set onStageChanged(void Function(DarknessStage stage)? callback) {
+    if (_onStageChangedLegacy != null) {
+      _stageListeners.remove(_onStageChangedLegacy);
+    }
+    _onStageChangedLegacy = callback;
+    if (callback != null) {
+      _stageListeners.add(callback);
+    }
+  }
+
+  void _notifyStageChanged(DarknessStage stage) {
+    for (final listener in List.of(_stageListeners)) {
+      try {
+        listener(stage);
+      } catch (e) {
+        AppLogger.e('Error in stage listener', tag: 'DarknessTheme', error: e);
+      }
+    }
+  }
 
   bool get isEnabled => _mode != 'off';
   bool get isAuto => _mode == 'auto';
@@ -114,7 +146,7 @@ class DarknessThemeService {
         break;
     }
     // Сповістити про зміну, щоб UI оновився
-    onStageChanged?.call(_currentStage);
+    _notifyStageChanged(_currentStage);
   }
 
   /// Встановити чи дозволені анімації
@@ -130,7 +162,7 @@ class DarknessThemeService {
           tag: 'DarknessTheme', error: e);
     }
     // Сповістити про зміну, щоб UI оновився
-    onStageChanged?.call(currentStage);
+    _notifyStageChanged(currentStage);
   }
 
   /// Встановити режим роботи.
@@ -157,7 +189,7 @@ class DarknessThemeService {
     }
 
     // Завжди викликаємо callback, щоб main.dart оновив тему
-    onStageChanged?.call(_currentStage);
+    _notifyStageChanged(_currentStage);
   }
 
   /// Примусове оновлення стадії (тільки для Auto).
@@ -190,7 +222,7 @@ class DarknessThemeService {
   void _setStage(DarknessStage stage) {
     if (stage != _currentStage) {
       _currentStage = stage;
-      onStageChanged?.call(stage);
+      _notifyStageChanged(stage);
     }
   }
 

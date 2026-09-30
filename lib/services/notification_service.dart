@@ -29,14 +29,24 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
 
   bool _isInitialized = false;
+  Future<void>? _initFuture;
   String? _windowsIconPath;
 
-  Future<void> init() async {
+  Future<void> init() {
     if (_isInitialized) {
       AppLogger.d("Вже ініціалізовано", tag: 'NotificationService');
-      return;
+      return Future.value();
     }
+    if (_initFuture != null) {
+      AppLogger.d("Ініціалізація вже триває, очікуємо завершення...",
+          tag: 'NotificationService');
+      return _initFuture!;
+    }
+    _initFuture = _doInit();
+    return _initFuture!;
+  }
 
+  Future<void> _doInit() async {
     AppLogger.i("========== ІНІЦІАЛІЗАЦІЯ ==========",
         tag: 'NotificationService');
 
@@ -89,6 +99,7 @@ class NotificationService {
       _isInitialized = true;
       AppLogger.i("✅✅✅ ІНІЦІАЛІЗАЦІЯ ЗАВЕРШЕНА", tag: 'NotificationService');
     } catch (e, stackTrace) {
+      _initFuture = null;
       AppLogger.e("ПОМИЛКА ІНІЦІАЛІЗАЦІЇ",
           tag: 'NotificationService', error: e, stackTrace: stackTrace);
     }

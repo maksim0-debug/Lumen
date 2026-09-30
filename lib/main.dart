@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
-import 'dart:ui';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -11,6 +9,8 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:home_widget/home_widget.dart';
+
+import 'package:path/path.dart' as p;
 
 import 'services/app_logger.dart';
 import 'services/background_service.dart';
@@ -23,8 +23,11 @@ import 'services/preferences_helper.dart';
 import 'services/achievement_service.dart';
 import 'services/darkness_theme_service.dart';
 import 'services/countdown_service.dart';
+import 'services/hour_segment_service.dart';
 import 'models/schedule_status.dart';
 import 'models/power_event.dart';
+import 'models/hour_segment.dart';
+import 'theme/darkness_stage_style.dart';
 import 'ui/settings_page.dart';
 import 'ui/analytics_screen.dart';
 import 'ui/achievements_screen.dart';
@@ -58,7 +61,7 @@ Future<void> backgroundCallback(Uri? uri) async {
 
 void main() async {
   AppLogger.i("========================================", tag: 'MAIN');
-  AppLogger.i("ВЕРСИЯ ПРИЛОЖЕНИЯ: 2.3.4 (Fix Saving & UI)", tag: 'MAIN');
+  AppLogger.i("ВЕРСІЯ ДОДАТКУ: 2.3.4 (Fix Saving & UI)", tag: 'MAIN');
   AppLogger.i("========================================", tag: 'MAIN');
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -83,9 +86,19 @@ void main() async {
     } catch (e) {
       AppLogger.e("Помилка Window Manager", tag: 'MAIN', error: e);
     }
+  }
 
+  // Не блокуємо рендеринг інтерфейсу запуском повільних нативних сервісів
+  unawaited(_initBackgroundServices());
+
+  runApp(const MyApp());
+}
+
+Future<void> _initBackgroundServices() async {
+  if (Platform.isWindows) {
     try {
-      PackageInfo packageInfo = await PackageInfo.fromPlatform();
+      final packageInfo =
+          await PackageInfo.fromPlatform().timeout(const Duration(seconds: 3));
 
       if (packageInfo.appName != "Lumen") {
         launchAtStartup.setup(
@@ -106,7 +119,7 @@ void main() async {
 
   try {
     final notificationService = NotificationService();
-    await notificationService.init();
+    await notificationService.init().timeout(const Duration(seconds: 4));
   } catch (e) {
     AppLogger.e("Помилка сповіщень", tag: 'MAIN', error: e);
   }
@@ -114,14 +127,12 @@ void main() async {
   if (Platform.isAndroid) {
     try {
       final bgManager = BackgroundManager();
-      await bgManager.init();
+      await bgManager.init().timeout(const Duration(seconds: 4));
       bgManager.registerPeriodicTask();
     } catch (e) {
       AppLogger.e("Помилка Background", tag: 'MAIN', error: e);
     }
   }
-
-  runApp(const MyApp());
 }
 
 class MyApp extends StatefulWidget {
@@ -286,28 +297,6 @@ class IntervalInfo {
       {this.startEventId, this.endEventId});
 }
 
-/// Сегмент всередині однієї години для пропорційної візуалізації.
-class HourSegment {
-  final double startFraction; // 0.0–1.0 (0 мін – 60 мін)
-  final double endFraction; // 0.0–1.0
-  final Color color;
-  final bool isFuture;
-
-  HourSegment(this.startFraction, this.endFraction, this.color,
-      {this.isFuture = false});
-
-  double get width => endFraction - startFraction;
-  double get start => startFraction;
-  double get end => endFraction;
-}
-
-/// Допоміжний клас для діапазону відключення всередині години.
-class _OffRange {
-  final double start;
-  final double end;
-  _OffRange(this.start, this.end);
-}
-
 class CountdownCard extends StatefulWidget {
   final FullSchedule? fullSchedule;
 
@@ -328,13 +317,23 @@ class _CountdownCardState extends State<CountdownCard> {
   void initState() {
     super.initState();
     _lastRenderedMinute = DateTime.now().minute;
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && widget.fullSchedule != null) {
-        final currentMinute = DateTime.now().minute;
-        if (currentMinute != _lastRenderedMinute) {
-          _lastRenderedMinute = currentMinute;
-          setState(() {});
+    _scheduleNextMinuteTick();
+  }
+
+  void _scheduleNextMinuteTick() {
+    _ticker?.cancel();
+    final now = DateTime.now();
+    final msToNextMinute = (60 - now.second) * 1000 - now.millisecond + 100;
+    _ticker = Timer(Duration(milliseconds: msToNextMinute), () {
+      if (mounted) {
+        if (widget.fullSchedule != null) {
+          final currentMinute = DateTime.now().minute;
+          if (currentMinute != _lastRenderedMinute) {
+            _lastRenderedMinute = currentMinute;
+            setState(() {});
+          }
         }
+        _scheduleNextMinuteTick();
       }
     });
   }
@@ -368,125 +367,36 @@ class _CountdownCardState extends State<CountdownCard> {
     if (countdown == null) return const SizedBox.shrink();
 
     final msg = countdown.message;
-
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final darknessService = DarknessThemeService();
     final stage =
         darknessService.isEnabled ? darknessService.currentStage : null;
 
-    // Resolve colors per theme
-    Color containerColor;
-    Color textColor;
-    Color iconColor;
-    double borderRadiusVal;
-    Border? border;
-    List<BoxShadow>? shadows;
-    TextStyle? extraStyle;
-
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        containerColor = const Color(0xFF1B5E20).withValues(alpha: 0.85);
-        textColor = const Color(0xFFE8F5E9);
-        iconColor = const Color(0xFF66BB6A);
-        borderRadiusVal = 16;
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFF66BB6A).withValues(alpha: 0.2),
-            blurRadius: 8,
-            spreadRadius: 1,
-          ),
-        ];
-        break;
-      case DarknessStage.dieselpunk:
-        containerColor = const Color(0xFF1A1A1A);
-        textColor = const Color(0xFFFFD54F);
-        iconColor = const Color(0xFFFF9800);
-        borderRadiusVal = 4;
-        border = Border.all(
-          color: const Color(0xFFFF9800).withValues(alpha: 0.35),
-          width: 1.5,
-        );
-        shadows = [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.6),
-            blurRadius: 4,
-            offset: const Offset(2, 2),
-          ),
-        ];
-        extraStyle = const TextStyle(
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.5,
-        );
-        break;
-      case DarknessStage.cyberpunk:
-        containerColor = const Color(0xFF0A0E21);
-        textColor = const Color(0xFF00FFFF);
-        iconColor = const Color(0xFFFF0080);
-        borderRadiusVal = 8;
-        border = Border.all(
-          color: const Color(0xFF00FFFF).withValues(alpha: 0.4),
-          width: 1,
-        );
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFF00FFFF).withValues(alpha: 0.2),
-            blurRadius: 12,
-            spreadRadius: 1,
-          ),
-        ];
-        extraStyle = const TextStyle(
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.5,
-        );
-        break;
-      case DarknessStage.stalker:
-        containerColor = const Color(0xFF050505);
-        textColor = const Color(0xFF39FF14);
-        iconColor = const Color(0xFF39FF14);
-        borderRadiusVal = 2;
-        border = Border.all(
-          color: const Color(0xFF39FF14).withValues(alpha: 0.3),
-          width: 1,
-        );
-        extraStyle = const TextStyle(
-          fontWeight: FontWeight.bold,
-          fontFamily: 'monospace',
-          letterSpacing: 2,
-          shadows: [
-            Shadow(blurRadius: 4, color: Color(0xFF39FF14)),
-          ],
-        );
-        break;
-      default:
-        containerColor =
-            isDark ? const Color(0xFF2C2C2C) : Colors.grey.shade300;
-        textColor = isDark ? Colors.white : Colors.black87;
-        iconColor = Colors.orange;
-        borderRadiusVal = 12;
-    }
+    final style = DarknessStageStyle.of(stage).countdownStyle(isDark);
 
     final baseTextStyle = TextStyle(
       fontSize: 18,
       fontWeight: FontWeight.bold,
-      color: textColor,
+      color: style.textColor,
     );
-    final finalTextStyle =
-        extraStyle != null ? baseTextStyle.merge(extraStyle) : baseTextStyle;
+    final finalTextStyle = style.extraStyle != null
+        ? baseTextStyle.merge(style.extraStyle)
+        : baseTextStyle;
 
     return Center(
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: containerColor,
-          borderRadius: BorderRadius.circular(borderRadiusVal),
-          border: border,
-          boxShadow: shadows,
+          color: style.containerColor,
+          borderRadius: BorderRadius.circular(style.borderRadius),
+          border: style.border,
+          boxShadow: style.shadows,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.timer_outlined, color: iconColor, size: 24),
+            Icon(Icons.timer_outlined, color: style.iconColor, size: 24),
             const SizedBox(width: 8),
             Text(msg, style: finalTextStyle),
           ],
@@ -594,8 +504,9 @@ class _HomeScreenState extends State<HomeScreen>
       );
       _cachedIntervals =
           _generateRealIntervals(_realOutageIntervals, displayDate);
-      _realHourSegments =
-          _computeAllHourSegments(_realOutageIntervals, displayDate);
+      _realHourSegments = _computeAllHourSegments(
+          _realOutageIntervals, displayDate,
+          baseSchedule: currentDisplay);
     } else {
       _currentDisplaySchedule = currentDisplay;
       _cachedIntervals = _generateIntervals(currentDisplay);
@@ -615,23 +526,30 @@ class _HomeScreenState extends State<HomeScreen>
     _loadPreferencesAndData();
     _initPowerMonitor();
     _initAchievements();
+    _schedulePeriodicUpdates();
+  }
 
-    _timer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      final now = DateTime.now();
+  void _schedulePeriodicUpdates() {
+    _timer?.cancel();
+    final now = DateTime.now();
+    final msToNextMinute = (60 - now.second) * 1000 - now.millisecond + 100;
+    _timer = Timer(Duration(milliseconds: msToNextMinute), () {
+      if (!mounted) return;
+      final current = DateTime.now();
 
-      if (now.minute % 15 == 0 && now.minute != _lastAutoRefreshMinute) {
-        _lastAutoRefreshMinute = now.minute;
+      if (current.minute % 15 == 0 &&
+          current.minute != _lastAutoRefreshMinute) {
+        _lastAutoRefreshMinute = current.minute;
         _loadData(silent: true);
       }
 
-      if (now.minute != _lastRenderedMinute) {
-        _lastRenderedMinute = now.minute;
-        if (mounted) {
-          setState(() {
-            _recalculateDisplayData();
-          });
-        }
+      if (current.minute != _lastRenderedMinute) {
+        _lastRenderedMinute = current.minute;
+        setState(() {
+          _recalculateDisplayData();
+        });
       }
+      _schedulePeriodicUpdates();
     });
   }
 
@@ -697,17 +615,22 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  int _realOutageLoadRequestId = 0;
+
   Future<void> _loadRealOutageData(DateTime date) async {
     if (!_powerMonitorEnabled) return;
+    final requestId = ++_realOutageLoadRequestId;
     final dateAtCall = date;
     try {
       final intervals = await _powerMonitor.getOutageIntervalsForDate(date);
-      if (!mounted) return;
+      if (!mounted || requestId != _realOutageLoadRequestId) return;
       if (!DateUtils.isSameDay(dateAtCall, _getDisplayDate())) return;
       _realOutageIntervals = intervals;
     } catch (e) {
       AppLogger.e('Error loading real outage data', tag: 'Main', error: e);
-      if (mounted && DateUtils.isSameDay(dateAtCall, _getDisplayDate())) {
+      if (mounted &&
+          requestId == _realOutageLoadRequestId &&
+          DateUtils.isSameDay(dateAtCall, _getDisplayDate())) {
         _realOutageIntervals = [];
       }
     }
@@ -870,9 +793,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _initTray() async {
     if (Platform.isWindows) {
-      final exePath = Platform.resolvedExecutable;
-      final exeDir = exePath.substring(0, exePath.lastIndexOf('\\'));
-      final iconPath = '$exeDir\\app_icon.ico';
+      final exeDir = p.dirname(Platform.resolvedExecutable);
+      final iconPath = p.join(exeDir, 'app_icon.ico');
       await trayManager.setIcon(iconPath);
       Menu menu = Menu(items: [
         MenuItem(key: 'show_window', label: 'Відкрити'),
@@ -1080,17 +1002,9 @@ class _HomeScreenState extends State<HomeScreen>
               oldHash != null &&
               oldHash != newHash) {
             if (Platform.isWindows) {
-              final newMinutes = _calculateOutageMinutes(schedule.today);
-              int oldMinutes = 0;
-
-              for (int i = 0; i < oldHash.length && i < 24; i++) {
-                final char = oldHash[i];
-                if (char == '1') {
-                  oldMinutes += 60;
-                } else if (char == '2' || char == '3') {
-                  oldMinutes += 30;
-                }
-              }
+              final newMinutes = schedule.today.totalOutageMinutes;
+              final oldMinutes =
+                  DailySchedule.fromEncodedString(oldHash).totalOutageMinutes;
 
               final diff = newMinutes - oldMinutes;
               if (diff != 0) {
@@ -1144,7 +1058,10 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  int _historyLoadRequestId = 0;
+
   Future<void> _loadHistoryData(DateTime date) async {
+    final requestId = ++_historyLoadRequestId;
     final groupAtCall = _currentGroup;
     final dateAtCall = date;
     setState(() {
@@ -1157,7 +1074,7 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final versions =
           await HistoryService().getVersionsForDate(date, _currentGroup);
-      if (!mounted) return;
+      if (!mounted || requestId != _historyLoadRequestId) return;
       if (_currentGroup != groupAtCall) return;
       if (!DateUtils.isSameDay(dateAtCall, _getDisplayDate())) return;
 
@@ -1180,6 +1097,7 @@ class _HomeScreenState extends State<HomeScreen>
       });
     } catch (e) {
       if (mounted &&
+          requestId == _historyLoadRequestId &&
           _currentGroup == groupAtCall &&
           DateUtils.isSameDay(dateAtCall, _getDisplayDate())) {
         setState(() {
@@ -1314,16 +1232,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   int _calculateOutageMinutes(DailySchedule schedule) {
-    int totalMinutes = 0;
-    for (var status in schedule.hours) {
-      if (status == LightStatus.off) {
-        totalMinutes += 60;
-      } else if (status == LightStatus.semiOn ||
-          status == LightStatus.semiOff) {
-        totalMinutes += 30;
-      }
-    }
-    return totalMinutes;
+    return schedule.totalOutageMinutes;
   }
 
   String _getOutageInfoText(DailySchedule? schedule, bool isTomorrow) {
@@ -1377,25 +1286,7 @@ class _HomeScreenState extends State<HomeScreen>
   /// Точний підрахунок хвилин без світла з реальних інтервалів.
   int _computeRealOutageMinutes(
       List<PowerOutageInterval> intervals, DateTime date) {
-    final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final now = DateTime.now();
-    int totalSeconds = 0;
-
-    for (final interval in intervals) {
-      final effectiveStart =
-          interval.start.isBefore(dayStart) ? dayStart : interval.start;
-      DateTime effectiveEnd;
-      if (interval.end == null) {
-        effectiveEnd = now.isBefore(dayEnd) ? now : dayEnd;
-      } else {
-        effectiveEnd = interval.end!.isAfter(dayEnd) ? dayEnd : interval.end!;
-      }
-      if (effectiveEnd.isAfter(effectiveStart)) {
-        totalSeconds += effectiveEnd.difference(effectiveStart).inSeconds;
-      }
-    }
-    return (totalSeconds / 60).round();
+    return HourSegmentService.computeRealOutageMinutes(intervals, date);
   }
 
   void _updateNotificationsOnly() async {
@@ -1569,185 +1460,29 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Обчислити сегменти для кожної години на основі реальних інтервалів + прогнозу.
   List<List<HourSegment>> _computeAllHourSegments(
-      List<PowerOutageInterval> intervals, DateTime date) {
-    final now = DateTime.now();
-    final isToday =
-        date.year == now.year && date.month == now.month && date.day == now.day;
-
-    // Отримати прогноз DTEK якщо є
-    DailySchedule? forecast;
-    if (_allSchedules.containsKey(_currentGroup)) {
-      if (isToday) {
-        forecast = _allSchedules[_currentGroup]!.today;
-      } else {
-        // Для завтра
-        final tomorrow = DateTime.now().add(const Duration(days: 1));
-        if (date.year == tomorrow.year &&
-            date.month == tomorrow.month &&
-            date.day == tomorrow.day) {
-          forecast = _allSchedules[_currentGroup]!.tomorrow;
+      List<PowerOutageInterval> intervals, DateTime date,
+      {DailySchedule? baseSchedule}) {
+    DailySchedule? forecast = baseSchedule;
+    if (forecast == null || forecast.isEmpty) {
+      final now = DateTime.now();
+      final isToday = date.year == now.year &&
+          date.month == now.month &&
+          date.day == now.day;
+      if (_allSchedules.containsKey(_currentGroup)) {
+        if (isToday) {
+          forecast = _allSchedules[_currentGroup]!.today;
+        } else {
+          final tomorrow = DateTime.now().add(const Duration(days: 1));
+          if (date.year == tomorrow.year &&
+              date.month == tomorrow.month &&
+              date.day == tomorrow.day) {
+            forecast = _allSchedules[_currentGroup]!.tomorrow;
+          }
         }
       }
     }
-
-    final redColor = Colors.red.shade400;
-    final greenColor = Colors.green.shade400;
-    final greyColor = Colors.grey.shade500;
-    final noDataColor = Colors.grey.shade800.withValues(alpha: 0.3);
-
-    List<List<HourSegment>> allSegments = [];
-
-    for (int h = 0; h < 24; h++) {
-      final hourStart = DateTime(date.year, date.month, date.day, h);
-      final hourEnd = hourStart.add(const Duration(hours: 1));
-
-      // Година в майбутньому
-      if (isToday && hourStart.isAfter(now)) {
-        // Повністю в майбутньому — використовуємо прогноз або порожньо
-        if (forecast != null && !forecast.isEmpty) {
-          final fStatus = forecast.hours[h];
-          switch (fStatus) {
-            case LightStatus.on:
-              allSegments
-                  .add([HourSegment(0, 1, greenColor.withValues(alpha: 0.3))]);
-              break;
-            case LightStatus.off:
-              allSegments
-                  .add([HourSegment(0, 1, redColor.withValues(alpha: 0.3))]);
-              break;
-            case LightStatus.semiOn:
-              // Red -> Green
-              allSegments.add([
-                HourSegment(0, 0.5, redColor.withValues(alpha: 0.3)),
-                HourSegment(0.5, 1, greenColor.withValues(alpha: 0.3))
-              ]);
-              break;
-            case LightStatus.semiOff:
-              // Green -> Red
-              allSegments.add([
-                HourSegment(0, 0.5, greenColor.withValues(alpha: 0.3)),
-                HourSegment(0.5, 1, redColor.withValues(alpha: 0.3))
-              ]);
-              break;
-            case LightStatus.maybe:
-              allSegments
-                  .add([HourSegment(0, 1, greyColor.withValues(alpha: 0.4))]);
-              break;
-            default:
-              allSegments.add([HourSegment(0, 1, noDataColor)]);
-          }
-        } else {
-          allSegments.add([HourSegment(0, 1, noDataColor)]);
-        }
-        continue;
-      }
-
-      // Визначити кінець факту для поточної години
-      double factEndFraction = 1.0; // для минулих годин — повні факти
-      if (isToday && now.hour == h) {
-        factEndFraction = now.minute / 60.0;
-      }
-
-      // Побудувати факт-сегменти (зелені/червоні) від 0 до factEndFraction
-      List<HourSegment> segments = [];
-      double cursor = 0.0;
-
-      // Знайти перетини інтервалів з цією годиною
-      List<_OffRange> offRanges = [];
-      for (final interval in intervals) {
-        final intervalEnd = interval.end ?? now;
-        if (interval.start.isAfter(hourEnd) ||
-            intervalEnd.isBefore(hourStart)) {
-          continue;
-        }
-
-        final effectiveStart =
-            interval.start.isAfter(hourStart) ? interval.start : hourStart;
-        final effectiveEnd =
-            intervalEnd.isBefore(hourEnd) ? intervalEnd : hourEnd;
-
-        double startFrac =
-            effectiveStart.difference(hourStart).inSeconds / 3600.0;
-        double endFrac = effectiveEnd.difference(hourStart).inSeconds / 3600.0;
-        startFrac = startFrac.clamp(0.0, 1.0);
-        endFrac = endFrac.clamp(0.0, 1.0);
-
-        // Обрізати по factEndFraction
-        if (startFrac >= factEndFraction) continue;
-        if (endFrac > factEndFraction) endFrac = factEndFraction;
-
-        if (endFrac > startFrac + 0.001) {
-          offRanges.add(_OffRange(startFrac, endFrac));
-        }
-      }
-
-      // Побудувати зелені/червоні сегменти (ФАКТ)
-      for (final r in offRanges) {
-        if (r.start > cursor + 0.005) {
-          segments.add(HourSegment(cursor, r.start, greenColor));
-        }
-        segments.add(HourSegment(r.start, r.end, redColor));
-        cursor = r.end;
-      }
-      if (cursor < factEndFraction - 0.005) {
-        segments.add(HourSegment(cursor, factEndFraction, greenColor));
-      }
-
-      // ---------------------------------------------------------
-      // ПРОГНОЗ для залишку години (після factEndFraction)
-      // ---------------------------------------------------------
-      if (isToday && now.hour == h && factEndFraction < 0.99) {
-        // Якщо є прогноз — беремо його
-        if (forecast != null && !forecast.isEmpty) {
-          final fStatus = forecast.hours[h];
-
-          // Helper to add segment if it overlaps with [factEndFraction, 1.0]
-          void addForecastSegment(double start, double end, Color c) {
-            final double s = start < factEndFraction ? factEndFraction : start;
-            final double e = end; // end is always 0.5 or 1.0
-            if (e > s) {
-              segments.add(HourSegment(s, e, c.withValues(alpha: 0.3)));
-            }
-          }
-
-          switch (fStatus) {
-            case LightStatus.on:
-              addForecastSegment(0.0, 1.0, greenColor);
-              break;
-            case LightStatus.off:
-              addForecastSegment(0.0, 1.0, redColor);
-              break;
-            case LightStatus.semiOn:
-              // 0.0-0.5 OFF (Red), 0.5-1.0 ON (Green)
-              addForecastSegment(0.0, 0.5, redColor);
-              addForecastSegment(0.5, 1.0, greenColor);
-              break;
-            case LightStatus.semiOff:
-              // 0.0-0.5 ON (Green), 0.5-1.0 OFF (Red)
-              addForecastSegment(0.0, 0.5, greenColor);
-              addForecastSegment(0.5, 1.0, redColor);
-              break;
-            case LightStatus.maybe:
-              addForecastSegment(0.0, 1.0, greyColor);
-              break;
-            default:
-              addForecastSegment(0.0, 1.0, noDataColor);
-          }
-        } else {
-          // Немає прогнозу - малюємо "невідомо" або "зелене" (залежить від логіки,
-          // але зазвичай краще показати noData/Unknown)
-          segments.add(HourSegment(factEndFraction, 1.0, noDataColor));
-        }
-      }
-
-      // Якщо взагалі нема сегментів (не повинно бути, але на всяк випадок)
-      if (segments.isEmpty) {
-        segments.add(HourSegment(0, 1, greenColor)); // Default fallback
-      }
-
-      allSegments.add(segments);
-    }
-    return allSegments;
+    return HourSegmentService.computeAllHourSegments(intervals, date,
+        forecast: forecast);
   }
 
   List<IntervalInfo> _generateRealIntervals(
@@ -1759,15 +1494,12 @@ class _HomeScreenState extends State<HomeScreen>
     List<IntervalInfo> result = [];
     DateTime cursor = dayStart;
 
+    final isToday =
+        date.year == now.year && date.month == now.month && date.day == now.day;
+
     // Если интервалов нет вообще
     if (intervals.isEmpty) {
-      // Проверяем текущий статус сервиса. Если статус неизвестен или Offline,
-      // но интервалов нет (значит база пустая), можно показать "?".
-      // Но если мы уверены, что синхронизация прошла, и интервалов нет -> значит свет был весь день.
-
-      // ВАЖНО: Если мониторинг выключен или данных нет, не показываем 24ч ON просто так.
-      // Но для этого примера предположим ON.
-      if (_powerMonitor.isOffline) {
+      if (isToday && _powerMonitor.isOffline) {
         // Весь день нет света?
         return [IntervalInfo("00:00 - 24:00", "OFF ⏳", "24г", Colors.red)];
       }
@@ -2781,33 +2513,9 @@ class _HomeScreenState extends State<HomeScreen>
     final now = DateTime.now();
     final bool showNowLine = isCurrentHour;
     final double nowFraction = showNowLine ? now.minute / 60.0 : 0;
-    final radius = _themedBorderRadius(stage);
-    final textStyle = _themedCellTextStyle(stage);
-
-    // Resolve now-line color per theme
-    Color nowLineColor;
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        nowLineColor = const Color(0xFF2E7D32);
-        break;
-      case DarknessStage.dieselpunk:
-        nowLineColor = const Color(0xFFFF9800);
-        break;
-      case DarknessStage.cyberpunk:
-        nowLineColor = const Color(0xFFFF0080);
-        break;
-      case DarknessStage.stalker:
-        nowLineColor = const Color(0xFFFF1744);
-        break;
-      default:
-        nowLineColor = Colors.white.withValues(alpha: 0.9);
-    }
-
-    // Helper to determine if a color represents "ON" state
-    bool isOn(Color c) {
-      return (c.g * 255.0).round().clamp(0, 255) > 100 &&
-          (c.r * 255.0).round().clamp(0, 255) < 150;
-    }
+    final stageStyle = DarknessStageStyle.of(stage);
+    final textStyle = stageStyle.cellTextStyle;
+    final nowLineColor = stageStyle.nowLineColor;
 
     // Build timeline segments
     Widget timeline = LayoutBuilder(builder: (context, constraints) {
@@ -2819,12 +2527,6 @@ class _HomeScreenState extends State<HomeScreen>
         double start = segment.startFraction;
         double end = segment.endFraction;
 
-        // If this segment is entirely in the past (left of now line) or entirely future (right)
-        // Or if it crosses.
-        // We render it as one piece, BUT we apply "Future" styling if it is effectively "Future".
-        // HOWEVER, the user wants a sharp visual split at `nowFraction`.
-        // So we strictly split segments at `nowFraction` if they overlap.
-
         List<_RenderSegment> distinctParts = [];
 
         if (isCurrentHour) {
@@ -2832,22 +2534,17 @@ class _HomeScreenState extends State<HomeScreen>
           if (start < nowFraction) {
             final effectiveEnd = end < nowFraction ? end : nowFraction;
             distinctParts.add(_RenderSegment(
-                start, effectiveEnd, segment.color, false)); // isFuture=false
+                start, effectiveEnd, segment.color, false,
+                status: segment.status));
           }
           // 2. Part after NOW (Future/Forecast)
           if (end > nowFraction) {
             final effectiveStart = start > nowFraction ? start : nowFraction;
             distinctParts.add(_RenderSegment(
-                effectiveStart, end, segment.color, true)); // isFuture=true
+                effectiveStart, end, segment.color, true,
+                status: segment.status));
           }
         } else {
-          // Past hour or Future hour
-          // If hour is today and > now.hour => Future
-          // If hour is tomorrow => Future (but we only show 24h usually, assumes index 0..23 is today)
-          // Wait, _buildRealModeCell is used in today view?
-          // The grid builder says: `final bool isCurrentHour = _viewMode == ScheduleViewMode.today && DateTime.now().hour == index;`
-          // And index is 0..23.
-          // So if index > now.hour, it's future. if index < now.hour, it's past.
           bool isFuture = false;
           if (_viewMode == ScheduleViewMode.today) {
             if (hour > now.hour) isFuture = true;
@@ -2858,8 +2555,8 @@ class _HomeScreenState extends State<HomeScreen>
             isFuture = false;
           }
 
-          distinctParts
-              .add(_RenderSegment(start, end, segment.color, isFuture));
+          distinctParts.add(_RenderSegment(start, end, segment.color, isFuture,
+              status: segment.status));
         }
 
         for (final part in distinctParts) {
@@ -2868,122 +2565,26 @@ class _HomeScreenState extends State<HomeScreen>
 
           leftOffset() => part.start * totalWidth;
 
-          final isSegmentOn = isOn(part.color);
-          final themeColor =
-              isSegmentOn ? _themedOnColor(stage) : _themedOffColor(stage);
+          final isSegmentOn = part.isOn;
+          final themeColor = isSegmentOn
+              ? stageStyle.onColor
+              : (part.status == LightStatus.maybe
+                  ? Colors.grey.shade500
+                  : (part.status == LightStatus.unknown
+                      ? Colors.grey.shade700
+                      : stageStyle.offColor));
 
-          // Decoration for segment
-          BoxDecoration segDecoration;
-          Widget? overlay;
+          final segResult = stageStyle.segmentDecoration(
+            isFuture: part.isFuture,
+            isSegmentOn: isSegmentOn,
+            themeColor: themeColor,
+            seed: hour * 100 + (part.start * 100).toInt(),
+          );
 
-          if (part.isFuture) {
-            // --- FUTURE STYLING ---
-            switch (stage) {
-              case DarknessStage.solarpunk:
-                // Blueprint / Potential: Semi-transparent grid
-                segDecoration = BoxDecoration(
-                    color: themeColor.withValues(alpha: 0.35),
-                    border: Border.all(
-                        color: themeColor.withValues(alpha: 0.5), width: 0.5));
-                overlay = CustomPaint(
-                    painter: _GridOverlayPainter(
-                        color: themeColor.withValues(alpha: 0.15)));
-                break;
-              case DarknessStage.dieselpunk:
-                // Draft / Paper: Diagonal hatching (dense)
-                segDecoration = BoxDecoration(
-                  color: themeColor.withValues(alpha: 0.5),
-                );
-                overlay = ClipRect(
-                  child: CustomPaint(
-                    painter: _DiagonalStripesPainter(
-                      color: Colors.black.withValues(alpha: 0.2), // Darker etch
-                      spacing: 4, // Denser
-                    ),
-                  ),
-                );
-                break;
-              case DarknessStage.cyberpunk:
-                // Simulation / Hologram: Vertical scanlines
-                segDecoration = BoxDecoration(
-                  color: themeColor.withValues(alpha: 0.2),
-                  border: Border.all(color: themeColor, width: 1),
-                );
-                overlay = Column(
-                  children: List.generate(
-                      10,
-                      (index) => Expanded(
-                              child: Container(
-                            margin: const EdgeInsets.only(bottom: 1),
-                            color: themeColor.withValues(alpha: 0.1),
-                          ))),
-                );
-                break;
-              case DarknessStage.stalker:
-                // Fog / Anomaly: Static noise + Desaturated
-                segDecoration = BoxDecoration(
-                  color: Color.lerp(themeColor, Colors.grey, 0.7)!
-                      .withValues(alpha: 0.4),
-                );
-                overlay = CustomPaint(
-                  painter: _NoisePainter(
-                      seed: hour * 100 + part.start.toInt()), // Static seed
-                );
-                break;
-              default:
-                segDecoration = BoxDecoration(
-                  color: themeColor.withValues(alpha: 0.4),
-                );
-                overlay = const Icon(Icons.help_outline,
-                    size: 12, color: Colors.white24);
-            }
-          } else {
-            // --- FACT STYLING (Standard) ---
-            switch (stage) {
-              case DarknessStage.solarpunk:
-                segDecoration = BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: isSegmentOn
-                        ? [const Color(0xFF66BB6A), const Color(0xFF43A047)]
-                        : [const Color(0xFFE57373), const Color(0xFFBF360C)],
-                  ),
-                );
-                break;
-              case DarknessStage.dieselpunk:
-                segDecoration = BoxDecoration(
-                  color: themeColor,
-                );
-                break;
-              case DarknessStage.cyberpunk:
-                segDecoration = BoxDecoration(
-                  color: themeColor,
-                  border: Border(
-                    top: BorderSide(
-                      color: (isSegmentOn
-                              ? const Color(0xFF00FFFF)
-                              : const Color(0xFFFF0080))
-                          .withValues(alpha: 0.5),
-                      width: 1,
-                    ),
-                  ),
-                );
-                break;
-              case DarknessStage.stalker:
-                segDecoration = BoxDecoration(
-                  color: themeColor, // already mapped to dark storage colors
-                );
-                break;
-              default:
-                segDecoration = BoxDecoration(color: themeColor);
-            }
-          }
+          Widget segmentWidget = Container(
+              decoration: segResult.decoration, child: segResult.overlay);
 
-          Widget segmentWidget =
-              Container(decoration: segDecoration, child: overlay);
-
-          // Legacy overlays for Fact parts (Diesel stripes OFF etc)
+          // Overlays for Fact parts (Diesel stripes OFF etc)
           if (!part.isFuture) {
             List<Widget> extras = [segmentWidget];
             // Dieselpunk: diagonal stripes for OFF FACT
@@ -2991,7 +2592,7 @@ class _HomeScreenState extends State<HomeScreen>
               extras.add(Positioned.fill(
                 child: ClipRect(
                   child: CustomPaint(
-                    painter: _DiagonalStripesPainter(
+                    painter: DiagonalStripesPainter(
                       color: const Color(0xFFFF9800).withValues(alpha: 0.08),
                     ),
                   ),
@@ -3002,7 +2603,7 @@ class _HomeScreenState extends State<HomeScreen>
             if (stage == DarknessStage.stalker && !isSegmentOn) {
               extras.add(Positioned.fill(
                 child: CustomPaint(
-                  painter: _ScanlinePainter(
+                  painter: ScanlinePainter(
                     color: const Color(0xFFFF1744).withValues(alpha: 0.06),
                   ),
                 ),
@@ -3100,66 +2701,7 @@ class _HomeScreenState extends State<HomeScreen>
       );
     });
 
-    // Container styling (outer shell)
-    BoxDecoration containerDecoration;
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        // Solarpunk cells usually have shadow, dealt with by ThemeAnimatedCell mostly?
-        // But we need the rounded corners and base background
-        containerDecoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF2E2E2E), // Base background
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.dieselpunk:
-        containerDecoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF1A1A1A),
-          border: Border.all(
-            color: const Color(0xFFFF9800).withValues(alpha: 0.2),
-            width: 1,
-          ),
-        );
-        break;
-      case DarknessStage.cyberpunk:
-        containerDecoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF0A0E21),
-          border: Border.all(
-            color: const Color(0xFF2A2A4A),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF00FFFF).withValues(alpha: 0.08),
-              blurRadius: 6,
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.stalker:
-        containerDecoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF050505),
-          border: Border.all(
-            color: const Color(0xFF39FF14).withValues(alpha: 0.2),
-            width: 1,
-          ),
-        );
-        break;
-      default:
-        containerDecoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: Colors.grey.shade900,
-        );
-    }
+    final BoxDecoration containerDecoration = stageStyle.emptyBoxDecoration();
 
     // Wrap with gesture detector and tooltip
     Widget cell = GestureDetector(
@@ -3185,112 +2727,12 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Themed ON/OFF cell.
   Widget _themedColorBox(bool isOn, String text, DarknessStage? stage) {
-    final color = isOn ? _themedOnColor(stage) : _themedOffColor(stage);
-    final radius = _themedBorderRadius(stage);
-    final textStyle = _themedCellTextStyle(stage);
-
-    // Determine decorative icon
-    IconData? icon;
-    Color iconColor = Colors.white24;
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        icon = isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined;
-        iconColor = Colors.white.withValues(alpha: 0.25);
-        break;
-      case DarknessStage.dieselpunk:
-        icon = isOn
-            ? Icons.settings_outlined
-            : Icons.local_fire_department_outlined;
-        iconColor = const Color(0xFFFF9800).withValues(alpha: 0.2);
-        break;
-      case DarknessStage.cyberpunk:
-        icon = isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined;
-        iconColor = const Color(0xFFFF0080).withValues(alpha: 0.25);
-        break;
-      case DarknessStage.stalker:
-        icon = isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded;
-        iconColor = isOn
-            ? const Color(0xFF39FF14).withValues(alpha: 0.15)
-            : const Color(0xFFFF1744).withValues(alpha: 0.25);
-        break;
-      default:
-        icon = null;
-    }
-
-    // Build decoration
-    BoxDecoration decoration;
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: isOn
-                ? [const Color(0xFF66BB6A), const Color(0xFF43A047)]
-                : [const Color(0xFFE57373), const Color(0xFFBF360C)],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: color.withValues(alpha: 0.25),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.dieselpunk:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: color,
-          border: Border.all(
-            color: const Color(0xFFFF9800).withValues(alpha: 0.3),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.5),
-              blurRadius: 4,
-              offset: const Offset(2, 2),
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.cyberpunk:
-        final neonColor =
-            isOn ? const Color(0xFF00FFFF) : const Color(0xFFFF0080);
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: color,
-          border: Border.all(
-            color: neonColor.withValues(alpha: 0.5),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: neonColor.withValues(alpha: 0.2),
-              blurRadius: 10,
-              spreadRadius: 1,
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.stalker:
-        final borderColor = isOn
-            ? const Color(0xFF39FF14).withValues(alpha: 0.4)
-            : const Color(0xFFFF1744).withValues(alpha: 0.5);
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: isOn ? const Color(0xFF0A1F0A) : const Color(0xFF1A0000),
-          border: Border.all(color: borderColor, width: 1),
-        );
-        break;
-      default:
-        decoration = BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(radius),
-        );
-    }
+    final style = DarknessStageStyle.of(stage);
+    final color = isOn ? style.onColor : style.offColor;
+    final radius = style.borderRadius;
+    final textStyle = style.cellTextStyle;
+    final iconStyle = style.cellIcon(isOn);
+    final decoration = style.colorBoxDecoration(isOn, color);
 
     // Stalker: override text for OFF cells
     String displayText = text;
@@ -3309,17 +2751,18 @@ class _HomeScreenState extends State<HomeScreen>
       child: Stack(
         children: [
           // Background decorative icon
-          if (icon != null)
+          if (iconStyle.icon != null)
             Positioned(
               right: 3,
               bottom: 2,
-              child: Icon(icon, size: 16, color: iconColor),
+              child: Icon(iconStyle.icon,
+                  size: 16, color: iconStyle.color ?? Colors.white24),
             ),
           // Stalker scanline overlay for OFF cells
           if (stage == DarknessStage.stalker && !isOn)
             Positioned.fill(
               child: CustomPaint(
-                painter: _ScanlinePainter(
+                painter: ScanlinePainter(
                   color: const Color(0xFFFF1744).withValues(alpha: 0.06),
                 ),
               ),
@@ -3361,7 +2804,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(radius),
                 child: CustomPaint(
-                  painter: _DiagonalStripesPainter(
+                  painter: DiagonalStripesPainter(
                     color: const Color(0xFFFF9800).withValues(alpha: 0.08),
                   ),
                 ),
@@ -3376,156 +2819,30 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Themed gradient box for semi-on / semi-off status.
   Widget _themedGradientBox(bool isSemiOn, String text, DarknessStage? stage) {
-    final onColor = _themedOnColor(stage);
-    final offColor = _themedOffColor(stage);
-    final radius = _themedBorderRadius(stage);
-    final textStyle = _themedCellTextStyle(stage);
+    final style = DarknessStageStyle.of(stage);
+    final onColor = style.onColor;
+    final offColor = style.offColor;
+    final radius = style.borderRadius;
+    final textStyle = style.cellTextStyle;
     final colors = isSemiOn ? [offColor, onColor] : [onColor, offColor];
 
-    // Determine icons for both halves
-    IconData? iconLeft;
-    IconData? iconRight;
-    Color iconColorLeft = Colors.white24;
-    Color iconColorRight = Colors.white24;
+    final iconOff = style.cellIcon(false);
+    final iconOn = style.cellIcon(true);
+    final iconLeft = isSemiOn ? iconOff.icon : iconOn.icon;
+    final iconColorLeft = isSemiOn ? iconOff.color : iconOn.color;
+    final iconRight = isSemiOn ? iconOn.icon : iconOff.icon;
+    final iconColorRight = isSemiOn ? iconOn.color : iconOff.color;
 
-    // Helper to pick icon per theme & state
-    (IconData?, Color) getThemeIcon(bool isOn, DarknessStage? s) {
-      switch (s) {
-        case DarknessStage.solarpunk:
-          return (
-            isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined,
-            Colors.white.withValues(alpha: 0.25)
-          );
-        case DarknessStage.dieselpunk:
-          return (
-            isOn
-                ? Icons.settings_outlined
-                : Icons.local_fire_department_outlined,
-            const Color(0xFFFF9800).withValues(alpha: 0.2)
-          );
-        case DarknessStage.cyberpunk:
-          return (
-            isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined,
-            const Color(0xFFFF0080).withValues(alpha: 0.25)
-          );
-        case DarknessStage.stalker:
-          return (
-            isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded,
-            isOn
-                ? const Color(0xFF39FF14).withValues(alpha: 0.15)
-                : const Color(0xFFFF1744).withValues(alpha: 0.25)
-          );
-        default:
-          return (null, Colors.white24);
-      }
-    }
+    final decoration = style.gradientBoxDecoration(isSemiOn, colors, onColor);
 
-    // Assign icons based on semiOn/semiOff logic
-    // semiOn: First half OFF, Second half ON
-    // semiOff: First half ON, Second half OFF
-    if (isSemiOn) {
-      final (iL, cL) = getThemeIcon(false, stage); // Left is OFF
-      final (iR, cR) = getThemeIcon(true, stage); // Right is ON
-      iconLeft = iL;
-      iconColorLeft = cL;
-      iconRight = iR;
-      iconColorRight = cR;
-    } else {
-      final (iL, cL) = getThemeIcon(true, stage); // Left is ON
-      final (iR, cR) = getThemeIcon(false, stage); // Right is OFF
-      iconLeft = iL;
-      iconColorLeft = cL;
-      iconRight = iR;
-      iconColorRight = cR;
-    }
-
-    // Stalker uses harsh split, cyberpunk uses neon glow
-    BoxDecoration decoration;
     String displayText = text;
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        displayText = isSemiOn ? '$text ⚡' : text;
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          gradient: LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: colors,
-            stops: const [0.45, 0.55],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: onColor.withValues(alpha: 0.2),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.dieselpunk:
-        displayText = isSemiOn ? '$text ⚡' : text;
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          gradient: LinearGradient(
-            colors: colors,
-            stops: const [0.5, 0.5],
-          ),
-          border: Border.all(
-            color: const Color(0xFFFF9800).withValues(alpha: 0.3),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4),
-              blurRadius: 3,
-              offset: const Offset(1, 1),
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.cyberpunk:
-        displayText = isSemiOn ? '$text ⚡' : text;
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          gradient: LinearGradient(
-            colors: colors,
-            stops: const [0.5, 0.5],
-          ),
-          border: Border.all(
-            color: const Color(0xFFBB86FC).withValues(alpha: 0.4),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFFBB86FC).withValues(alpha: 0.15),
-              blurRadius: 8,
-              spreadRadius: 1,
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.stalker:
-        displayText = isSemiOn ? '$text ?' : text;
-        const cOn = Color(0xFF0A1F0A);
-        const cOff = Color(0xFF1A0000);
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          gradient: LinearGradient(
-            colors: isSemiOn ? [cOff, cOn] : [cOn, cOff],
-            stops: const [0.5, 0.5],
-          ),
-          border: Border.all(
-            color: const Color(0xFFFFD600).withValues(alpha: 0.4),
-            width: 1,
-          ),
-        );
-        break;
-      default:
-        displayText = isSemiOn ? '$text ⚡' : text;
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          gradient: LinearGradient(colors: colors, stops: const [0.5, 0.5]),
-        );
+    if (stage == DarknessStage.solarpunk ||
+        stage == DarknessStage.dieselpunk ||
+        stage == DarknessStage.cyberpunk ||
+        stage == null) {
+      displayText = isSemiOn ? '$text ⚡' : text;
+    } else if (stage == DarknessStage.stalker) {
+      displayText = isSemiOn ? '$text ?' : text;
     }
 
     return Container(
@@ -3537,19 +2854,21 @@ class _HomeScreenState extends State<HomeScreen>
             Positioned(
               left: 4,
               bottom: 4,
-              child: Icon(iconLeft, size: 14, color: iconColorLeft),
+              child: Icon(iconLeft,
+                  size: 14, color: iconColorLeft ?? Colors.white24),
             ),
           if (iconRight != null)
             Positioned(
               right: 4,
               bottom: 4,
-              child: Icon(iconRight, size: 14, color: iconColorRight),
+              child: Icon(iconRight,
+                  size: 14, color: iconColorRight ?? Colors.white24),
             ),
 
           if (stage == DarknessStage.stalker)
             Positioned.fill(
               child: CustomPaint(
-                painter: _ScanlinePainter(
+                painter: ScanlinePainter(
                   color: const Color(0xFFFFD600).withValues(alpha: 0.04),
                 ),
               ),
@@ -3559,14 +2878,13 @@ class _HomeScreenState extends State<HomeScreen>
               right: 3,
               bottom: 2,
               child: Icon(
-                iconRight ?? Icons.help_outline, // Use derived icon or fallback
+                iconRight ?? Icons.help_outline,
                 size: 12,
-                color: iconColorRight,
+                color: iconColorRight ?? Colors.white24,
               ),
             ),
 
           // 2) Dieselpunk: diagonal stripes for semiOff (right half is OFF)
-          // semiOff -> !isSemiOn -> [ON, OFF] -> right half is OFF
           if (stage == DarknessStage.dieselpunk && !isSemiOn)
             Positioned.fill(
               child: Row(
@@ -3579,7 +2897,7 @@ class _HomeScreenState extends State<HomeScreen>
                           topRight: Radius.circular(radius),
                           bottomRight: Radius.circular(radius)),
                       child: CustomPaint(
-                        painter: _DiagonalStripesPainter(
+                        painter: DiagonalStripesPainter(
                           color:
                               const Color(0xFFFF9800).withValues(alpha: 0.08),
                         ),
@@ -3590,7 +2908,6 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
           // Dieselpunk: diagonal stripes for semiOn (left half is OFF)
-          // semiOn -> [OFF, ON] -> left half is OFF
           if (stage == DarknessStage.dieselpunk && isSemiOn)
             Positioned.fill(
               child: Row(
@@ -3602,7 +2919,7 @@ class _HomeScreenState extends State<HomeScreen>
                           topLeft: Radius.circular(radius),
                           bottomLeft: Radius.circular(radius)),
                       child: CustomPaint(
-                        painter: _DiagonalStripesPainter(
+                        painter: DiagonalStripesPainter(
                           color:
                               const Color(0xFFFF9800).withValues(alpha: 0.08),
                         ),
@@ -3634,60 +2951,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Themed maybe/unknown cell.
   Widget _themedMaybeBox(String text, DarknessStage? stage) {
-    final radius = _themedBorderRadius(stage);
-    final textStyle = _themedCellTextStyle(stage);
-
-    BoxDecoration decoration;
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFFBDBDBD),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.grey.withValues(alpha: 0.2),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        );
-        break;
-      case DarknessStage.dieselpunk:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF3E2723),
-          border: Border.all(
-            color: const Color(0xFF795548).withValues(alpha: 0.4),
-            width: 1,
-          ),
-        );
-        break;
-      case DarknessStage.cyberpunk:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF12122A),
-          border: Border.all(
-            color: const Color(0xFF2A2A4A),
-            width: 1,
-          ),
-        );
-        break;
-      case DarknessStage.stalker:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: const Color(0xFF0A0A0A),
-          border: Border.all(
-            color: const Color(0xFF39FF14).withValues(alpha: 0.15),
-            width: 1,
-          ),
-        );
-        break;
-      default:
-        decoration = BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          color: Colors.grey.shade300,
-        );
-    }
+    final style = DarknessStageStyle.of(stage);
+    final textStyle = style.cellTextStyle;
+    final decoration = style.maybeBoxDecoration();
 
     return Container(
       decoration: decoration,
@@ -3724,200 +2990,23 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Themed current-hour wrapper.
   Widget _themedCurrentHourWrap(Widget child, DarknessStage? stage) {
-    Color borderColor;
-    double borderWidth;
-    double radius;
-    List<BoxShadow>? shadows;
-    IconData dotIcon = Icons.circle;
-    Color dotColor;
-    double dotSize = 8;
-
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        borderColor = const Color(0xFF2E7D32);
-        borderWidth = 2.5;
-        radius = 14;
-        dotColor = const Color(0xFF2E7D32);
-        dotIcon = Icons.access_time_filled;
-        dotSize = 10;
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
-            blurRadius: 8,
-            spreadRadius: 1,
-          ),
-        ];
-        break;
-      case DarknessStage.dieselpunk:
-        borderColor = const Color(0xFFFF9800);
-        borderWidth = 3;
-        radius = 4;
-        dotColor = const Color(0xFFFF9800);
-        dotIcon = Icons.circle;
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFFFF9800).withValues(alpha: 0.3),
-            blurRadius: 6,
-          ),
-        ];
-        break;
-      case DarknessStage.cyberpunk:
-        borderColor = const Color(0xFF00FFFF);
-        borderWidth = 2;
-        radius = 8;
-        dotColor = const Color(0xFFFF0080);
-        dotIcon = Icons.circle;
-        dotSize = 6;
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFF00FFFF).withValues(alpha: 0.4),
-            blurRadius: 12,
-            spreadRadius: 2,
-          ),
-          BoxShadow(
-            color: const Color(0xFFFF0080).withValues(alpha: 0.15),
-            blurRadius: 8,
-          ),
-        ];
-        break;
-      case DarknessStage.stalker:
-        borderColor = const Color(0xFFFF1744);
-        borderWidth = 2;
-        radius = 2;
-        dotColor = const Color(0xFFFF1744);
-        dotIcon = Icons.warning_amber_rounded;
-        dotSize = 10;
-        shadows = [
-          BoxShadow(
-            color: const Color(0xFFFF1744).withValues(alpha: 0.3),
-            blurRadius: 6,
-          ),
-        ];
-        break;
-      default:
-        borderColor = Colors.blue;
-        borderWidth = 3;
-        radius = 8;
-        dotColor = Colors.blue;
-        shadows = null;
-    }
-
+    final style = DarknessStageStyle.of(stage).currentHourStyle();
     return Stack(children: [
       Container(
         decoration: BoxDecoration(
-          border: Border.all(color: borderColor, width: borderWidth),
-          borderRadius: BorderRadius.circular(radius),
-          boxShadow: shadows,
+          border:
+              Border.all(color: style.borderColor, width: style.borderWidth),
+          borderRadius: BorderRadius.circular(style.radius),
+          boxShadow: style.shadows,
         ),
         child: child,
       ),
       Positioned(
         top: 3,
         right: 3,
-        child: Icon(dotIcon, size: dotSize, color: dotColor),
+        child: Icon(style.dotIcon, size: style.dotSize, color: style.dotColor),
       ),
     ]);
-  }
-
-  // ========================================================
-  // THEMED GRID CELLS HELPERS
-  // ========================================================
-
-  /// Resolve ON/OFF colors for the current DarknessStage.
-  Color _themedOnColor(DarknessStage? stage) {
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        return const Color(0xFF4CAF50);
-      case DarknessStage.dieselpunk:
-        return const Color(0xFFB8860B); // dark goldenrod
-      case DarknessStage.cyberpunk:
-        return const Color(0xFF00BFA5); // neon teal
-      case DarknessStage.stalker:
-        return const Color(0xFF1B5E20); // dark toxic green
-      default:
-        return Colors.green.shade400;
-    }
-  }
-
-  Color _themedOffColor(DarknessStage? stage) {
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        return const Color(0xFFBF360C); // warm terracotta
-      case DarknessStage.dieselpunk:
-        return const Color(0xFF4E342E); // dark soot/rust
-      case DarknessStage.cyberpunk:
-        return const Color(0xFFAD1457); // deep magenta
-      case DarknessStage.stalker:
-        return const Color(0xFF8B0000); // blood dark red
-      default:
-        return Colors.red.shade400;
-    }
-  }
-
-  double _themedBorderRadius(DarknessStage? stage) {
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        return 14;
-      case DarknessStage.dieselpunk:
-        return 4;
-      case DarknessStage.cyberpunk:
-        return 8;
-      case DarknessStage.stalker:
-        return 2;
-      default:
-        return 6;
-    }
-  }
-
-  TextStyle _themedCellTextStyle(DarknessStage? stage) {
-    switch (stage) {
-      case DarknessStage.solarpunk:
-        return const TextStyle(
-          fontWeight: FontWeight.w600,
-          fontSize: 13,
-          color: Colors.white,
-          shadows: [
-            Shadow(blurRadius: 2, color: Color(0x66000000)),
-          ],
-        );
-      case DarknessStage.dieselpunk:
-        return const TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 12,
-          color: Color(0xFFFFD54F),
-          letterSpacing: 0.5,
-          shadows: [
-            Shadow(blurRadius: 3, color: Color(0x88000000)),
-          ],
-        );
-      case DarknessStage.cyberpunk:
-        return const TextStyle(
-          fontFamily: 'Courier',
-          fontWeight: FontWeight.bold,
-          fontSize: 13,
-          color: Color(0xFF00FFFF),
-          shadows: [
-            Shadow(blurRadius: 4, color: Color(0xFF00FFFF)),
-          ],
-        );
-      case DarknessStage.stalker:
-        return const TextStyle(
-          fontFamily: 'RobotoMono',
-          fontWeight: FontWeight.bold,
-          fontSize: 12,
-          color: Color(0xFF39FF14),
-          shadows: [
-            Shadow(blurRadius: 2, color: Color(0xFF39FF00)),
-            Shadow(blurRadius: 8, color: Colors.black),
-          ],
-        );
-      default:
-        return const TextStyle(
-          fontWeight: FontWeight.w600,
-          fontSize: 13,
-          color: Colors.white,
-        );
-    }
   }
 
   void _showHourDetailTooltip(int hour) {
@@ -3928,7 +3017,7 @@ class _HomeScreenState extends State<HomeScreen>
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: Text("Hour $hour Details"),
+          title: Text("Деталі за $hour:00"),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: segs.map((s) {
@@ -3937,14 +3026,14 @@ class _HomeScreenState extends State<HomeScreen>
               return ListTile(
                 leading: CircleAvatar(backgroundColor: s.color, radius: 8),
                 title: Text("${_fmtHM(hour, startM)} - ${_fmtHM(hour, endM)}"),
-                subtitle: Text(s.isFuture ? "Forecast" : "Real Data"),
+                subtitle: Text(s.isFuture ? "Прогноз" : "Фактичні дані"),
               );
             }).toList(),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text("Close"),
+              child: const Text("Закрити"),
             ),
           ],
         );
@@ -3960,108 +3049,26 @@ class _HomeScreenState extends State<HomeScreen>
     // Placeholder for interval menu used in other modes
     // interval is likely IntervalInfo or similar
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Menu not implemented for this view")),
+      const SnackBar(content: Text("Меню не підтримується для цього режиму")),
     );
   }
 }
 
 //End of _HomeScreenState
 
-// --- PAINTERS & HELPERS ---
+// --- HELPERS ---
 
 class _RenderSegment {
   final double start;
   final double end;
   final Color color;
   final bool isFuture;
+  final LightStatus status;
 
-  _RenderSegment(this.start, this.end, this.color, this.isFuture);
-}
+  _RenderSegment(this.start, this.end, this.color, this.isFuture,
+      {this.status = LightStatus.unknown});
 
-class _GridOverlayPainter extends CustomPainter {
-  final Color color;
-  _GridOverlayPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-
-    const step = 6.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _ScanlinePainter extends CustomPainter {
-  final Color color;
-  _ScanlinePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1;
-    for (double y = 0; y < size.height; y += 3) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ScanlinePainter old) => old.color != color;
-}
-
-class _DiagonalStripesPainter extends CustomPainter {
-  final Color color;
-  final double spacing;
-  _DiagonalStripesPainter({required this.color, this.spacing = 10.0});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 4
-      ..style = PaintingStyle.stroke;
-
-    for (double i = -size.height; i < size.width + size.height; i += spacing) {
-      canvas.drawLine(
-          Offset(i, 0), Offset(i + size.height, size.height), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DiagonalStripesPainter old) =>
-      old.color != color || old.spacing != spacing;
-}
-
-class _NoisePainter extends CustomPainter {
-  final int seed;
-  _NoisePainter({required this.seed});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final random = Random(seed);
-    final paint = Paint()..strokeWidth = 1;
-
-    for (int i = 0; i < 100; i++) {
-      paint.color = Colors.white.withValues(alpha: random.nextDouble() * 0.1);
-      final x = random.nextDouble() * size.width;
-      final y = random.nextDouble() * size.height;
-      canvas.drawPoints(PointMode.points, [Offset(x, y)], paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _NoisePainter old) => old.seed != seed;
+  bool get isOn => status == LightStatus.on;
 }
 
 class _SwitchModeIntent extends Intent {

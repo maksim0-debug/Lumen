@@ -14,8 +14,45 @@ class AchievementService {
   factory AchievementService() => _instance;
   AchievementService._internal();
 
-  /// Callback для показу нотифікації про нове досягнення
-  void Function(AchievementDef achievement)? onAchievementUnlocked;
+  final List<void Function(AchievementDef achievement)> _achievementListeners =
+      [];
+
+  void addAchievementListener(
+      void Function(AchievementDef achievement) listener) {
+    if (!_achievementListeners.contains(listener)) {
+      _achievementListeners.add(listener);
+    }
+  }
+
+  void removeAchievementListener(
+      void Function(AchievementDef achievement) listener) {
+    _achievementListeners.remove(listener);
+  }
+
+  void Function(AchievementDef achievement)? _onAchievementUnlockedLegacy;
+  void Function(AchievementDef achievement)? get onAchievementUnlocked =>
+      _onAchievementUnlockedLegacy;
+  set onAchievementUnlocked(
+      void Function(AchievementDef achievement)? callback) {
+    if (_onAchievementUnlockedLegacy != null) {
+      _achievementListeners.remove(_onAchievementUnlockedLegacy);
+    }
+    _onAchievementUnlockedLegacy = callback;
+    if (callback != null) {
+      _achievementListeners.add(callback);
+    }
+  }
+
+  void _notifyAchievementUnlocked(AchievementDef achievement) {
+    for (final listener in List.of(_achievementListeners)) {
+      try {
+        listener(achievement);
+      } catch (e) {
+        AppLogger.e('Error in achievement listener',
+            tag: 'Achievements', error: e);
+      }
+    }
+  }
 
   // ── Трекери для секретних ачівок ──
   final List<DateTime> _refreshTimestamps = [];
@@ -633,8 +670,8 @@ class AchievementService {
 
     // Сповіщення
     final def = AchievementCatalog.getById(achievementId);
-    if (def != null && onAchievementUnlocked != null) {
-      onAchievementUnlocked!(def);
+    if (def != null) {
+      _notifyAchievementUnlocked(def);
     }
 
     AppLogger.i('🏆 Unlocked: $achievementId', tag: 'Achievements');

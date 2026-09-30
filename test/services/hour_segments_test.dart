@@ -2,119 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vikl/models/power_event.dart';
 
-// ================================================================
-// Standalone test helpers that replicate the core logic from main.dart
-// These don't depend on Flutter widgets, only on the data model.
-// ================================================================
+import 'package:vikl/models/hour_segment.dart';
+import 'package:vikl/models/schedule_status.dart';
+import 'package:vikl/services/hour_segment_service.dart';
 
-/// Replicates HourSegment from main.dart for testing.
-class HourSegment {
-  final double startFraction;
-  final double endFraction;
-  final Color color;
-
-  HourSegment(this.startFraction, this.endFraction, this.color);
-  double get width => endFraction - startFraction;
-}
-
-class _OffRange {
-  final double start;
-  final double end;
-  _OffRange(this.start, this.end);
-}
-
-/// Computes proportional segments for a single hour cell.
-/// This is the core logic extracted from _computeAllHourSegments.
+// Test wrapper delegating to production HourSegmentService
 List<HourSegment> computeHourSegments(
     List<PowerOutageInterval> intervals, DateTime date, int hour,
-    {DateTime? nowOverride}) {
-  final now = nowOverride ?? DateTime.now();
-  final hourStart = DateTime(date.year, date.month, date.day, hour);
-  final hourEnd = hourStart.add(const Duration(hours: 1));
-
-  final redColor = Colors.red.shade400;
-  final greenColor = Colors.green.shade400;
-
-  final isToday =
-      date.year == now.year && date.month == now.month && date.day == now.day;
-
-  double factEndFraction = 1.0;
-  if (isToday && now.hour == hour) {
-    factEndFraction = now.minute / 60.0;
-  }
-
-  // If hour is entirely in the future for today, skip (handled separately in UI)
-  if (isToday && hourStart.isAfter(now)) {
-    return [HourSegment(0, 1, Colors.grey.shade800)]; // No data
-  }
-
-  List<HourSegment> segments = [];
-  double cursor = 0.0;
-
-  List<_OffRange> offRanges = [];
-  for (final interval in intervals) {
-    final intervalEnd = interval.end ?? now;
-    if (interval.start.isAfter(hourEnd) || intervalEnd.isBefore(hourStart)) {
-      continue;
-    }
-
-    final effectiveStart =
-        interval.start.isAfter(hourStart) ? interval.start : hourStart;
-    final effectiveEnd = intervalEnd.isBefore(hourEnd) ? intervalEnd : hourEnd;
-
-    double startFrac = effectiveStart.difference(hourStart).inSeconds / 3600.0;
-    double endFrac = effectiveEnd.difference(hourStart).inSeconds / 3600.0;
-    startFrac = startFrac.clamp(0.0, 1.0);
-    endFrac = endFrac.clamp(0.0, 1.0);
-
-    if (startFrac >= factEndFraction) continue;
-    if (endFrac > factEndFraction) endFrac = factEndFraction;
-
-    if (endFrac > startFrac + 0.01) {
-      offRanges.add(_OffRange(startFrac, endFrac));
-    }
-  }
-
-  for (final r in offRanges) {
-    if (r.start > cursor + 0.005) {
-      segments.add(HourSegment(cursor, r.start, greenColor));
-    }
-    segments.add(HourSegment(r.start, r.end, redColor));
-    cursor = r.end;
-  }
-  if (cursor < factEndFraction - 0.005) {
-    segments.add(HourSegment(cursor, factEndFraction, greenColor));
-  }
-
-  if (segments.isEmpty) {
-    segments.add(HourSegment(0, 1, greenColor));
-  }
-
-  return segments;
+    {DailySchedule? forecast, DateTime? nowOverride}) {
+  return HourSegmentService.computeHourSegments(
+    intervals,
+    date,
+    hour,
+    forecast: forecast,
+    nowOverride: nowOverride,
+  );
 }
 
-/// Computes total outage minutes with second-level precision.
 int computeRealOutageMinutes(List<PowerOutageInterval> intervals, DateTime date,
     {DateTime? nowOverride}) {
-  final dayStart = DateTime(date.year, date.month, date.day);
-  final dayEnd = dayStart.add(const Duration(days: 1));
-  final now = nowOverride ?? DateTime.now();
-  int totalSeconds = 0;
-
-  for (final interval in intervals) {
-    final effectiveStart =
-        interval.start.isBefore(dayStart) ? dayStart : interval.start;
-    DateTime effectiveEnd;
-    if (interval.end == null) {
-      effectiveEnd = now.isBefore(dayEnd) ? now : dayEnd;
-    } else {
-      effectiveEnd = interval.end!.isAfter(dayEnd) ? dayEnd : interval.end!;
-    }
-    if (effectiveEnd.isAfter(effectiveStart)) {
-      totalSeconds += effectiveEnd.difference(effectiveStart).inSeconds;
-    }
-  }
-  return (totalSeconds / 60).round();
+  return HourSegmentService.computeRealOutageMinutes(
+    intervals,
+    date,
+    nowOverride: nowOverride,
+  );
 }
 
 void main() {
@@ -236,6 +147,50 @@ void main() {
       expect(segments[0].startFraction, closeTo(0.0, 0.01));
       expect(segments[0].endFraction, closeTo(0.25, 0.02));
       expect(segments[1].color, greenColor);
+    });
+  });
+
+  group('computeHourSegments - Future Hours & Tomorrow', () {
+    test('Future hour today uses forecast', () {
+      final hours = List.filled(24, LightStatus.on);
+      hours[15] = LightStatus.off;
+      final forecast = DailySchedule(hours);
+
+      final segments = computeHourSegments([], date, 15,
+          forecast: forecast, nowOverride: DateTime(2026, 2, 11, 10, 0));
+
+      expect(segments.length, 1);
+      expect(segments.first.isFuture, isTrue);
+      expect(segments.first.status, LightStatus.off);
+      expect(segments.first.color, redColor.withValues(alpha: 0.3));
+    });
+
+    test('Tomorrow hour with forecast uses forecast', () {
+      final tomorrow = date.add(const Duration(days: 1));
+      final hours = List.filled(24, LightStatus.on);
+      hours[8] = LightStatus.semiOn; // red 0-0.5, green 0.5-1.0
+      final forecast = DailySchedule(hours);
+
+      final segments = computeHourSegments([], tomorrow, 8,
+          forecast: forecast, nowOverride: DateTime(2026, 2, 11, 10, 0));
+
+      expect(segments.length, 2);
+      expect(segments[0].isFuture, isTrue);
+      expect(segments[0].status, LightStatus.off);
+      expect(segments[0].endFraction, 0.5);
+      expect(segments[1].isFuture, isTrue);
+      expect(segments[1].status, LightStatus.on);
+      expect(segments[1].startFraction, 0.5);
+    });
+
+    test('Tomorrow hour without forecast defaults to ON (no outages)', () {
+      final tomorrow = date.add(const Duration(days: 1));
+      final segments = computeHourSegments([], tomorrow, 8,
+          forecast: null, nowOverride: DateTime(2026, 2, 11, 10, 0));
+
+      expect(segments.length, 1);
+      expect(segments.first.isFuture, isTrue);
+      expect(segments.first.status, LightStatus.on);
     });
   });
 
