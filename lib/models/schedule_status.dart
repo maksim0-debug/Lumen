@@ -7,6 +7,9 @@ enum LightStatus {
   unknown
 }
 
+/// 30-minute slot status for schedule grid and countdown timer.
+enum SlotStatus { on, off, maybe, unknown }
+
 class DailySchedule {
   final List<LightStatus> hours;
   DailySchedule(this.hours);
@@ -16,6 +19,41 @@ class DailySchedule {
   }
 
   bool get isEmpty => hours.every((h) => h == LightStatus.unknown);
+
+  /// Converts a 24-hour schedule into 48 half-hour slots.
+  List<SlotStatus> toSlots() {
+    final slots = List<SlotStatus>.filled(hours.length * 2, SlotStatus.unknown);
+    int index = 0;
+    for (final status in hours) {
+      switch (status) {
+        case LightStatus.on:
+          slots[index++] = SlotStatus.on;
+          slots[index++] = SlotStatus.on;
+          break;
+        case LightStatus.off:
+          slots[index++] = SlotStatus.off;
+          slots[index++] = SlotStatus.off;
+          break;
+        case LightStatus.semiOn:
+          slots[index++] = SlotStatus.off;
+          slots[index++] = SlotStatus.on;
+          break;
+        case LightStatus.semiOff:
+          slots[index++] = SlotStatus.on;
+          slots[index++] = SlotStatus.off;
+          break;
+        case LightStatus.maybe:
+          slots[index++] = SlotStatus.maybe;
+          slots[index++] = SlotStatus.maybe;
+          break;
+        case LightStatus.unknown:
+          slots[index++] = SlotStatus.unknown;
+          slots[index++] = SlotStatus.unknown;
+          break;
+      }
+    }
+    return slots;
+  }
 
   int get totalOutageMinutes {
     int minutes = 0;

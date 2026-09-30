@@ -22,6 +22,7 @@ import 'services/power_monitor_service.dart';
 import 'services/preferences_helper.dart';
 import 'services/achievement_service.dart';
 import 'services/darkness_theme_service.dart';
+import 'services/countdown_service.dart';
 import 'models/schedule_status.dart';
 import 'models/power_event.dart';
 import 'ui/settings_page.dart';
@@ -260,8 +261,6 @@ class _MyAppState extends State<MyApp> {
     useMaterial3: true,
   );
 }
-
-enum SlotStatus { on, off, maybe, unknown }
 
 enum ScheduleViewMode { yesterday, today, tomorrow, history }
 
@@ -1081,29 +1080,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   List<SlotStatus> _convertScheduleToSlots(DailySchedule schedule) {
-    List<SlotStatus> slots = [];
-    for (var status in schedule.hours) {
-      if (status == LightStatus.on) {
-        slots.add(SlotStatus.on);
-        slots.add(SlotStatus.on);
-      } else if (status == LightStatus.off) {
-        slots.add(SlotStatus.off);
-        slots.add(SlotStatus.off);
-      } else if (status == LightStatus.semiOn) {
-        slots.add(SlotStatus.off);
-        slots.add(SlotStatus.on);
-      } else if (status == LightStatus.semiOff) {
-        slots.add(SlotStatus.on);
-        slots.add(SlotStatus.off);
-      } else if (status == LightStatus.maybe) {
-        slots.add(SlotStatus.maybe);
-        slots.add(SlotStatus.maybe);
-      } else {
-        slots.add(SlotStatus.unknown);
-        slots.add(SlotStatus.unknown);
-      }
-    }
-    return slots;
+    return schedule.toSlots();
   }
 
   List<IntervalInfo> _generateIntervals(DailySchedule? schedule) {
@@ -1737,56 +1714,15 @@ class _HomeScreenState extends State<HomeScreen>
       return const SizedBox.shrink();
     }
 
-    final now = DateTime.now();
-    final currentMinuteOfDay = now.hour * 60 + now.minute;
-    final currentSlotIndex = currentMinuteOfDay ~/ 30;
-    if (currentSlotIndex >= 48) return const SizedBox.shrink();
+    final countdown = CountdownService.calculateCountdown(
+      today: fullSchedule.today,
+      tomorrow: fullSchedule.tomorrow,
+      now: DateTime.now(),
+    );
 
-    final todaySlots = _convertScheduleToSlots(fullSchedule.today);
+    if (countdown == null) return const SizedBox.shrink();
 
-    final tomorrowSlots = _convertScheduleToSlots(fullSchedule.tomorrow);
-
-    final currentStatus = todaySlots[currentSlotIndex];
-    int nextChangeIndex = -1;
-    bool foundInToday = false;
-
-    for (int i = currentSlotIndex + 1; i < 48; i++) {
-      if (todaySlots[i] != currentStatus) {
-        nextChangeIndex = i;
-        foundInToday = true;
-        break;
-      }
-    }
-
-    if (!foundInToday) {
-      for (int i = 0; i < 48; i++) {
-        if (tomorrowSlots[i] != currentStatus) {
-          nextChangeIndex = i + 48;
-          break;
-        }
-      }
-    }
-
-    if (nextChangeIndex == -1) return const SizedBox.shrink();
-
-    final minutesToNextChange = (nextChangeIndex * 30) - currentMinuteOfDay;
-    if (minutesToNextChange <= 0) return const SizedBox.shrink();
-
-    final hours = minutesToNextChange ~/ 60;
-    final minutes = minutesToNextChange % 60;
-
-    String timeStr = "";
-    if (hours > 0) timeStr += "$hoursг ";
-    timeStr += "$minutesхв";
-
-    String msg = "";
-    if (currentStatus == SlotStatus.on) {
-      msg = "До відключення: $timeStr";
-    } else if (currentStatus == SlotStatus.off) {
-      msg = "До ввімкнення: $timeStr";
-    } else {
-      msg = "До зміни статусу: $timeStr";
-    }
+    final msg = countdown.message;
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final darknessService = DarknessThemeService();
@@ -2287,8 +2223,7 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                   if (!_isLoading) ...[
                     const SizedBox(height: 8),
-                    if (_viewMode == ScheduleViewMode.today ||
-                        _viewMode == ScheduleViewMode.tomorrow)
+                    if (_viewMode == ScheduleViewMode.today)
                       _buildCountdownWidget(_allSchedules[_currentGroup]),
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8.0),
