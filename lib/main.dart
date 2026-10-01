@@ -24,6 +24,8 @@ import 'services/achievement_service.dart';
 import 'services/darkness_theme_service.dart';
 import 'services/countdown_service.dart';
 import 'services/hour_segment_service.dart';
+import 'services/schedule_calculation_service.dart';
+import 'utils/app_formatters.dart';
 import 'models/schedule_status.dart';
 import 'models/power_event.dart';
 import 'models/hour_segment.dart';
@@ -453,9 +455,7 @@ class _HomeScreenState extends State<HomeScreen>
   final AchievementService _achievementService = AchievementService();
   final FocusNode _focusNode = FocusNode();
 
-  String _formatDateKey(DateTime dt) {
-    return "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}";
-  }
+  String _formatDateKey(DateTime dt) => AppFormatters.formatDateKey(dt);
 
   void _recalculateDisplayData() {
     final displayDate = _getDisplayDate();
@@ -934,9 +934,10 @@ class _HomeScreenState extends State<HomeScreen>
           final group = entry.key;
           final schedule = entry.value;
           _lastUpdateOldStats["${group}_today"] =
-              _calculateOutageMinutes(schedule.today);
+              ScheduleCalculationService.calculateOutageMinutes(schedule.today);
           _lastUpdateOldStats["${group}_tomorrow"] =
-              _calculateOutageMinutes(schedule.tomorrow);
+              ScheduleCalculationService.calculateOutageMinutes(
+                  schedule.tomorrow);
         }
       }
 
@@ -1098,14 +1099,7 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  String _pluralVersions(int count) {
-    final mod10 = count % 10;
-    final mod100 = count % 100;
-    if (mod100 >= 11 && mod100 <= 14) return "версій";
-    if (mod10 == 1) return "версія";
-    if (mod10 >= 2 && mod10 <= 4) return "версії";
-    return "версій";
-  }
+  String _pluralVersions(int count) => AppFormatters.pluralVersions(count);
 
   void _selectVersion(int index) {
     if (index < 0 || index >= _historyVersions.length) return;
@@ -1217,62 +1211,18 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  int _calculateOutageMinutes(DailySchedule schedule) {
-    return schedule.totalOutageMinutes;
-  }
-
   String _getOutageInfoText(DailySchedule? schedule, bool isTomorrow) {
-    // Real mode: precise minutes from intervals
-    if (_powerMonitorEnabled && _dataSourceMode == DataSourceMode.real) {
-      final realMinutes =
-          _computeRealOutageMinutes(_realOutageIntervals, _getDisplayDate());
-      if (realMinutes == 0 && _realOutageIntervals.isEmpty) return "";
-      final percent = (realMinutes / 1440 * 100).round();
-      final h = realMinutes ~/ 60;
-      final m = realMinutes % 60;
-      String timeStr;
-      if (h > 0 && m > 0) {
-        timeStr = '$hг $mхв';
-      } else if (h > 0) {
-        timeStr = '$hг';
-      } else {
-        timeStr = '$mхв';
-      }
-      return "Час без світла: $timeStr ($percent%)";
-    }
-
-    if (schedule == null || schedule.isEmpty) return "";
-
-    final currentMinutes = _calculateOutageMinutes(schedule);
-    final currentPercent = (currentMinutes / (24 * 60) * 100).round();
-
-    final hours = currentMinutes ~/ 60;
-    final minutes = currentMinutes % 60;
-    final timeStr = "$hours:${minutes.toString().padLeft(2, '0')}";
-
-    String baseText = "Час без світла: $timeStr ($currentPercent%)";
-
-    if (_wasUpdated) {
-      final key = "${_currentGroup}_${isTomorrow ? 'tomorrow' : 'today'}";
-      if (_lastUpdateOldStats.containsKey(key)) {
-        final oldMinutes = _lastUpdateOldStats[key]!;
-        final diffMinutes = currentMinutes - oldMinutes;
-
-        if (diffMinutes != 0) {
-          final diffPercent = (diffMinutes / (24 * 60) * 100).round();
-          final sign = diffPercent > 0 ? "+" : "";
-          return "Графік оновився: $baseText ($sign$diffPercent%)";
-        }
-      }
-    }
-
-    return baseText;
-  }
-
-  /// Точний підрахунок хвилин без світла з реальних інтервалів.
-  int _computeRealOutageMinutes(
-      List<PowerOutageInterval> intervals, DateTime date) {
-    return HourSegmentService.computeRealOutageMinutes(intervals, date);
+    return ScheduleCalculationService.getOutageInfoText(
+      schedule,
+      isTomorrow,
+      powerMonitorEnabled: _powerMonitorEnabled,
+      dataSourceMode: _dataSourceMode,
+      realOutageIntervals: _realOutageIntervals,
+      displayDate: _getDisplayDate(),
+      wasUpdated: _wasUpdated,
+      currentGroup: _currentGroup,
+      lastUpdateOldStats: _lastUpdateOldStats,
+    );
   }
 
   void _updateNotificationsOnly() async {
@@ -1306,139 +1256,19 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  List<SlotStatus> _convertScheduleToSlots(DailySchedule schedule) {
-    return schedule.toSlots();
-  }
-
-  List<IntervalInfo> _generateIntervals(DailySchedule? schedule) {
-    if (schedule == null || schedule.isEmpty) return [];
-    final slots = _convertScheduleToSlots(schedule);
-    List<IntervalInfo> intervals = [];
-    int i = 0;
-    while (i < slots.length) {
-      final currentStatus = slots[i];
-      int j = i + 1;
-      while (j < slots.length && slots[j] == currentStatus) {
-        j++;
-      }
-      final startTime = _formatTime(i * 30);
-      final endTime = _formatTime(j * 30);
-      final durationMins = (j - i) * 30;
-      final durationStr = _formatDuration(durationMins);
-      String statusStr = "";
-      Color color = Colors.grey;
-      switch (currentStatus) {
-        case SlotStatus.on:
-          statusStr = "ON";
-          color = Colors.green;
-          break;
-        case SlotStatus.off:
-          statusStr = "OFF";
-          color = Colors.red;
-          break;
-        case SlotStatus.maybe:
-          statusStr = "MAYBE";
-          color = Colors.grey;
-          break;
-        case SlotStatus.unknown:
-          statusStr = "?";
-          color = Colors.grey.shade800;
-          break;
-      }
-      intervals.add(
-          IntervalInfo("$startTime - $endTime", statusStr, durationStr, color));
-      i = j;
-    }
-    return intervals;
-  }
-
-  String _formatTime(int minutesFromStart) {
-    int hours = minutesFromStart ~/ 60;
-    int minutes = minutesFromStart % 60;
-    return "${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}";
-  }
-
-  String _formatDuration(int totalMinutes) {
-    int hours = totalMinutes ~/ 60;
-    int minutes = totalMinutes % 60;
-    if (hours > 0 && minutes > 0) return "$hoursг $minutesхв";
-    if (hours > 0) return "$hoursг";
-    return "$minutesхв";
-  }
+  List<IntervalInfo> _generateIntervals(DailySchedule? schedule) =>
+      ScheduleCalculationService.generateIntervals(schedule);
 
   /// Побудувати DailySchedule з реальних інтервалів відключень (для grid).
   /// Використовується тільки для інтервального списку та нотифікацій (fallback).
   DailySchedule _buildRealScheduleFromIntervals(
-      List<PowerOutageInterval> intervals, DateTime date,
-      {DailySchedule? baseSchedule}) {
-    // Якщо є прогноз, беремо його за основу, інакше все зелене
-    List<LightStatus> hours = baseSchedule != null
-        ? List.from(baseSchedule.hours)
-        : List.filled(24, LightStatus.on);
-
-    final now = DateTime.now();
-    final isToday =
-        date.year == now.year && date.month == now.month && date.day == now.day;
-
-    // Якщо це сьогодні - перезаписуємо минуле і поточну годину реальними даними.
-    // Майбутнє залишаємо як у прогнозі (або зеленим якщо прогнозу немає).
-    // Якщо день у минулому - перезаписуємо весь день (limitHour = 24).
-    // Якщо день у майбутньому - все залишається прогнозом (loop не виконається або limitHour=0).
-
-    int limitHour = 24;
-    if (isToday) {
-      // Перезаписуємо все ДО поточної години включно.
-      // Поточна година теж формується тут, але в GridView вона перекривається _buildRealModeCell.
-      // Для total outage minutes важливо порахувати і поточну годину з оффлайном.
-      limitHour = now.hour + 1;
-    } else if (date.isAfter(now)) {
-      // Майбутній день - повністю прогноз
-      limitHour = 0;
-    }
-
-    for (int h = 0; h < limitHour; h++) {
-      // Скидаємо статус на On перед розрахунком реального,
-      // бо ми хочемо порахувати суто по факту відключень.
-      // (Хоча якщо там було semiOn/off в прогнозі, а світло було 100% часу - воно стане On.
-      // А якщо світло було 0% часу - стане Off).
-      // Але логіку нижче треба перевірити.
-      // Логіка нижче базується на offMinutes.
-      hours[h] = LightStatus.on;
-
-      int offMinutes = 0;
-      for (final interval in intervals) {
-        offMinutes += interval.minutesOfflineInHour(date, h);
-      }
-
-      if (offMinutes >= 55) {
-        hours[h] = LightStatus.off;
-      } else if (offMinutes >= 30) {
-        final hourStart = DateTime(date.year, date.month, date.day, h);
-        final hourMid = hourStart.add(const Duration(minutes: 30));
-        int firstHalfOff = 0;
-        int secondHalfOff = 0;
-        for (final interval in intervals) {
-          final intervalEnd = interval.end ?? DateTime.now();
-          final s1 =
-              interval.start.isAfter(hourStart) ? interval.start : hourStart;
-          final e1 = intervalEnd.isBefore(hourMid) ? intervalEnd : hourMid;
-          if (e1.isAfter(s1)) firstHalfOff += e1.difference(s1).inMinutes;
-          final hourEnd = hourStart.add(const Duration(hours: 1));
-          final s2 = interval.start.isAfter(hourMid) ? interval.start : hourMid;
-          final e2 = intervalEnd.isBefore(hourEnd) ? intervalEnd : hourEnd;
-          if (e2.isAfter(s2)) secondHalfOff += e2.difference(s2).inMinutes;
-        }
-        if (firstHalfOff > secondHalfOff) {
-          hours[h] = LightStatus.semiOn;
-        } else {
-          hours[h] = LightStatus.semiOff;
-        }
-      } else if (offMinutes >= 5) {
-        hours[h] = LightStatus.semiOff;
-      }
-    }
-    return DailySchedule(hours);
-  }
+          List<PowerOutageInterval> intervals, DateTime date,
+          {DailySchedule? baseSchedule}) =>
+      ScheduleCalculationService.buildRealScheduleFromIntervals(
+        intervals,
+        date,
+        baseSchedule: baseSchedule,
+      );
 
   // ============================================================
   // REAL MODE: Пропорційна візуалізація годинних ячійок
@@ -1472,113 +1302,12 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   List<IntervalInfo> _generateRealIntervals(
-      List<PowerOutageInterval> intervals, DateTime date) {
-    final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final now = DateTime.now();
-
-    List<IntervalInfo> result = [];
-    DateTime cursor = dayStart;
-
-    final isToday =
-        date.year == now.year && date.month == now.month && date.day == now.day;
-
-    // Если интервалов нет вообще
-    if (intervals.isEmpty) {
-      if (isToday && _powerMonitor.isOffline) {
-        // Весь день нет света?
-        return [IntervalInfo("00:00 - 24:00", "OFF ⏳", "24г", Colors.red)];
-      }
-      return [IntervalInfo("00:00 - 24:00", "ON", "24г", Colors.green)];
-    }
-
-    for (final interval in intervals) {
-      // 1. Зеленый интервал (ДО начала отключения)
-      // Если начало отключения (interval.start) позже, чем курсор -> значит был свет
-      if (interval.start.isAfter(cursor)) {
-        final onDiff = interval.start.difference(cursor).inMinutes;
-        if (onDiff > 0) {
-          result.add(IntervalInfo(
-            "${_fmtTime(cursor)} - ${_fmtTime(interval.start)}",
-            "ON",
-            _formatDuration(onDiff),
-            Colors.green,
-          ));
-        }
-      }
-
-      // 2. Красный интервал (Отключение)
-      DateTime intervalEnd =
-          interval.end ?? (now.isBefore(dayEnd) ? now : dayEnd);
-
-      // Визуальный фикс: если интервал продолжается, но мы смотрим вчерашний день,
-      // он должен заканчиваться в 24:00, а не "зараз"
-      String endLabel;
-      bool isOngoing = interval.isOngoing;
-
-      if (interval.end == null) {
-        // Это текущее отключение
-        if (date.day != now.day) {
-          // Если смотрим историю (вчера), то отключение шло до конца дня
-          intervalEnd = dayEnd;
-          endLabel = "24:00";
-          isOngoing = false;
-        } else {
-          endLabel = "зараз";
-        }
-      } else {
-        endLabel = _fmtTime(intervalEnd);
-      }
-
-      final offDiff = intervalEnd.difference(interval.start).inMinutes;
-      result.add(IntervalInfo(
-        "${_fmtTime(interval.start)} - $endLabel",
-        isOngoing ? "OFF ⏳" : "OFF",
-        _formatDuration(offDiff),
-        Colors.red,
-        startEventId: interval.startEventId,
-        endEventId: interval.endEventId,
-      ));
-
-      cursor = intervalEnd;
-    }
-
-    // 3. Финальный зеленый хвост (после последнего отключения до конца дня)
-    if (cursor.isBefore(dayEnd)) {
-      // Если последнее событие было "Свет дали" и оно закончилось раньше 24:00
-      // ИЛИ если интервалов не было.
-      // Важно проверить, не продолжается ли отключение.
-      final lastInterval = intervals.last;
-      if (lastInterval.end != null) {
-        // Отключение закончилось, значит дальше свет есть
-        // Но нужно обрезать по "сейчас", если смотрим сегодня
-        DateTime tailEnd = dayEnd;
-        if (date.year == now.year &&
-            date.month == now.month &&
-            date.day == now.day) {
-          // Если сегодня, то зеленый рисуем "до сейчас" или прогнозом до конца
-          // Обычно ON рисуют до 24:00 как прогноз "будет свет"
-          tailEnd = dayEnd;
-        }
-
-        final tailDiff = tailEnd.difference(cursor).inMinutes;
-        if (tailDiff > 0) {
-          result.add(IntervalInfo(
-            "${_fmtTime(cursor)} - 24:00",
-            "ON",
-            _formatDuration(tailDiff),
-            Colors.green,
-          ));
-        }
-      }
-    }
-
-    return result;
-  }
-
-  String _fmtTime(DateTime dt) {
-    return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
-  }
+          List<PowerOutageInterval> intervals, DateTime date) =>
+      ScheduleCalculationService.generateRealIntervals(
+        intervals,
+        date,
+        isOffline: _powerMonitor.isOffline,
+      );
 
   /// Віджет індикатора реального часу (220В статус).
   Widget _buildPowerIndicator() {
@@ -3027,9 +2756,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  String _fmtHM(int h, int m) {
-    return "${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}";
-  }
+  String _fmtHM(int h, int m) => AppFormatters.fmtHM(h, m);
 
   void _showIntervalMenu(BuildContext context, dynamic interval) {
     // Placeholder for interval menu used in other modes
