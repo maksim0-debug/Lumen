@@ -401,6 +401,36 @@ class _SettingsPageState extends State<SettingsPage> {
                       ],
                     ),
                   ),
+                  if (PowerMonitorService.isAuthorizationError(
+                      PowerMonitorService().lastSyncError)) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 4),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: Colors.redAccent.withValues(alpha: 0.4)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded,
+                                color: Colors.redAccent, size: 20),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                "Помилка доступу до Firebase (HTTP 401/403). Перевірте правила бази даних (.read: true). Опитування тимчасово призупинено для збереження батареї.",
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.redAccent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                   ListTile(
                     leading: const Icon(Icons.help_outline, color: Colors.blue),
                     title:

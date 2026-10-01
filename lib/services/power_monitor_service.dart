@@ -13,12 +13,63 @@ class PowerMonitorService {
   factory PowerMonitorService() => _instance;
   PowerMonitorService._internal();
 
+  static const Duration defaultPollingInterval = Duration(seconds: 30);
+  static const Duration maxPollingInterval = Duration(minutes: 5);
+  static const Duration authErrorPollingInterval = Duration(minutes: 10);
+
   String? _customUrl;
 
   Timer? _pollTimer;
   String _currentStatus = 'unknown'; // 'online' / 'offline' / 'unknown'
   DateTime? _lastEventTime;
   bool _isEnabled = false;
+
+  int _consecutiveErrors = 0;
+  String? _lastSyncError;
+  bool _hadPreviousError = false;
+  bool _wasAuthError = false;
+  bool _isSyncing = false;
+  Duration _currentPollDelay = defaultPollingInterval;
+
+  String? get lastSyncError => _lastSyncError;
+  int get consecutiveErrors => _consecutiveErrors;
+  Duration get currentPollDelay => _currentPollDelay;
+
+  /// Обчислення наступної затримки опитування (Exponential Backoff для помилок)
+  static Duration calculateNextPollDelay({
+    required int consecutiveErrors,
+    required bool isAuthError,
+    Duration baseInterval = defaultPollingInterval,
+    Duration maxInterval = maxPollingInterval,
+    Duration authErrorInterval = authErrorPollingInterval,
+  }) {
+    if (isAuthError) {
+      return authErrorInterval;
+    }
+    if (consecutiveErrors <= 0) {
+      return baseInterval;
+    }
+    // Клемпимо ступінь зсуву (0..10), щоб запобігти переповненню цілих чисел (integer overflow)
+    // при тривалій відсутності зв'язку (>32 або >64 помилок)
+    final shift = (consecutiveErrors - 1).clamp(0, 10);
+    final multiplier = 1 << shift;
+    final delaySeconds = (baseInterval.inSeconds * multiplier).clamp(
+      baseInterval.inSeconds,
+      maxInterval.inSeconds,
+    );
+    return Duration(seconds: delaySeconds);
+  }
+
+  static final RegExp _authErrorPattern = RegExp(r'\b(401|403)\b');
+
+  /// Перевірка чи є помилка проблемою авторизації/прав доступу (HTTP 401/403)
+  static bool isAuthorizationError(dynamic error) {
+    if (error == null) return false;
+    final str = error.toString().toLowerCase();
+    return _authErrorPattern.hasMatch(str) ||
+        str.contains('permission denied') ||
+        str.contains('unauthorized');
+  }
 
   final List<void Function(String status)> _statusListeners = [];
 
@@ -92,6 +143,11 @@ class PowerMonitorService {
   /// Увімкнути/вимкнути моніторинг.
   Future<void> setEnabled(bool enabled) async {
     _isEnabled = enabled;
+    _consecutiveErrors = 0;
+    _hadPreviousError = false;
+    _wasAuthError = false;
+    _lastSyncError = null;
+    _currentPollDelay = defaultPollingInterval;
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setBool('power_monitor_enabled', enabled);
@@ -110,13 +166,17 @@ class PowerMonitorService {
     }
   }
 
-  /// Запуск periodic polling (кожні 30 секунд).
-  void startPolling() {
+  /// Запуск polling з підтримкою динамічного інтервалу.
+  void startPolling({Duration? initialDelay}) {
     stopPolling();
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      // Don't poll if no URL is set
-      if (_customUrl == null || _customUrl!.isEmpty) return;
-      _fetchAndSync();
+    _scheduleNextPoll(initialDelay ?? _currentPollDelay);
+  }
+
+  void _scheduleNextPoll(Duration delay) {
+    _pollTimer?.cancel();
+    if (!_isEnabled || _customUrl == null || _customUrl!.isEmpty) return;
+    _pollTimer = Timer(delay, () async {
+      await _fetchAndSync();
     });
   }
 
@@ -128,9 +188,17 @@ class PowerMonitorService {
   /// Головна функція: завантажити події з Firebase → зберегти локально → оновити статус.
   Future<void> _fetchAndSync({bool isFullSync = false}) async {
     if (!_isEnabled) return;
+    if (_isSyncing) {
+      AppLogger.d(
+          "PowerMonitor: Синхронізація вже триває, пропускаємо виклик...",
+          tag: 'PowerMonitor');
+      return;
+    }
+    _isSyncing = true;
 
     try {
       final events = await _fetchFromFirebase();
+      if (!_isEnabled) return;
       if (events.isNotEmpty) {
         if (isFullSync) {
           await _performFullSync(events);
@@ -139,8 +207,58 @@ class PowerMonitorService {
         }
         _updateCurrentStatus(events);
       }
+
+      // Успішне відновлення зв'язку
+      if (_hadPreviousError) {
+        AppLogger.i("PowerMonitor: З'єднання з Firebase успішно відновлено.",
+            tag: 'PowerMonitor', persistToHistory: true);
+      }
+      _consecutiveErrors = 0;
+      _hadPreviousError = false;
+      _wasAuthError = false;
+      _lastSyncError = null;
+      _currentPollDelay = defaultPollingInterval;
+      _scheduleNextPoll(_currentPollDelay);
     } catch (e) {
-      AppLogger.e('Sync error', tag: 'PowerMonitor', error: e);
+      _consecutiveErrors++;
+      final isAuth = isAuthorizationError(e);
+      _lastSyncError = e.toString();
+      _currentPollDelay = calculateNextPollDelay(
+        consecutiveErrors: _consecutiveErrors,
+        isAuthError: isAuth,
+      );
+
+      // Записуємо в історію БД лише першу помилку або зміну типу помилки, щоб не засмічувати логи кожні 30 секунд
+      final shouldPersist = !_hadPreviousError || (isAuth && !_wasAuthError);
+      _hadPreviousError = true;
+      _wasAuthError = isAuth;
+
+      if (isAuth) {
+        if (shouldPersist) {
+          AppLogger.w(
+            'PowerMonitor: Помилка доступу до Firebase (HTTP 401/403). '
+            'Опитування призупинено на ${_currentPollDelay.inMinutes} хв. Перевірте URL або правила Firebase (.read: true).',
+            tag: 'PowerMonitor',
+            persistToHistory: true,
+          );
+        } else {
+          AppLogger.d(
+            'PowerMonitor: Доступ заборонено (401/403). Наступна спроба через ${_currentPollDelay.inMinutes} хв.',
+            tag: 'PowerMonitor',
+          );
+        }
+      } else {
+        if (shouldPersist) {
+          AppLogger.e('Sync error',
+              tag: 'PowerMonitor', error: e, persistToHistory: true);
+        } else {
+          AppLogger.d(
+            'PowerMonitor: Помилка синхронізації ($e). Backoff ${_currentPollDelay.inSeconds}с (помилка #$_consecutiveErrors).',
+            tag: 'PowerMonitor',
+          );
+        }
+      }
+
       // Fallback: спробувати прочитати з локальної БД
       try {
         final localEvents = await getLocalEvents();
@@ -148,6 +266,10 @@ class PowerMonitorService {
           _updateCurrentStatus(localEvents);
         }
       } catch (_) {}
+
+      _scheduleNextPoll(_currentPollDelay);
+    } finally {
+      _isSyncing = false;
     }
   }
 
@@ -186,7 +308,8 @@ class PowerMonitorService {
     // limitToLast=200 гарантирует, что мы получим актуальные данные даже при плохом интернете.
     final url = '$baseUrl/events.json?orderBy="\$key"&limitToLast=200';
 
-    final response = await http.get(Uri.parse(url));
+    final response =
+        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
 
     if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');
@@ -229,7 +352,8 @@ class PowerMonitorService {
 
       // Firebase requires orderBy when using limitToLast
       final url = '$baseUrl/events.json?orderBy="\$key"&limitToLast=1';
-      final response = await http.get(Uri.parse(url));
+      final response =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
 
       if (response.statusCode != 200) {
         return false;
@@ -253,6 +377,11 @@ class PowerMonitorService {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setString('custom_power_monitor_url', baseUrl);
       _customUrl = baseUrl;
+      _consecutiveErrors = 0;
+      _hadPreviousError = false;
+      _wasAuthError = false;
+      _lastSyncError = null;
+      _currentPollDelay = defaultPollingInterval;
 
       if (_isEnabled) {
         await _fetchAndSync(isFullSync: true);
