@@ -1,11 +1,9 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
-import 'package:window_manager/window_manager.dart';
-import 'package:tray_manager/tray_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path/path.dart' as p;
+import '../services/desktop_tray_coordinator.dart';
 
 import '../services/app_logger.dart';
 import '../services/notification_service.dart';
@@ -47,8 +45,9 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with WindowListener, TrayListener {
+class _HomeScreenState extends State<HomeScreen> {
+  final DesktopTrayCoordinator _desktopTrayCoordinator =
+      DesktopTrayCoordinator();
   final ParserService _parser = ParserService();
   final NotificationService _notifier = NotificationService();
   final WidgetService _widgetService = WidgetService();
@@ -146,11 +145,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    if (Platform.isWindows) {
-      windowManager.addListener(this);
-      trayManager.addListener(this);
-      _initTray();
-    }
+    _desktopTrayCoordinator.init();
 
     _loadPreferencesAndData();
     _initPowerMonitor();
@@ -410,48 +405,11 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _focusNode.dispose();
-    if (Platform.isWindows) {
-      windowManager.removeListener(this);
-      trayManager.removeListener(this);
-    }
+    _desktopTrayCoordinator.dispose();
     _timer?.cancel();
     _achievementService.onAchievementUnlocked = null;
     _powerMonitor.onStatusChanged = null;
     super.dispose();
-  }
-
-  Future<void> _initTray() async {
-    if (Platform.isWindows) {
-      final exeDir = p.dirname(Platform.resolvedExecutable);
-      final iconPath = p.join(exeDir, 'app_icon.ico');
-      await trayManager.setIcon(iconPath);
-      Menu menu = Menu(items: [
-        MenuItem(key: 'show_window', label: 'Відкрити'),
-        MenuItem.separator(),
-        MenuItem(key: 'exit_app', label: 'Закрити'),
-      ]);
-      await trayManager.setContextMenu(menu);
-      await trayManager.setToolTip('Люмен');
-    }
-  }
-
-  @override
-  void onTrayIconMouseDown() => windowManager.show();
-  @override
-  void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
-  @override
-  void onTrayMenuItemClick(MenuItem menuItem) {
-    if (menuItem.key == 'show_window') {
-      windowManager.show();
-      windowManager.focus();
-    } else if (menuItem.key == 'exit_app') {
-      windowManager.destroy();
-    }
-  }
-
-  @override
-  void onWindowClose() async {
-    if (await windowManager.isPreventClose()) windowManager.hide();
   }
 
   Future<void> _refreshVersionsForCurrentMode() async {
