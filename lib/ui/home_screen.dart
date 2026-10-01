@@ -7,6 +7,7 @@ import '../services/schedule_notification_coordinator.dart';
 
 import '../services/app_logger.dart';
 import '../services/notification_service.dart';
+import '../services/schedule_sync_service.dart';
 import '../services/parser_service.dart';
 import '../services/history_service.dart';
 import '../services/power_monitor_service.dart';
@@ -47,10 +48,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final DesktopTrayCoordinator _desktopTrayCoordinator =
       DesktopTrayCoordinator();
-  final ParserService _parser = ParserService();
   final NotificationService _notifier = NotificationService();
   late final ScheduleNotificationCoordinator _scheduleNotificationCoordinator =
       ScheduleNotificationCoordinator(notifier: _notifier);
+  final ScheduleSyncService _scheduleSyncService = ScheduleSyncService();
 
   Map<String, FullSchedule> _allSchedules = {};
   String _currentGroup = "GPV2.1";
@@ -75,10 +76,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _isCachedData = false;
   Color _statusColor = Colors.grey;
-
-  bool _isFetching = false;
-  DateTime? _lastFetchTime;
-  static const Duration _fetchCooldown = Duration(seconds: 30);
 
   static const bool _showNotificationTestButton = false;
 
@@ -375,30 +372,26 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadCachedData() async {
-    try {
-      final cached = await HistoryService().getLastKnownSchedules();
-      if (cached.isNotEmpty && mounted) {
-        _wasUpdated = false;
-        setState(() {
-          _allSchedules = cached;
-          _isLoading = false;
-          _isCachedData = true;
-          _statusColor = Colors.orange;
+    final cached = await _scheduleSyncService.loadCachedData();
+    if (cached.isNotEmpty && mounted) {
+      _wasUpdated = false;
+      setState(() {
+        _allSchedules = cached;
+        _isLoading = false;
+        _isCachedData = true;
+        _statusColor = Colors.orange;
 
-          final current = cached[_currentGroup];
-          if (current != null) {
-            _statusMessage = "З пам'яті: ${current.lastUpdatedSource}";
-          } else {
-            _statusMessage = "З пам'яті (дані завантажено)";
-          }
-          _recalculateDisplayData();
-        });
+        final current = cached[_currentGroup];
+        if (current != null) {
+          _statusMessage = "З пам'яті: ${current.lastUpdatedSource}";
+        } else {
+          _statusMessage = "З пам'яті (дані завантажено)";
+        }
+        _recalculateDisplayData();
+      });
 
-        // Load history versions for the cached data to populate dropdown if needed
-        await _refreshVersionsForCurrentMode();
-      }
-    } catch (e) {
-      AppLogger.e("Error loading cached data", tag: 'Main', error: e);
+      // Load history versions for the cached data to populate dropdown if needed
+      await _refreshVersionsForCurrentMode();
     }
   }
 
@@ -487,37 +480,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadData({bool silent = false, bool force = false}) async {
-    if (_isFetching) {
-      AppLogger.d("⏳ Fetch already in progress, skipping duplicate request",
-          tag: 'Main');
-      return;
-    }
-
-    if (!force &&
-        _allSchedules.isNotEmpty &&
-        _lastFetchTime != null &&
-        DateTime.now().difference(_lastFetchTime!) < _fetchCooldown) {
-      AppLogger.d("⏳ Data is fresh (cooldown active), skipping fetch",
-          tag: 'Main');
-      if (!silent && !_isHistoryMode) {
+    await _scheduleSyncService.sync(
+      silent: silent,
+      force: force,
+      hasExistingData: _allSchedules.isNotEmpty,
+      isHistoryMode: _isHistoryMode,
+      onCooldownSkipped: () async {
         _updateStatusDate();
         if (_isLoading && mounted) {
           setState(() => _isLoading = false);
         }
-      }
-      return;
-    }
-
-    _isFetching = true;
-
-    try {
-      if (!silent) {
-        // First, try to load from cache if we are empty
+      },
+      onEnsureCache: () async {
         if (_allSchedules.isEmpty) {
           await _loadCachedData();
-          if (!mounted) return;
+          if (!mounted) return false;
         }
-
+        return true;
+      },
+      onFetchStart: () {
         if (mounted && !_isHistoryMode) {
           setState(() {
             if (_allSchedules.isEmpty) {
@@ -529,57 +510,48 @@ class _HomeScreenState extends State<HomeScreen> {
             _statusColor = Colors.orange;
           });
         }
-      }
-      if (_allSchedules.isNotEmpty) {
-        for (var entry in _allSchedules.entries) {
-          final group = entry.key;
-          final schedule = entry.value;
-          _lastUpdateOldStats["${group}_today"] =
-              ScheduleCalculationService.calculateOutageMinutes(schedule.today);
-          _lastUpdateOldStats["${group}_tomorrow"] =
-              ScheduleCalculationService.calculateOutageMinutes(
-                  schedule.tomorrow);
+      },
+      onBeforeFetch: () {
+        if (_allSchedules.isNotEmpty) {
+          _lastUpdateOldStats.addAll(
+            _scheduleSyncService.computeOldStats(_allSchedules),
+          );
         }
-      }
+      },
+      onFetchSuccess: (allData) async {
+        if (mounted) {
+          final currentIsHistory = _isHistoryMode;
+          setState(() {
+            _allSchedules = allData;
+            _isCachedData = false;
+            _wasUpdated = true;
+            if (!currentIsHistory) {
+              _isLoading = false;
+              _statusColor = Colors.green;
+            }
+            _recalculateDisplayData();
+          });
 
-      final allData = await _parser.fetchAllSchedules();
-      if (allData.isEmpty) throw Exception("Пустий список");
-
-      _lastFetchTime = DateTime.now();
-
-      if (mounted) {
-        final currentIsHistory = _isHistoryMode;
-        setState(() {
-          _allSchedules = allData;
-          _isCachedData = false;
-          _wasUpdated = true;
           if (!currentIsHistory) {
-            _isLoading = false;
-            _statusColor = Colors.green;
+            await _refreshVersionsForCurrentMode();
+            if (mounted) _updateStatusDate();
           }
-          _recalculateDisplayData();
-        });
-
-        if (!currentIsHistory) {
-          await _refreshVersionsForCurrentMode();
-          if (mounted) _updateStatusDate();
         }
-      }
 
-      await _scheduleNotificationCoordinator.handleScheduleUpdate(
-        allSchedules: allData,
-        currentGroup: _currentGroup,
-        notificationGroups: _notificationGroups,
-      );
+        await _scheduleNotificationCoordinator.handleScheduleUpdate(
+          allSchedules: allData,
+          currentGroup: _currentGroup,
+          notificationGroups: _notificationGroups,
+        );
 
-      // Перевірка досягнень після завантаження даних
-      _achievementService.checkAll(
-        schedules: _allSchedules,
-        currentGroup: _currentGroup,
-      );
-    } catch (e) {
-      if (mounted) {
-        if (!_isHistoryMode) {
+        // Перевірка досягнень після завантаження даних
+        _achievementService.checkAll(
+          schedules: _allSchedules,
+          currentGroup: _currentGroup,
+        );
+      },
+      onFetchError: (e) {
+        if (mounted && !_isHistoryMode) {
           setState(() {
             _isLoading = false;
             if (_isCachedData) {
@@ -591,11 +563,8 @@ class _HomeScreenState extends State<HomeScreen> {
             }
           });
         }
-      }
-      AppLogger.e("Error loading data", tag: 'Main', error: e);
-    } finally {
-      _isFetching = false;
-    }
+      },
+    );
   }
 
   int _historyLoadRequestId = 0;
