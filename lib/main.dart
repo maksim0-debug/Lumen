@@ -27,6 +27,9 @@ import 'services/hour_segment_service.dart';
 import 'models/schedule_status.dart';
 import 'models/power_event.dart';
 import 'models/hour_segment.dart';
+import 'models/data_source_mode.dart';
+import 'models/schedule_view_mode.dart';
+import 'models/interval_info.dart';
 import 'theme/darkness_stage_style.dart';
 import 'ui/settings_page.dart';
 import 'ui/analytics_screen.dart';
@@ -278,23 +281,6 @@ class _MyAppState extends State<MyApp> {
     colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
     useMaterial3: true,
   );
-}
-
-enum ScheduleViewMode { yesterday, today, tomorrow, history }
-
-/// Режим джерела даних: прогноз (ДТЕК) або реальний (Firebase сенсор).
-enum DataSourceMode { predicted, real }
-
-class IntervalInfo {
-  final String timeRange;
-  final String statusText;
-  final String duration;
-  final Color color;
-  final int? startEventId;
-  final int? endEventId;
-
-  IntervalInfo(this.timeRange, this.statusText, this.duration, this.color,
-      {this.startEventId, this.endEventId});
 }
 
 class CountdownCard extends StatefulWidget {

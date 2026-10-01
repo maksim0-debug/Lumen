@@ -5,8 +5,9 @@ import 'app_logger.dart';
 import 'power_monitor_service.dart';
 import 'history_service.dart';
 import 'parser_service.dart';
+import '../models/data_source_mode.dart';
 
-enum DataSourceMode { real, predicted }
+export '../models/data_source_mode.dart';
 
 /// Сервіс агрегації аналітичних даних про відключення.
 /// Всі дані беруться з локальної БД (power_events + schedule_history).
