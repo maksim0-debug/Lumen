@@ -1,14 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/desktop_tray_coordinator.dart';
+import '../services/schedule_notification_coordinator.dart';
 
 import '../services/app_logger.dart';
 import '../services/notification_service.dart';
 import '../services/parser_service.dart';
-import '../services/widget_service.dart';
 import '../services/history_service.dart';
 import '../services/power_monitor_service.dart';
 import '../services/preferences_helper.dart';
@@ -50,7 +49,8 @@ class _HomeScreenState extends State<HomeScreen> {
       DesktopTrayCoordinator();
   final ParserService _parser = ParserService();
   final NotificationService _notifier = NotificationService();
-  final WidgetService _widgetService = WidgetService();
+  late final ScheduleNotificationCoordinator _scheduleNotificationCoordinator =
+      ScheduleNotificationCoordinator(notifier: _notifier);
 
   Map<String, FullSchedule> _allSchedules = {};
   String _currentGroup = "GPV2.1";
@@ -566,59 +566,11 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      try {
-        final prefs = await PreferencesHelper.getSafeInstance();
-        final notifyChange = prefs.getBool('notify_schedule_change') ?? true;
-        final now = DateTime.now();
-
-        final groupsToCheck = <String>{..._notificationGroups, _currentGroup};
-
-        for (final group in groupsToCheck) {
-          if (!allData.containsKey(group)) continue;
-
-          final schedule = allData[group]!;
-          final keyHash = "prev_hash_${group}_today";
-          final keyDate = "prev_date_${group}_today";
-          final todayStr = _formatDateKey(now);
-
-          final oldHash = prefs.getString(keyHash);
-          final savedDate = prefs.getString(keyDate);
-          final newHash = schedule.today.scheduleHash;
-
-          if (notifyChange &&
-              savedDate == todayStr &&
-              oldHash != null &&
-              oldHash != newHash) {
-            if (Platform.isWindows) {
-              final newMinutes = schedule.today.totalOutageMinutes;
-              final oldMinutes =
-                  DailySchedule.fromEncodedString(oldHash).totalOutageMinutes;
-
-              final diff = newMinutes - oldMinutes;
-              if (diff != 0) {
-                final diffHours = (diff.abs() / 60);
-                final diffStr = diffHours == diffHours.toInt()
-                    ? diffHours.toInt().toString()
-                    : diffHours.toStringAsFixed(1);
-                final msg = diff > 0
-                    ? "Світла стало МЕНШЕ на $diffStr год. 😔"
-                    : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
-
-                _notifier.showImmediate("Графік змінено!", msg,
-                    groupName: group);
-              }
-            }
-          }
-
-          await prefs.setString(keyHash, newHash);
-          await prefs.setString(keyDate, todayStr);
-        }
-      } catch (e) {
-        AppLogger.e("Error syncing hash", tag: 'Main', error: e);
-      }
-
-      _updateNotificationsOnly();
-      if (Platform.isAndroid) await _widgetService.updateWidget(_allSchedules);
+      await _scheduleNotificationCoordinator.handleScheduleUpdate(
+        allSchedules: allData,
+        currentGroup: _currentGroup,
+        notificationGroups: _notificationGroups,
+      );
 
       // Перевірка досягнень після завантаження даних
       _achievementService.checkAll(
@@ -784,36 +736,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _updateNotificationsOnly() async {
-    if (!Platform.isAndroid) return;
-
-    SharedPreferences? prefs;
-    try {
-      prefs = await PreferencesHelper.getSafeInstance();
-    } catch (e) {
-      AppLogger.w(
-          "Error loading SharedPreferences in _updateNotificationsOnly: $e",
-          tag: 'Main');
-      return;
-    }
-
-    List<String> notificationGroups =
-        prefs.getStringList('notification_groups') ?? [];
-
-    if (notificationGroups.isEmpty) {
-      notificationGroups = [_currentGroup];
-    }
-
-    bool first = true;
-    for (String group in notificationGroups) {
-      final schedule = _allSchedules[group];
-      if (schedule != null) {
-        await _notifier.scheduleNotificationsForToday(schedule,
-            groupName: group, cancelExisting: first);
-        first = false;
-      }
-    }
-  }
+  void _updateNotificationsOnly() =>
+      _scheduleNotificationCoordinator.updateNotificationsOnly(
+        allSchedules: _allSchedules,
+        currentGroup: _currentGroup,
+      );
 
   List<IntervalInfo> _generateIntervals(DailySchedule? schedule) =>
       ScheduleCalculationService.generateIntervals(schedule);
