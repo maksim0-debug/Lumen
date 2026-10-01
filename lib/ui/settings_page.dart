@@ -39,6 +39,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isLoading = true;
   bool _enableLogging = true;
   bool _powerMonitorEnabled = false;
+  int _powerMonitorTtlMinutes = 25;
   double _uiScale = 1.0;
   List<String> _notificationGroups = [];
   String _appVersion = '';
@@ -114,6 +115,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
           final customUrl = prefs.getString('custom_power_monitor_url') ?? '';
           _customUrlController.text = customUrl;
+          final rawTtl = prefs.getInt('power_monitor_ttl_minutes') ?? 25;
+          const allowedTtls = [0, 15, 25, 45, 60, 720, 1440];
+          _powerMonitorTtlMinutes = allowedTtls.contains(rawTtl) ? rawTtl : 25;
         }
 
         _isLoading = false;
@@ -399,6 +403,42 @@ class _SettingsPageState extends State<SettingsPage> {
                           child: const Text('Зберегти'),
                         ),
                       ],
+                    ),
+                  ),
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: DropdownButtonFormField<int>(
+                      initialValue: _powerMonitorTtlMinutes,
+                      decoration: const InputDecoration(
+                        labelText: 'Таймаут застарівання даних (TTL)',
+                        helperText:
+                            'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 15, child: Text('15 хвилин')),
+                        DropdownMenuItem(
+                            value: 25,
+                            child: Text('25 хвилин (Рекомендовано)')),
+                        DropdownMenuItem(value: 45, child: Text('45 хвилин')),
+                        DropdownMenuItem(
+                            value: 60, child: Text('60 хвилин (1 година)')),
+                        DropdownMenuItem(
+                            value: 720,
+                            child: Text('12 годин (Рідкісний пінг)')),
+                        DropdownMenuItem(
+                            value: 1440, child: Text('24 години (1 доба)')),
+                        DropdownMenuItem(
+                            value: 0, child: Text('Вимкнено (без таймауту)')),
+                      ],
+                      onChanged: (val) async {
+                        if (val != null) {
+                          setState(() => _powerMonitorTtlMinutes = val);
+                          await PowerMonitorService().setTtlMinutes(val);
+                        }
+                      },
                     ),
                   ),
                   if (PowerMonitorService.isAuthorizationError(

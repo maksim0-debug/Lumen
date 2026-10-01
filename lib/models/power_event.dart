@@ -42,7 +42,7 @@ class PowerEvent {
   }
 
   factory PowerEvent.fromFirebase(String key, Map<String, dynamic> data) {
-    final timestamp = _parseTimestamp(data['timestamp'] as String? ?? '');
+    final timestamp = parseTimestamp(data['timestamp'] as String? ?? '');
     if (timestamp == null) {
       throw FormatException('Invalid timestamp for event $key');
     }
@@ -55,7 +55,7 @@ class PowerEvent {
     );
   }
 
-  static DateTime? _parseTimestamp(String ts) {
+  static DateTime? parseTimestamp(String ts) {
     // Формат: "YYYY-MM-DD HH:mm:ss" або "YYYY-M-D H:m:s"
     try {
       if (ts.isEmpty) return null;

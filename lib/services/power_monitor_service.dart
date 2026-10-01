@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/power_event.dart';
+import '../models/power_monitor_status.dart';
 import 'app_logger.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
@@ -16,13 +17,22 @@ class PowerMonitorService {
   static const Duration defaultPollingInterval = Duration(seconds: 30);
   static const Duration maxPollingInterval = Duration(minutes: 5);
   static const Duration authErrorPollingInterval = Duration(minutes: 10);
+  static const Duration defaultHeartbeatTtl = Duration(minutes: 25);
+  static const Duration defaultEventTtl = Duration(hours: 24);
 
   String? _customUrl;
 
   Timer? _pollTimer;
+  Timer? _stalenessTimer;
   String _currentStatus = 'unknown'; // 'online' / 'offline' / 'unknown'
+  String _rawLastStatus = 'unknown';
   DateTime? _lastEventTime;
+  DateTime? _lastSeen;
+  DateTime? _lastSuccessfulSync;
   bool _isEnabled = false;
+  Duration _heartbeatTtl = defaultHeartbeatTtl;
+  final Duration _eventTtl = defaultEventTtl;
+  PowerMonitorSnapshot _snapshot = PowerMonitorSnapshot.unknown();
 
   int _consecutiveErrors = 0;
   String? _lastSyncError;
@@ -34,6 +44,195 @@ class PowerMonitorService {
   String? get lastSyncError => _lastSyncError;
   int get consecutiveErrors => _consecutiveErrors;
   Duration get currentPollDelay => _currentPollDelay;
+  DateTime? get lastSeen => _lastSeen;
+  DateTime? get lastSuccessfulSync => _lastSuccessfulSync;
+  Duration get heartbeatTtl => _heartbeatTtl;
+  PowerMonitorSnapshot get snapshot => _snapshot;
+  RealPowerState get effectiveState => _snapshot.status;
+
+  /// Парсинг різноманітних форматів last_seen (рядок, unix timestamp, Map)
+  static DateTime? parseLastSeen(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) {
+      final ms = raw < 10000000000 ? raw * 1000 : raw;
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    if (raw is double) {
+      if (raw.isNaN || raw.isInfinite) return null;
+      final ms = raw < 10000000000 ? (raw * 1000).toInt() : raw.toInt();
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    if (raw is Map) {
+      final val =
+          raw['timestamp'] ?? raw['last_seen'] ?? raw['time'] ?? raw['date'];
+      return parseLastSeen(val);
+    }
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      final asNum = int.tryParse(trimmed);
+      if (asNum != null) {
+        final ms = asNum < 10000000000 ? asNum * 1000 : asNum;
+        return DateTime.fromMillisecondsSinceEpoch(ms);
+      }
+      final parsedIso = DateTime.tryParse(trimmed);
+      if (parsedIso != null) return parsedIso;
+      return PowerEvent.parseTimestamp(trimmed);
+    }
+    return null;
+  }
+
+  /// Чиста функція розрахунку стану монітора з урахуванням застарівання
+  static PowerMonitorSnapshot evaluatePowerState({
+    required bool isEnabled,
+    required String? customUrl,
+    int consecutiveErrors = 0,
+    DateTime? lastSeen,
+    DateTime? lastEventTime,
+    DateTime? lastSyncTime,
+    String? errorMessage,
+    String? rawStatus,
+    Duration ttl = defaultHeartbeatTtl,
+    Duration eventTtl = defaultEventTtl,
+    DateTime? now,
+  }) {
+    final currentTime = now ?? DateTime.now();
+
+    if (!isEnabled || customUrl == null || customUrl.trim().isEmpty) {
+      return PowerMonitorSnapshot.unknown(
+        reason: PowerStateReason.notConfigured,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    if (consecutiveErrors >= 3) {
+      return PowerMonitorSnapshot.unknown(
+        reason: PowerStateReason.networkError,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    final normStatus = RealPowerState.fromString(rawStatus);
+
+    // 1. Стан OFFLINE (триває відключення світла)
+    // Коли 220В відсутнє, сенсор/роутер знеструмлений і фізично не може надсилати пінги.
+    // Тому статус OFF залишається дійсним, доки триває блекаут (або доки не вийде загальний eventTtl).
+    if (normStatus == RealPowerState.offline) {
+      final refTime = lastEventTime ?? lastSeen;
+      if (eventTtl > Duration.zero &&
+          refTime != null &&
+          currentTime.difference(refTime) > eventTtl) {
+        return PowerMonitorSnapshot.unknown(
+          reason: PowerStateReason.staleEvent,
+          lastSeen: lastSeen,
+          lastEventTime: lastEventTime,
+          lastSyncTime: lastSyncTime,
+          errorMessage: errorMessage,
+          ttl: ttl,
+        );
+      }
+      return PowerMonitorSnapshot(
+        status: RealPowerState.offline,
+        reason: PowerStateReason.fresh,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    // 2. Якщо користувач вимкнув TTL у налаштуваннях (Duration.zero)
+    if (ttl == Duration.zero) {
+      return PowerMonitorSnapshot(
+        status: normStatus == RealPowerState.unknown
+            ? RealPowerState.unknown
+            : normStatus,
+        reason: normStatus == RealPowerState.unknown
+            ? PowerStateReason.noData
+            : PowerStateReason.fresh,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    // 3. Пріоритет: перевірка Heartbeat (last_seen), якщо налаштовано
+    if (lastSeen != null) {
+      final age = currentTime.difference(lastSeen);
+      if (age > ttl) {
+        return PowerMonitorSnapshot.unknown(
+          reason: PowerStateReason.staleLastSeen,
+          lastSeen: lastSeen,
+          lastEventTime: lastEventTime,
+          lastSyncTime: lastSyncTime,
+          errorMessage: errorMessage,
+          ttl: ttl,
+        );
+      }
+      return PowerMonitorSnapshot(
+        status: normStatus == RealPowerState.unknown
+            ? RealPowerState.unknown
+            : normStatus,
+        reason: normStatus == RealPowerState.unknown
+            ? PowerStateReason.noData
+            : PowerStateReason.fresh,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    // 4. Фолбек: перевірка часу останньої події, якщо last_seen відсутній
+    if (lastEventTime != null) {
+      final age = currentTime.difference(lastEventTime);
+      if (eventTtl > Duration.zero && age > eventTtl) {
+        return PowerMonitorSnapshot.unknown(
+          reason: PowerStateReason.staleEvent,
+          lastSeen: lastSeen,
+          lastEventTime: lastEventTime,
+          lastSyncTime: lastSyncTime,
+          errorMessage: errorMessage,
+          ttl: ttl,
+        );
+      }
+      return PowerMonitorSnapshot(
+        status: normStatus == RealPowerState.unknown
+            ? RealPowerState.unknown
+            : normStatus,
+        reason: normStatus == RealPowerState.unknown
+            ? PowerStateReason.noData
+            : PowerStateReason.fresh,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    // 5. Жодних даних
+    return PowerMonitorSnapshot.unknown(
+      reason: PowerStateReason.noData,
+      lastSeen: lastSeen,
+      lastEventTime: lastEventTime,
+      lastSyncTime: lastSyncTime,
+      errorMessage: errorMessage,
+      ttl: ttl,
+    );
+  }
 
   /// Обчислення наступної затримки опитування (Exponential Backoff для помилок)
   static Duration calculateNextPollDelay({
@@ -49,8 +248,6 @@ class PowerMonitorService {
     if (consecutiveErrors <= 0) {
       return baseInterval;
     }
-    // Клемпимо ступінь зсуву (0..10), щоб запобігти переповненню цілих чисел (integer overflow)
-    // при тривалій відсутності зв'язку (>32 або >64 помилок)
     final shift = (consecutiveErrors - 1).clamp(0, 10);
     final multiplier = 1 << shift;
     final delaySeconds = (baseInterval.inSeconds * multiplier).clamp(
@@ -108,8 +305,9 @@ class PowerMonitorService {
   String get currentStatus => _currentStatus;
   DateTime? get lastEventTime => _lastEventTime;
   bool get isEnabled => _isEnabled;
-  bool get isOnline => _currentStatus == 'online';
-  bool get isOffline => _currentStatus == 'offline';
+  bool get isOnline => _snapshot.status == RealPowerState.online;
+  bool get isOffline => _snapshot.status == RealPowerState.offline;
+  bool get isUnknown => _snapshot.status == RealPowerState.unknown;
   String? get customUrl => _customUrl;
 
   /// Ініціалізація: завантажити налаштування і запустити polling.
@@ -124,6 +322,15 @@ class PowerMonitorService {
     }
     _isEnabled = prefs?.getBool('power_monitor_enabled') ?? false;
     _customUrl = prefs?.getString('custom_power_monitor_url');
+
+    final ttlMinutes = prefs?.getInt('power_monitor_ttl_minutes') ?? 25;
+    _heartbeatTtl = Duration(minutes: ttlMinutes);
+
+    // Відновлюємо закешований last_seen, щоб уникнути спалаху "unknown" при холодному старті
+    final cachedLastSeenStr = prefs?.getString('power_monitor_last_seen');
+    if (cachedLastSeenStr != null) {
+      _lastSeen = DateTime.tryParse(cachedLastSeenStr);
+    }
 
     if (_isEnabled) {
       // Cleanup bad data first
@@ -161,15 +368,31 @@ class PowerMonitorService {
       startPolling();
     } else {
       stopPolling();
+      _rawLastStatus = 'unknown';
+      _lastSeen = null;
+      _lastEventTime = null;
+      _snapshot =
+          PowerMonitorSnapshot.unknown(reason: PowerStateReason.disabled);
       _currentStatus = 'unknown';
       _notifyStatusChanged(_currentStatus);
+      PreferencesHelper.getSafeInstance().then((prefs) {
+        prefs.remove('power_monitor_last_seen');
+      }).catchError((_) {});
     }
   }
 
-  /// Запуск polling з підтримкою динамічного інтервалу.
+  /// Запуск polling з підтримкою динамічного інтервалу та таймера застарівання.
   void startPolling({Duration? initialDelay}) {
     stopPolling();
+    _startStalenessTimer();
     _scheduleNextPoll(initialDelay ?? _currentPollDelay);
+  }
+
+  void _startStalenessTimer() {
+    _stalenessTimer?.cancel();
+    _stalenessTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _checkStaleness();
+    });
   }
 
   void _scheduleNextPoll(Duration delay) {
@@ -183,6 +406,8 @@ class PowerMonitorService {
   void stopPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _stalenessTimer?.cancel();
+    _stalenessTimer = null;
   }
 
   /// Головна функція: завантажити події з Firebase → зберегти локально → оновити статус.
@@ -205,8 +430,9 @@ class PowerMonitorService {
         } else {
           await _saveToLocalDb(events);
         }
-        _updateCurrentStatus(events);
       }
+      _lastSuccessfulSync = DateTime.now();
+      _updateCurrentStatus(events);
 
       // Успішне відновлення зв'язку
       if (_hadPreviousError) {
@@ -264,8 +490,12 @@ class PowerMonitorService {
         final localEvents = await getLocalEvents();
         if (localEvents.isNotEmpty) {
           _updateCurrentStatus(localEvents);
+        } else {
+          _applySnapshotUpdate();
         }
-      } catch (_) {}
+      } catch (_) {
+        _applySnapshotUpdate();
+      }
 
       _scheduleNextPoll(_currentPollDelay);
     } finally {
@@ -294,7 +524,7 @@ class PowerMonitorService {
         tag: 'PowerMonitor');
   }
 
-  // 1. ИСПРАВЛЕННЫЙ МЕТОД ЗАГРУЗКИ (Сортировка по времени, а не ключу)
+  // 1. ИСПРАВЛЕННЫЙ МЕТОД ЗАГРУЗКИ (Сортировка по времени, а не ключу + Heartbeat last_seen)
   Future<List<PowerEvent>> _fetchFromFirebase() async {
     if (_customUrl == null || _customUrl!.trim().isEmpty) return [];
 
@@ -303,13 +533,23 @@ class PowerMonitorService {
       baseUrl = baseUrl.substring(0, baseUrl.length - 1);
     }
 
-    // Запрашиваем события. Лучше фильтровать по timestamp, если возможно,
-    // но для надежности берем последние 100-200 записей, чтобы закрыть "дыры" истории.
-    // limitToLast=200 гарантирует, что мы получим актуальные данные даже при плохом интернете.
     final url = '$baseUrl/events.json?orderBy="\$key"&limitToLast=200';
+    final lastSeenUrl = '$baseUrl/last_seen.json';
 
-    final response =
-        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+    final responses = await Future.wait([
+      http.get(Uri.parse(url)).timeout(const Duration(seconds: 15)),
+      http
+          .get(Uri.parse(lastSeenUrl))
+          .timeout(const Duration(seconds: 10))
+          .catchError((e) {
+        AppLogger.w('PowerMonitor: Не вдалося завантажити last_seen: $e',
+            tag: 'PowerMonitor');
+        return http.Response('network_error', 504);
+      }),
+    ]);
+
+    final response = responses[0];
+    final lastSeenResponse = responses[1];
 
     if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');
@@ -319,6 +559,47 @@ class PowerMonitorService {
     if (!contentType.contains('application/json')) {
       throw FormatException(
           'Invalid Content-Type. Expected JSON but got: $contentType');
+    }
+
+    // Попередження про права доступу до last_seen
+    if (lastSeenResponse.statusCode == 401 ||
+        lastSeenResponse.statusCode == 403) {
+      AppLogger.w(
+        'PowerMonitor: Доступ до /last_seen.json заборонено (HTTP ${lastSeenResponse.statusCode}). '
+        'Перевірте правила доступу у Firebase Console.',
+        tag: 'PowerMonitor',
+      );
+    }
+
+    // Обробка Heartbeat / last_seen
+    if (lastSeenResponse.statusCode == 200) {
+      final lastSeenBody = lastSeenResponse.body.trim();
+      if (lastSeenBody == 'null' || lastSeenBody.isEmpty) {
+        // Firebase підтвердив, що нода /last_seen відсутня в БД.
+        // Скидаємо збережений час, щоб уникнути помилкового статусу UNKNOWN
+        if (_lastSeen != null) {
+          _lastSeen = null;
+          PreferencesHelper.getSafeInstance().then((prefs) {
+            prefs.remove('power_monitor_last_seen');
+          }).catchError((_) {});
+        }
+      } else {
+        try {
+          final decoded = jsonDecode(lastSeenBody);
+          final dt = parseLastSeen(decoded);
+          if (dt != null) {
+            if (_lastSeen != dt) {
+              _lastSeen = dt;
+              PreferencesHelper.getSafeInstance().then((prefs) {
+                prefs.setString(
+                    'power_monitor_last_seen', dt.toIso8601String());
+              }).catchError((_) {});
+            }
+          }
+        } catch (e) {
+          AppLogger.w('Error parsing last_seen: $e', tag: 'PowerMonitor');
+        }
+      }
     }
 
     final body = response.body;
@@ -376,7 +657,10 @@ class PowerMonitorService {
 
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setString('custom_power_monitor_url', baseUrl);
+      await prefs.remove('power_monitor_last_seen');
       _customUrl = baseUrl;
+      _lastSeen = null;
+      _rawLastStatus = 'unknown';
       _consecutiveErrors = 0;
       _hadPreviousError = false;
       _wasAuthError = false;
@@ -422,13 +706,11 @@ class PowerMonitorService {
     await batch.commit(noResult: true);
   }
 
-  Future<void> _updateCurrentStatus(List<PowerEvent> events) async {
-    if (events.isEmpty) {
-      _currentStatus = 'unknown';
-    } else {
+  void _updateCurrentStatus(List<PowerEvent> events) {
+    if (events.isNotEmpty) {
       // Events are sorted by timestamp ASC, so last is the latest
       final latest = events.last;
-      _currentStatus = latest.status;
+      _rawLastStatus = latest.status;
 
       // Ensure we track the latest update time
       if (_lastEventTime == null || latest.timestamp.isAfter(_lastEventTime!)) {
@@ -436,8 +718,57 @@ class PowerMonitorService {
       }
     }
 
-    AppLogger.d('Status updated to: $_currentStatus', tag: 'PowerMonitor');
-    _notifyStatusChanged(_currentStatus);
+    _applySnapshotUpdate();
+  }
+
+  void _applySnapshotUpdate() {
+    final oldStatus = _currentStatus;
+    final oldSnapshot = _snapshot;
+
+    _snapshot = evaluatePowerState(
+      isEnabled: _isEnabled,
+      customUrl: _customUrl,
+      consecutiveErrors: _consecutiveErrors,
+      lastSeen: _lastSeen,
+      lastEventTime: _lastEventTime,
+      lastSyncTime: _lastSuccessfulSync,
+      errorMessage: _lastSyncError,
+      rawStatus: _rawLastStatus,
+      ttl: _heartbeatTtl,
+      eventTtl: _eventTtl,
+    );
+
+    _currentStatus = _snapshot.status.toSerializedString();
+
+    if (_snapshot != oldSnapshot) {
+      AppLogger.d(
+          'Status updated to: $_currentStatus (reason: ${_snapshot.reason})',
+          tag: 'PowerMonitor');
+    }
+
+    // Сповіщаємо слухачів (HomeNotifier / Riverpod) ВИКЛЮЧНО коли статус змінився!
+    if (_currentStatus != oldStatus) {
+      _notifyStatusChanged(_currentStatus);
+    }
+  }
+
+  void _checkStaleness() {
+    if (!_isEnabled) return;
+    _applySnapshotUpdate();
+  }
+
+  /// Налаштування тривалості TTL для застарівання (0 = без таймауту)
+  Future<void> setTtlMinutes(int minutes) async {
+    final safeMinutes = minutes < 0 ? 25 : minutes;
+    _heartbeatTtl = Duration(minutes: safeMinutes);
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      await prefs.setInt('power_monitor_ttl_minutes', safeMinutes);
+    } catch (e) {
+      AppLogger.e('Error saving power_monitor_ttl_minutes',
+          tag: 'PowerMonitor', error: e);
+    }
+    _checkStaleness();
   }
 
   /// Отримати всі події з локальної БД (відсортовані за timestamp).

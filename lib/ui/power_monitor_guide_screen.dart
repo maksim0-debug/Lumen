@@ -46,6 +46,33 @@ class PowerMonitorGuideScreen extends StatelessWidget {
               'Додаток "Люмен" дозволяє відстежувати реальну наявність світла у вас вдома, а не лише покладатись на графіки ДТЕК. Для цього потрібен пристрій, який буде знаходитись вдома і відправляти дані в базу при зникненні або появі 220В.',
               style: TextStyle(fontSize: 15),
             ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.black26
+                    : Colors.grey.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('💡 Додаток підтримує 3 правдиві статуси:',
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  SizedBox(height: 4),
+                  Text(
+                      '• 🟢 ON — живлення є, сенсор активний та надсилає дані.',
+                      style: TextStyle(fontSize: 12)),
+                  Text('• 🔴 OFF — живлення відсутнє (зафіксовано блекаут).',
+                      style: TextStyle(fontSize: 12)),
+                  Text(
+                      '• ⚪ UNKNOWN — дані застаріли (>25 хв), сенсор вимкнувся або відсутній інтернет.',
+                      style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -207,6 +234,40 @@ class PowerMonitorGuideScreen extends StatelessWidget {
             const Text(
                 '• Макроси (Локальні змінні): Встановити змінну is_light_off = Хибність.\n'
                 '• Кінець умови (End IF).'),
+            const SizedBox(height: 16),
+            const Text(
+                'Макрос 3: Пінг активності (Heartbeat / last_seen) — РЕКОМЕНДОВАНО',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Colors.blue)),
+            const SizedBox(height: 4),
+            const Text(
+                'Навіщо: якщо світло горить стабільно або якщо телефон раптово вимкнувся/розрядився, додаток дізнається про це за відсутністю пінгу. Макрос оновлює last_seen кожні 10-15 хвилин. Якщо додаток не бачить оновлень понад 25 хвилин, він чесно перемикається в сірий статус UNKNOWN.',
+                style: TextStyle(fontStyle: FontStyle.italic, fontSize: 13)),
+            const SizedBox(height: 8),
+            const Text(
+                'Тригери:\n• Регулярний інтервал: кожні 10 або 15 хвилин.'),
+            const SizedBox(height: 4),
+            const Text('Дії:\n'
+                '• Додатки -> HTTP-запит:\n'
+                '  - Метод: PUT\n'
+                '  - URL: [ВАШ_FIREBASE_URL]/last_seen.json\n'
+                '  - Content Type: application/json\n'
+                '  - Тіло (Text):'),
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.black26
+                      : Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(4)),
+              child: const Text(
+                '"[year]-[month_digit]-[dayofmonth] [hour]:[minute]:[second]"',
+                style: TextStyle(fontFamily: 'monospace', fontSize: 13),
+              ),
+            ),
           ],
         ),
       ),
@@ -240,6 +301,12 @@ class PowerMonitorGuideScreen extends StatelessWidget {
             const SizedBox(height: 8),
             const Text(
                 'Статус "offline" в цьому випадку доведеться фіксувати зовнішнім сервером (VPS) або іншим пристроєм, оскільки вимкнений роутер нічого не відправить.'),
+            const SizedBox(height: 8),
+            const Text(
+                'Також додайте періодичний пінг у cron для оновлення last_seen кожні 10 хвилин (інакше статус стане UNKNOWN при раптовій втраті зв\'язку):\n'
+                '*/10 * * * * curl -s -X PUT -d "\\"\$(date -u +\'%Y-%m-%dT%H:%M:%SZ\')\\"" [ВАШ_FIREBASE_URL]/last_seen.json\n'
+                '(або через Unix timestamp: curl -s -X PUT -d \$(date +%s) [ВАШ_FIREBASE_URL]/last_seen.json)',
+                style: TextStyle(fontFamily: 'monospace', fontSize: 12)),
           ],
         ),
       ),
@@ -274,6 +341,9 @@ class PowerMonitorGuideScreen extends StatelessWidget {
             const SizedBox(height: 8),
             const Text(
                 'Для фіксації "offline" можна використовувати конденсатор/акумулятор (щоб встигнути відправити сигнал перед остаточним вимкненням) або використовувати серверну перевірку (Watchdog).'),
+            const SizedBox(height: 8),
+            const Text(
+                'Для підтримки статусу активності налаштуйте періодичний HTTP PUT запит на /last_seen.json кожні 10 хвилин. Якщо живлення раптово пропаде без сигналу offline, додаток через 25 хвилин чесно увімкне статус UNKNOWN.'),
           ],
         ),
       ),
