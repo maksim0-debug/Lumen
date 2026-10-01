@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
+import '../services/app_info_service.dart';
 import '../services/app_logger.dart';
 import '../services/parser_service.dart';
 
@@ -40,6 +41,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _powerMonitorEnabled = false;
   double _uiScale = 1.0;
   List<String> _notificationGroups = [];
+  String _appVersion = '';
 
   final TextEditingController _customUrlController = TextEditingController();
 
@@ -72,10 +74,19 @@ class _SettingsPageState extends State<SettingsPage> {
         }
       }
 
+      String appVersion = '';
+      try {
+        appVersion = await AppInfoService.getAppVersion();
+      } catch (e) {
+        AppLogger.w("Error loading app version in SettingsPage: $e",
+            tag: 'SettingsPage');
+      }
+
       if (!mounted) return;
 
       setState(() {
         _launchAtStartup = launchOnStart;
+        _appVersion = appVersion;
         if (prefs != null) {
           _notify1hBeforeOff = prefs.getBool('notify_1h_before_off') ?? true;
           _notify30mBeforeOff = prefs.getBool('notify_30m_before_off') ?? true;
@@ -595,7 +606,26 @@ class _SettingsPageState extends State<SettingsPage> {
                     _saveSetting('enable_logging', val);
                   },
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 24),
+                if (_appVersion.isNotEmpty) ...[
+                  Center(
+                    child: Text(
+                      "Версія $_appVersion",
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.color
+                                ?.withValues(alpha: 0.5) ??
+                            Colors.grey,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ] else ...[
+                  const SizedBox(height: 20),
+                ],
               ],
             ),
     );

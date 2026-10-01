@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app_info_service.dart';
 import 'app_logger.dart';
 import 'background_service.dart';
 import 'notification_service.dart';
@@ -40,8 +40,7 @@ class PlatformInitService {
   static Future<void> initBackgroundServices() async {
     if (Platform.isWindows) {
       try {
-        final packageInfo = await PackageInfo.fromPlatform()
-            .timeout(const Duration(seconds: 3));
+        final packageInfo = await AppInfoService.getPackageInfo();
 
         if (packageInfo.appName != "Lumen") {
           launchAtStartup.setup(
