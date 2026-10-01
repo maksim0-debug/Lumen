@@ -34,6 +34,11 @@ import 'ui/achievements_screen.dart';
 import 'ui/widgets/home/countdown_card.dart';
 import 'ui/widgets/home/real_mode_grid_cell.dart';
 import 'ui/widgets/home/predicted_mode_grid_cell.dart';
+import 'ui/widgets/home/darkness_stage_banner.dart';
+import 'ui/widgets/home/data_source_toggle.dart';
+import 'ui/widgets/home/schedule_intervals_list.dart';
+import 'ui/dialogs/version_picker_sheet.dart';
+import 'ui/dialogs/hour_detail_dialog.dart';
 
 export 'services/widget_background_callback.dart' show backgroundCallback;
 
@@ -916,53 +921,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _showVersionPicker() {
-    if (_historyVersions.isEmpty) return;
-
-    showModalBottomSheet(
+    VersionPickerSheet.show(
       context: context,
-      builder: (BuildContext context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        return Container(
-          color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-          padding: const EdgeInsets.only(top: 16, bottom: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text("Оберіть версію",
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              ),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: _historyVersions.length,
-                  separatorBuilder: (context, index) => const Divider(),
-                  itemBuilder: (context, index) {
-                    final versionIndex = _historyVersions.length - 1 - index;
-                    final version = _historyVersions[versionIndex];
-                    final isSelected = versionIndex == _selectedVersionIndex;
-                    return ListTile(
-                      leading: const Icon(Icons.history, color: Colors.orange),
-                      title: Text(version.timeString,
-                          style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text("(${version.outageString})"),
-                      trailing: isSelected
-                          ? const Icon(Icons.check, color: Colors.green)
-                          : null,
-                      onTap: () {
-                        _selectVersion(versionIndex);
-                        Navigator.pop(context);
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+      versions: _historyVersions,
+      selectedVersionIndex: _selectedVersionIndex,
+      onVersionSelected: _selectVersion,
     );
   }
 
@@ -1111,187 +1074,16 @@ class _HomeScreenState extends State<HomeScreen>
         isOffline: _powerMonitor.isOffline,
       );
 
-  /// Віджет індикатора реального часу (220В статус).
-  Widget _buildPowerIndicator() {
-    if (!_powerMonitorEnabled) return const SizedBox.shrink();
-
-    final isOnline = _powerStatus == 'online';
-    final isOffline = _powerStatus == 'offline';
-
-    final Color bgColor;
-    final Color textColor;
-    final String label;
-    final IconData icon;
-
-    if (isOnline) {
-      bgColor = Colors.green.withValues(alpha: 0.15);
-      textColor = Colors.green;
-      label = "ON";
-      icon = Icons.power;
-    } else if (isOffline) {
-      bgColor = Colors.red.withValues(alpha: 0.15);
-      textColor = Colors.red;
-      label = "OFF";
-      icon = Icons.power_off;
-    } else {
-      bgColor = Colors.grey.withValues(alpha: 0.15);
-      textColor = Colors.grey;
-      label = "...";
-      icon = Icons.pending;
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: textColor.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: textColor, size: 16),
-          const SizedBox(width: 4),
-          Text(label,
-              style: TextStyle(
-                  color: textColor, fontSize: 12, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
   /// Банер поточної стадії тьми (показується коли автотема ввімкнена).
-  Widget _buildDarknessStageBar() {
-    final darknessService = DarknessThemeService();
-    if (!darknessService.isEnabled) return const SizedBox.shrink();
-
-    final stage = darknessService.currentStage;
-    final icon = DarknessThemeService.stageIcon(stage);
-    final name = DarknessThemeService.stageName(stage);
-    final subtitle = DarknessThemeService.stageSubtitle(stage);
-    final accent = DarknessThemeService.stageAccentColor(stage);
-    final secondary = DarknessThemeService.stageSecondaryColor(stage);
-    final flutterIcon = DarknessThemeService.stageFlutterIcon(stage);
-
-    // Stalker mode: более жёсткий и тревожный стиль
-    final isStalker = stage == DarknessStage.stalker;
-    final isCyberpunk = stage == DarknessStage.cyberpunk;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      padding: EdgeInsets.symmetric(
-        horizontal: isStalker ? 8 : 12,
-        vertical: isStalker ? 8 : 6,
-      ),
-      decoration: BoxDecoration(
-        color: isStalker
-            ? Colors.black
-            : isCyberpunk
-                ? const Color(0xFF08081A)
-                : accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(isStalker ? 2 : 10),
-        border: Border.all(
-          color: isStalker
-              ? accent.withValues(alpha: 0.6)
-              : accent.withValues(alpha: 0.3),
-          width: isStalker ? 1.5 : 1,
-        ),
-        boxShadow: isCyberpunk || isStalker
-            ? [
-                BoxShadow(
-                  color: accent.withValues(alpha: isStalker ? 0.15 : 0.2),
-                  blurRadius: isStalker ? 8 : 12,
-                  spreadRadius: 0,
-                ),
-              ]
-            : null,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            flutterIcon,
-            color: isStalker ? secondary : accent,
-            size: isStalker ? 18 : 16,
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  isStalker ? '[ $name ]' : '$icon $name',
-                  style: TextStyle(
-                    fontSize: isStalker ? 11 : 12,
-                    color: accent,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: isStalker ? 'monospace' : null,
-                    letterSpacing: isStalker ? 2 : (isCyberpunk ? 1 : 0),
-                  ),
-                ),
-                Text(
-                  isStalker ? subtitle.toUpperCase() : subtitle,
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: accent.withValues(alpha: 0.6),
-                    fontFamily: isStalker ? 'monospace' : null,
-                    letterSpacing: isStalker ? 1.5 : 0,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (isStalker) ...[
-            const SizedBox(width: 8),
-            Icon(
-              Icons.warning_amber,
-              color: secondary,
-              size: 14,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
+  Widget _buildDarknessStageBar() => const DarknessStageBanner();
 
   /// Віджет перемикача "Прогноз / Реальне".
-  Widget _buildDataSourceToggle() {
-    if (!_powerMonitorEnabled) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          ChoiceChip(
-            label: const Text('📋 Прогноз'),
-            selected: _dataSourceMode == DataSourceMode.predicted,
-            selectedColor: Colors.orange.withValues(alpha: 0.3),
-            onSelected: (selected) {
-              if (selected) {
-                _setDataSourceMode(DataSourceMode.predicted);
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          ChoiceChip(
-            label: const Text('⚡ Реальне'),
-            selected: _dataSourceMode == DataSourceMode.real,
-            selectedColor: Colors.amber.withValues(alpha: 0.3),
-            onSelected: (selected) {
-              if (selected) {
-                _setDataSourceMode(DataSourceMode.real);
-              }
-            },
-          ),
-          const SizedBox(width: 4),
-          _buildPowerIndicator(),
-        ],
-      ),
-    );
-  }
+  Widget _buildDataSourceToggle() => DataSourceToggle(
+        powerMonitorEnabled: _powerMonitorEnabled,
+        currentMode: _dataSourceMode,
+        onModeChanged: _setDataSourceMode,
+        powerStatus: _powerStatus,
+      );
 
   /// Отримати дату, яку зараз переглядає користувач.
   DateTime _getDisplayDate() {
@@ -1811,92 +1603,10 @@ class _HomeScreenState extends State<HomeScreen>
                                   child: _buildGrid(currentDisplay, cols,
                                       realHourSegments: _realHourSegments),
                                 ),
-                                if (intervals.isNotEmpty)
-                                  const Padding(
-                                    padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
-                                    child: Text("Розклад інтервалами:",
-                                        style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 16)),
-                                  ),
-                                if (intervals.isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                        12, 0, 12, 40),
-                                    child: Card(
-                                      child: Column(
-                                        children: intervals.map((interval) {
-                                          return GestureDetector(
-                                            onLongPress: () =>
-                                                _showIntervalMenu(
-                                                    context, interval),
-                                            child: Container(
-                                              decoration: const BoxDecoration(
-                                                  border: Border(
-                                                      bottom: BorderSide(
-                                                          color:
-                                                              Colors.white10))),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      vertical: 12,
-                                                      horizontal: 16),
-                                              child: Row(
-                                                children: [
-                                                  SizedBox(
-                                                      width: 120,
-                                                      child: Text(
-                                                          interval.timeRange,
-                                                          style: TextStyle(
-                                                              fontSize: 16,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w500,
-                                                              color: interval
-                                                                      .statusText
-                                                                      .contains(
-                                                                          "OFF")
-                                                                  ? Colors.red
-                                                                  : (Theme.of(context)
-                                                                              .brightness ==
-                                                                          Brightness
-                                                                              .dark
-                                                                      ? Colors
-                                                                          .white
-                                                                      : Colors
-                                                                          .black87)))),
-                                                  Container(
-                                                    padding: const EdgeInsets
-                                                        .symmetric(
-                                                        horizontal: 8,
-                                                        vertical: 2),
-                                                    decoration: BoxDecoration(
-                                                        color: interval.color
-                                                            .withValues(
-                                                                alpha: 0.2),
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(4)),
-                                                    child: Text(
-                                                        interval.statusText,
-                                                        style: TextStyle(
-                                                            color:
-                                                                interval.color,
-                                                            fontWeight:
-                                                                FontWeight
-                                                                    .bold)),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text("(${interval.duration})",
-                                                      style: const TextStyle(
-                                                          color: Colors.grey)),
-                                                ],
-                                              ),
-                                            ),
-                                          );
-                                        }).toList(),
-                                      ),
-                                    ),
-                                  )
+                                ScheduleIntervalsList(
+                                  intervals: intervals,
+                                  onIntervalLongPress: _showIntervalMenu,
+                                ),
                               ],
                             ),
                           ),
@@ -1997,37 +1707,12 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _showHourDetailTooltip(int hour) {
     if (_realHourSegments == null || hour >= _realHourSegments!.length) return;
-    final segs = _realHourSegments![hour];
-
-    showDialog(
+    HourDetailDialog.show(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: Text("Деталі за $hour:00"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: segs.map((s) {
-              final startM = (s.start * 60).toInt();
-              final endM = (s.end * 60).toInt();
-              return ListTile(
-                leading: CircleAvatar(backgroundColor: s.color, radius: 8),
-                title: Text("${_fmtHM(hour, startM)} - ${_fmtHM(hour, endM)}"),
-                subtitle: Text(s.isFuture ? "Прогноз" : "Фактичні дані"),
-              );
-            }).toList(),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text("Закрити"),
-            ),
-          ],
-        );
-      },
+      hour: hour,
+      segments: _realHourSegments![hour],
     );
   }
-
-  String _fmtHM(int h, int m) => AppFormatters.fmtHM(h, m);
 
   void _showIntervalMenu(BuildContext context, dynamic interval) {
     // Placeholder for interval menu used in other modes
