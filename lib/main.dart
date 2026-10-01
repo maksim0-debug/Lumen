@@ -3,17 +3,13 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:launch_at_startup/launch_at_startup.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:home_widget/home_widget.dart';
 
 import 'package:path/path.dart' as p;
 
 import 'services/app_logger.dart';
-import 'services/background_service.dart';
 import 'services/notification_service.dart';
 import 'services/parser_service.dart';
 import 'services/widget_service.dart';
@@ -22,9 +18,9 @@ import 'services/power_monitor_service.dart';
 import 'services/preferences_helper.dart';
 import 'services/achievement_service.dart';
 import 'services/darkness_theme_service.dart';
-import 'services/countdown_service.dart';
 import 'services/hour_segment_service.dart';
 import 'services/schedule_calculation_service.dart';
+import 'services/platform_init_service.dart';
 import 'utils/app_formatters.dart';
 import 'models/schedule_status.dart';
 import 'models/power_event.dart';
@@ -37,32 +33,9 @@ import 'ui/settings_page.dart';
 import 'ui/analytics_screen.dart';
 import 'ui/achievements_screen.dart';
 import 'ui/widgets/theme_animated_cell.dart';
+import 'ui/widgets/home/countdown_card.dart';
 
-@pragma('vm:entry-point')
-Future<void> backgroundCallback(Uri? uri) async {
-  WidgetsFlutterBinding.ensureInitialized();
-  if (uri?.host == 'refresh') {
-    AppLogger.d("Refresh triggered from widget", tag: 'Background');
-    // Трекер для ачівки "Завжди перед очима"
-    try {
-      AchievementService().trackWidgetOpen();
-    } catch (_) {}
-    final widgetService = WidgetService();
-    try {
-      final parser = ParserService();
-      final allSchedules = await parser.fetchAllSchedules();
-      if (allSchedules.isNotEmpty) {
-        await widgetService.updateWidget(allSchedules);
-      } else {
-        await widgetService.clearAllLoadingStates();
-      }
-    } catch (e) {
-      AppLogger.e("Error refreshing widget", tag: 'Background', error: e);
-
-      await widgetService.clearAllLoadingStates();
-    }
-  }
-}
+export 'services/widget_background_callback.dart' show backgroundCallback;
 
 void main() async {
   AppLogger.i("========================================", tag: 'MAIN');
@@ -70,74 +43,12 @@ void main() async {
   AppLogger.i("========================================", tag: 'MAIN');
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (Platform.isAndroid) {
-    HomeWidget.registerInteractivityCallback(backgroundCallback);
-  }
-
-  if (Platform.isWindows) {
-    try {
-      await windowManager.ensureInitialized();
-      WindowOptions windowOptions = const WindowOptions(
-        size: Size(900, 600),
-        center: true,
-        skipTaskbar: false,
-        title: "Люмен",
-      );
-      await windowManager.waitUntilReadyToShow(windowOptions, () async {
-        await windowManager.show();
-        await windowManager.focus();
-        await windowManager.setPreventClose(true);
-      });
-    } catch (e) {
-      AppLogger.e("Помилка Window Manager", tag: 'MAIN', error: e);
-    }
-  }
+  await PlatformInitService.init();
 
   // Не блокуємо рендеринг інтерфейсу запуском повільних нативних сервісів
-  unawaited(_initBackgroundServices());
+  unawaited(PlatformInitService.initBackgroundServices());
 
   runApp(const MyApp());
-}
-
-Future<void> _initBackgroundServices() async {
-  if (Platform.isWindows) {
-    try {
-      final packageInfo =
-          await PackageInfo.fromPlatform().timeout(const Duration(seconds: 3));
-
-      if (packageInfo.appName != "Lumen") {
-        launchAtStartup.setup(
-          appName: packageInfo.appName,
-          appPath: Platform.resolvedExecutable,
-        );
-        await launchAtStartup.disable();
-      }
-
-      launchAtStartup.setup(
-        appName: "Lumen",
-        appPath: Platform.resolvedExecutable,
-      );
-    } catch (e) {
-      AppLogger.e("Помилка автозапуску", tag: 'MAIN', error: e);
-    }
-  }
-
-  try {
-    final notificationService = NotificationService();
-    await notificationService.init().timeout(const Duration(seconds: 4));
-  } catch (e) {
-    AppLogger.e("Помилка сповіщень", tag: 'MAIN', error: e);
-  }
-
-  if (Platform.isAndroid) {
-    try {
-      final bgManager = BackgroundManager();
-      await bgManager.init().timeout(const Duration(seconds: 4));
-      bgManager.registerPeriodicTask();
-    } catch (e) {
-      AppLogger.e("Помилка Background", tag: 'MAIN', error: e);
-    }
-  }
 }
 
 class MyApp extends StatefulWidget {
@@ -283,115 +194,6 @@ class _MyAppState extends State<MyApp> {
     colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
     useMaterial3: true,
   );
-}
-
-class CountdownCard extends StatefulWidget {
-  final FullSchedule? fullSchedule;
-
-  const CountdownCard({
-    super.key,
-    required this.fullSchedule,
-  });
-
-  @override
-  State<CountdownCard> createState() => _CountdownCardState();
-}
-
-class _CountdownCardState extends State<CountdownCard> {
-  Timer? _ticker;
-  int _lastRenderedMinute = -1;
-
-  @override
-  void initState() {
-    super.initState();
-    _lastRenderedMinute = DateTime.now().minute;
-    _scheduleNextMinuteTick();
-  }
-
-  void _scheduleNextMinuteTick() {
-    _ticker?.cancel();
-    final now = DateTime.now();
-    final msToNextMinute = (60 - now.second) * 1000 - now.millisecond + 100;
-    _ticker = Timer(Duration(milliseconds: msToNextMinute), () {
-      if (mounted) {
-        if (widget.fullSchedule != null) {
-          final currentMinute = DateTime.now().minute;
-          if (currentMinute != _lastRenderedMinute) {
-            _lastRenderedMinute = currentMinute;
-            setState(() {});
-          }
-        }
-        _scheduleNextMinuteTick();
-      }
-    });
-  }
-
-  @override
-  void didUpdateWidget(covariant CountdownCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.fullSchedule != widget.fullSchedule) {
-      _lastRenderedMinute = DateTime.now().minute;
-    }
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.fullSchedule == null) {
-      return const SizedBox.shrink();
-    }
-
-    final countdown = CountdownService.calculateCountdown(
-      today: widget.fullSchedule!.today,
-      tomorrow: widget.fullSchedule!.tomorrow,
-      now: DateTime.now(),
-    );
-
-    if (countdown == null) return const SizedBox.shrink();
-
-    final msg = countdown.message;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final darknessService = DarknessThemeService();
-    final stage =
-        darknessService.isEnabled ? darknessService.currentStage : null;
-
-    final style = DarknessStageStyle.of(stage).countdownStyle(isDark);
-
-    final baseTextStyle = TextStyle(
-      fontSize: 18,
-      fontWeight: FontWeight.bold,
-      color: style.textColor,
-    );
-    final finalTextStyle = style.extraStyle != null
-        ? baseTextStyle.merge(style.extraStyle)
-        : baseTextStyle;
-
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: style.containerColor,
-          borderRadius: BorderRadius.circular(style.borderRadius),
-          border: style.border,
-          boxShadow: style.shadows,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.timer_outlined, color: style.iconColor, size: 24),
-            const SizedBox(width: 8),
-            Text(msg, style: finalTextStyle),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class HomeScreen extends StatefulWidget {
