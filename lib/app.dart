@@ -1,6 +1,7 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'services/app_logger.dart';
 import 'services/darkness_theme_service.dart';
@@ -102,29 +103,31 @@ class _LumenAppState extends State<LumenApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Люмен',
-      debugShowCheckedModeBanner: false,
-      theme: _activeTheme,
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      supportedLocales: const [
-        Locale('uk', 'UA'),
-      ],
-      builder: (context, child) {
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: TextScaler.linear(_uiScale),
-          ),
-          child: child!,
-        );
-      },
-      home: HomeScreen(
-        onThemeChanged: _toggleTheme,
-        onScaleChanged: _reloadScale,
+    return ProviderScope(
+      child: MaterialApp(
+        title: 'Люмен',
+        debugShowCheckedModeBanner: false,
+        theme: _activeTheme,
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('uk', 'UA'),
+        ],
+        builder: (context, child) {
+          return MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(_uiScale),
+            ),
+            child: child!,
+          );
+        },
+        home: HomeScreen(
+          onThemeChanged: _toggleTheme,
+          onScaleChanged: _reloadScale,
+        ),
       ),
     );
   }
