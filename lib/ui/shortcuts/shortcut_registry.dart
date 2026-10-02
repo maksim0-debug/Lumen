@@ -111,14 +111,14 @@ class AppKeyboardShortcuts {
         const ToggleDataSourceModeIntent(),
 
     // --- Groups (Cherhy) ---
-    // Downwards in the list is next (+1), upwards is previous (-1).
-    const SingleActivator(LogicalKeyboardKey.arrowDown, control: true):
-        const CycleGroupIntent(1),
-    const SingleActivator(LogicalKeyboardKey.numpad2, control: true):
-        const CycleGroupIntent(1),
+    // Upwards increases group number (+1), downwards decreases (-1).
     const SingleActivator(LogicalKeyboardKey.arrowUp, control: true):
-        const CycleGroupIntent(-1),
+        const CycleGroupIntent(1),
     const SingleActivator(LogicalKeyboardKey.numpad8, control: true):
+        const CycleGroupIntent(1),
+    const SingleActivator(LogicalKeyboardKey.arrowDown, control: true):
+        const CycleGroupIntent(-1),
+    const SingleActivator(LogicalKeyboardKey.numpad2, control: true):
         const CycleGroupIntent(-1),
 
     // Layout-independent bracket keys for cycling groups
@@ -245,14 +245,14 @@ class AppKeyboardShortcuts {
         const ToggleDataSourceModeIntent(),
 
     // --- Group Cycling inside Analytics ---
-    // Downwards is next (+1), upwards is previous (-1).
-    const SingleActivator(LogicalKeyboardKey.arrowDown, control: true):
-        const CycleGroupIntent(1),
-    const SingleActivator(LogicalKeyboardKey.numpad2, control: true):
-        const CycleGroupIntent(1),
+    // Upwards increases group number (+1), downwards decreases (-1).
     const SingleActivator(LogicalKeyboardKey.arrowUp, control: true):
-        const CycleGroupIntent(-1),
+        const CycleGroupIntent(1),
     const SingleActivator(LogicalKeyboardKey.numpad8, control: true):
+        const CycleGroupIntent(1),
+    const SingleActivator(LogicalKeyboardKey.arrowDown, control: true):
+        const CycleGroupIntent(-1),
+    const SingleActivator(LogicalKeyboardKey.numpad2, control: true):
         const CycleGroupIntent(-1),
     const AppShortcutActivator(LogicalKeyboardKey.bracketRight,
             physicalKey: PhysicalKeyboardKey.bracketRight):
@@ -384,12 +384,12 @@ class AppKeyboardShortcuts {
           items: [
             ShortcutHelpItem(
               actionName: 'Наступна черга',
-              keyLabels: ['Ctrl + ↓', 'Ctrl + Num 2', ']'],
+              keyLabels: ['Ctrl + ↑', 'Ctrl + Num 8', ']'],
               description: 'Перемикає чергу вперед: 1.1 → 1.2 → 2.1 тощо',
             ),
             ShortcutHelpItem(
               actionName: 'Попередня черга',
-              keyLabels: ['Ctrl + ↑', 'Ctrl + Num 8', '['],
+              keyLabels: ['Ctrl + ↓', 'Ctrl + Num 2', '['],
               description: 'Перемикає чергу назад: 2.1 → 1.2 → 1.1 тощо',
             ),
             ShortcutHelpItem(
@@ -474,7 +474,7 @@ class AppKeyboardShortcuts {
             ),
             ShortcutHelpItem(
               actionName: 'Зміна черги в аналітиці',
-              keyLabels: ['Ctrl + ↓ / ↑', 'Ctrl + Num 2 / 8', '] / ['],
+              keyLabels: ['Ctrl + ↑ / ↓', 'Ctrl + Num 8 / 2', '] / ['],
               description: 'Швидка зміна групи та перезавантаження аналітики',
             ),
             ShortcutHelpItem(
