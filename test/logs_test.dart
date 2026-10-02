@@ -54,6 +54,60 @@ void main() {
       // Should parse as date
       expect(DateTime.tryParse(item['timestamp']), isNotNull);
     });
+
+    test('pruneOldLogs enforces log retention limit', () async {
+      final service = HistoryService();
+      await service.clearLogs();
+
+      for (int i = 1; i <= 10; i++) {
+        await service.insertRawLog("Log entry $i");
+      }
+
+      var logs = await service.getLogs(limit: 50);
+      expect(logs.length, 10);
+
+      // Prune down to 3
+      await service.pruneOldLogs(keep: 3);
+
+      logs = await service.getLogs(limit: 50);
+      expect(logs.length, 3);
+      expect(logs[0]['message'], "Log entry 10");
+      expect(logs[1]['message'], "Log entry 9");
+      expect(logs[2]['message'], "Log entry 8");
+    });
+
+    test('pruneOldLogs with keep <= 0 clears all logs defensively', () async {
+      final service = HistoryService();
+      await service.clearLogs();
+
+      await service.insertRawLog("Log A");
+      await service.insertRawLog("Log B");
+
+      var logs = await service.getLogs();
+      expect(logs.length, 2);
+
+      await service.pruneOldLogs(keep: 0);
+      logs = await service.getLogs();
+      expect(logs.isEmpty, isTrue);
+
+      await service.insertRawLog("Log C");
+      await service.pruneOldLogs(keep: -5);
+      logs = await service.getLogs();
+      expect(logs.isEmpty, isTrue);
+    });
+
+    test('insertRawLog batches 55 logs triggering auto-pruning cycle cleanly',
+        () async {
+      final service = HistoryService();
+      await service.clearLogs();
+
+      for (int i = 1; i <= 55; i++) {
+        await service.insertRawLog("Batch log $i");
+      }
+
+      final logs = await service.getLogs(limit: 100);
+      expect(logs.length, 55);
+      expect(logs.first['message'], "Batch log 55");
+    });
   });
 }
-

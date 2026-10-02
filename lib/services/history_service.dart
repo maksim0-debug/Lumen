@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart';
@@ -14,6 +15,12 @@ class HistoryService {
   HistoryService._internal();
 
   Database? _database;
+
+  /// Maximum number of log entries retained in SQLite database.
+  static const int maxLogEntries = 1500;
+  static const int _logPruneInterval = 50;
+  int _logInsertCount = 0;
+  bool _isPruning = false;
 
   Future<Database> get database async {
     if (_database != null && _database!.isOpen) return _database!;
@@ -159,11 +166,16 @@ class HistoryService {
             'CREATE INDEX IF NOT EXISTS idx_power_events_timestamp ON power_events(timestamp)');
         await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_schedule_history_group_date ON schedule_history(group_key, target_date)');
+
+        // Enforce log retention policy on database open (caps logs at maxLogEntries)
+        try {
+          await _pruneLogs(db, maxLogEntries);
+        } catch (_) {}
       },
     );
   }
 
-  /// Direct, low-overhead database insertion for raw logs.
+  /// Direct, low-overhead database insertion for raw logs with automatic retention.
   Future<void> insertRawLog(String message, {String level = 'INFO'}) async {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
@@ -176,9 +188,46 @@ class HistoryService {
         'level': level,
         'message': message,
       });
+
+      _logInsertCount++;
+      if (_logInsertCount >= _logPruneInterval) {
+        _logInsertCount = 0;
+        if (!_isPruning) {
+          _isPruning = true;
+          // Asynchronous background log pruning to prevent database bloat
+          unawaited(
+            pruneOldLogs(keep: maxLogEntries).whenComplete(() {
+              _isPruning = false;
+            }),
+          );
+        }
+      }
     } catch (_) {
       // Ignored to avoid cascading errors during logging failure
     }
+  }
+
+  /// Trims old logs to prevent uncontrolled SQLite database growth.
+  Future<int> pruneOldLogs({int keep = maxLogEntries}) async {
+    try {
+      final db = await database;
+      return await _pruneLogs(db, keep);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Internal helper to execute log retention query on any open [DatabaseExecutor].
+  static Future<int> _pruneLogs(DatabaseExecutor db, int keep) async {
+    if (keep <= 0) {
+      return await db.delete('app_logs');
+    }
+    return await db.rawDelete('''
+      DELETE FROM app_logs 
+      WHERE id NOT IN (
+        SELECT id FROM app_logs ORDER BY id DESC LIMIT ?
+      )
+    ''', [keep]);
   }
 
   Future<void> logAction(String message, {String level = 'INFO'}) async {
@@ -193,6 +242,7 @@ class HistoryService {
 
   Future<void> clearLogs() async {
     final db = await database;
+    _logInsertCount = 0;
     await db.delete('app_logs');
   }
 
