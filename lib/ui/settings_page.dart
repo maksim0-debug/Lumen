@@ -125,8 +125,10 @@ class _SettingsPageState extends State<SettingsPage> {
           final customUrl = prefs.getString('custom_power_monitor_url') ?? '';
           _customUrlController.text = customUrl;
           final rawTtl = prefs.getInt('power_monitor_ttl_minutes') ?? 25;
-          const allowedTtls = [0, 15, 25, 45, 60, 720, 1440];
-          _powerMonitorTtlMinutes = allowedTtls.contains(rawTtl) ? rawTtl : 25;
+          _powerMonitorTtlMinutes =
+              PowerMonitorService.allowedTtlMinutes.contains(rawTtl)
+                  ? rawTtl
+                  : 25;
 
           _localApiEnabled = prefs.getBool('local_api_enabled') ?? true;
           _localApiPort = prefs.getInt('local_api_port') ?? 18080;
@@ -444,11 +446,12 @@ class _SettingsPageState extends State<SettingsPage> {
                         decoration: const InputDecoration(
                           labelText: 'Таймаут застарівання даних (TTL)',
                           helperText:
-                              'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN',
+                              'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN. Для сенсорів без регулярного пінгу оберіть "Вимкнено".',
                           border: OutlineInputBorder(),
                           isDense: true,
                         ),
                         items: const [
+                          DropdownMenuItem(value: 5, child: Text('5 хвилин')),
                           DropdownMenuItem(value: 15, child: Text('15 хвилин')),
                           DropdownMenuItem(
                               value: 25,

@@ -5,6 +5,7 @@ import 'dart:io';
 import '../app_info_service.dart';
 import '../app_logger.dart';
 import '../history_service.dart';
+import '../power_monitor_service.dart';
 import '../preferences_helper.dart';
 import 'api_helpers.dart';
 import 'api_response.dart';
@@ -68,6 +69,8 @@ class LocalApiService {
 
       if (isEnabled) {
         await start(port: port);
+      } else {
+        PowerMonitorService().setLocalApiAvailable(false);
       }
     } catch (e, stack) {
       AppLogger.e('Failed to initialize LocalApiService',
@@ -80,6 +83,7 @@ class LocalApiService {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) {
       _lastError =
           'Локальний API підтримується лише на настільних ОС (Windows/Linux/macOS)';
+      PowerMonitorService().setLocalApiAvailable(false);
       return false;
     }
 
@@ -121,22 +125,26 @@ class LocalApiService {
           if (identical(_server, server)) {
             _server = null;
             _startedAt = null;
+            PowerMonitorService().setLocalApiAvailable(false);
           }
         },
       );
 
+      PowerMonitorService().setLocalApiAvailable(true);
       return true;
     } on SocketException catch (se) {
       _lastError =
           'Порт $targetPort вже використовується іншою програмою (${se.message})';
       AppLogger.w('Socket conflict on port $targetPort: $se', tag: 'LocalApi');
       _server = null;
+      PowerMonitorService().setLocalApiAvailable(false);
       return false;
     } catch (e, stack) {
       _lastError = 'Не вдалося запустити сервер: $e';
       AppLogger.e('Failed to bind server',
           tag: 'LocalApi', error: e, stackTrace: stack);
       _server = null;
+      PowerMonitorService().setLocalApiAvailable(false);
       return false;
     }
   }
@@ -151,6 +159,7 @@ class LocalApiService {
     _stoppingFuture = completer.future;
 
     try {
+      PowerMonitorService().setLocalApiAvailable(false);
       _streamController?.dispose();
       _streamController = null;
 

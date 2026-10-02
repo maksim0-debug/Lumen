@@ -21,6 +21,18 @@ class PowerMonitorService {
   static const Duration defaultHeartbeatTtl = Duration(minutes: 25);
   static const Duration defaultEventTtl = Duration(hours: 24);
 
+  /// Allowed heartbeat / staleness TTL durations in minutes (0 = disabled).
+  static const List<int> allowedTtlMinutes = [
+    0,
+    5,
+    15,
+    25,
+    45,
+    60,
+    720,
+    1440,
+  ];
+
   String? _customUrl;
 
   Timer? _pollTimer;
@@ -98,6 +110,7 @@ class PowerMonitorService {
     Duration eventTtl = defaultEventTtl,
     DateTime? now,
     bool isLastEventManual = false,
+    bool isLocalApiAvailable = false,
   }) {
     final currentTime = now ?? DateTime.now();
 
@@ -113,7 +126,9 @@ class PowerMonitorService {
     }
 
     final hasValidUrl = customUrl != null && customUrl.trim().isNotEmpty;
-    if (!hasValidUrl && !isLastEventManual) {
+    final hasValidSource =
+        hasValidUrl || (isLastEventManual && isLocalApiAvailable);
+    if (!hasValidSource) {
       return PowerMonitorSnapshot.unknown(
         reason: PowerStateReason.notConfigured,
         lastSeen: lastSeen,
@@ -217,7 +232,8 @@ class PowerMonitorService {
     // 4. Фолбек: перевірка часу останньої події, якщо last_seen відсутній
     if (lastEventTime != null) {
       final age = currentTime.difference(lastEventTime);
-      if (eventTtl > Duration.zero && age > eventTtl) {
+      final effectiveTtl = normStatus == RealPowerState.online ? ttl : eventTtl;
+      if (effectiveTtl > Duration.zero && age > effectiveTtl) {
         return PowerMonitorSnapshot.unknown(
           reason: PowerStateReason.staleEvent,
           lastSeen: lastSeen,
@@ -328,6 +344,15 @@ class PowerMonitorService {
   bool get isOffline => _snapshot.status == RealPowerState.offline;
   bool get isUnknown => _snapshot.status == RealPowerState.unknown;
   String? get customUrl => _customUrl;
+  bool _isLocalApiAvailable = false;
+  bool get isLocalApiAvailable => _isLocalApiAvailable;
+
+  void setLocalApiAvailable(bool available) {
+    if (_isLocalApiAvailable != available) {
+      _isLocalApiAvailable = available;
+      _applySnapshotUpdate();
+    }
+  }
 
   /// Ініціалізація: завантажити налаштування і запустити polling.
   Future<void> init() async {
@@ -342,7 +367,10 @@ class PowerMonitorService {
     _isEnabled = prefs?.getBool('power_monitor_enabled') ?? false;
     _customUrl = prefs?.getString('custom_power_monitor_url');
 
-    final ttlMinutes = prefs?.getInt('power_monitor_ttl_minutes') ?? 25;
+    final rawTtlMinutes = prefs?.getInt('power_monitor_ttl_minutes') ?? 25;
+    final ttlMinutes = allowedTtlMinutes.contains(rawTtlMinutes)
+        ? rawTtlMinutes
+        : defaultHeartbeatTtl.inMinutes;
     _heartbeatTtl = Duration(minutes: ttlMinutes);
 
     // Відновлюємо закешований last_seen, щоб уникнути спалаху "unknown" при холодному старті
@@ -757,6 +785,7 @@ class PowerMonitorService {
       ttl: _heartbeatTtl,
       eventTtl: _eventTtl,
       isLastEventManual: _isLastEventManual,
+      isLocalApiAvailable: _isLocalApiAvailable,
     );
 
     _currentStatus = _snapshot.status.toSerializedString();
@@ -780,7 +809,9 @@ class PowerMonitorService {
 
   /// Налаштування тривалості TTL для застарівання (0 = без таймауту)
   Future<void> setTtlMinutes(int minutes) async {
-    final safeMinutes = minutes < 0 ? 25 : minutes;
+    final safeMinutes = allowedTtlMinutes.contains(minutes)
+        ? minutes
+        : defaultHeartbeatTtl.inMinutes;
     _heartbeatTtl = Duration(minutes: safeMinutes);
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
