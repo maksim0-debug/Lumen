@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
+import '../services/api/local_api_service.dart';
 import '../services/app_info_service.dart';
 import '../services/app_logger.dart';
 import '../services/parser_service.dart';
@@ -45,6 +47,9 @@ class _SettingsPageState extends State<SettingsPage> {
   String _appVersion = '';
 
   final TextEditingController _customUrlController = TextEditingController();
+  final TextEditingController _portController = TextEditingController();
+  bool _localApiEnabled = true;
+  int _localApiPort = 18080;
 
   @override
   void initState() {
@@ -118,6 +123,10 @@ class _SettingsPageState extends State<SettingsPage> {
           final rawTtl = prefs.getInt('power_monitor_ttl_minutes') ?? 25;
           const allowedTtls = [0, 15, 25, 45, 60, 720, 1440];
           _powerMonitorTtlMinutes = allowedTtls.contains(rawTtl) ? rawTtl : 25;
+
+          _localApiEnabled = prefs.getBool('local_api_enabled') ?? true;
+          _localApiPort = prefs.getInt('local_api_port') ?? 18080;
+          _portController.text = _localApiPort.toString();
         }
 
         _isLoading = false;
@@ -133,6 +142,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void dispose() {
     _customUrlController.dispose();
+    _portController.dispose();
     super.dispose();
   }
 
@@ -655,6 +665,12 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                   ),
                 ),
+                if (Platform.isWindows ||
+                    Platform.isLinux ||
+                    Platform.isMacOS) ...[
+                  const Divider(),
+                  _buildLocalApiSection(),
+                ],
                 const Divider(),
                 ListTile(
                   title: const Text("Переглянути логи"),
@@ -742,6 +758,163 @@ class _SettingsPageState extends State<SettingsPage> {
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
       value: value,
       onChanged: onChanged,
+    );
+  }
+
+  Widget _buildLocalApiSection() {
+    final apiService = LocalApiService();
+    final isRunning = apiService.isRunning;
+    final lastError = apiService.lastError;
+    final activePort = isRunning ? apiService.port : _localApiPort;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            "Локальний REST API (ПК)",
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Colors.cyan,
+            ),
+          ),
+        ),
+        _buildSwitchTile(
+          "Увімкнути локальний API",
+          "Швидкий доступ до даних з інших програм на комп'ютері (127.0.0.1)",
+          _localApiEnabled,
+          (val) async {
+            setState(() => _localApiEnabled = val);
+            await _saveSetting('local_api_enabled', val);
+            if (val) {
+              await apiService.start(port: _localApiPort);
+            } else {
+              await apiService.stop();
+            }
+            if (mounted) setState(() {});
+          },
+        ),
+        if (_localApiEnabled) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _portController,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Порт сервера',
+                      hintText: '18080',
+                      helperText: isRunning
+                          ? 'Сервер активний: http://127.0.0.1:$activePort/api/v1'
+                          : (lastError ?? 'Сервер зупинено'),
+                      helperStyle: TextStyle(
+                        color: isRunning ? Colors.green : Colors.orange,
+                        fontSize: 11,
+                      ),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () async {
+                    final newPort =
+                        int.tryParse(_portController.text.trim()) ?? 18080;
+                    if (newPort < 1024 || newPort > 65535) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Вкажіть порт від 1024 до 65535')),
+                      );
+                      return;
+                    }
+                    setState(() => _localApiPort = newPort);
+                    try {
+                      final prefs = await PreferencesHelper.getSafeInstance();
+                      await prefs.setInt('local_api_port', newPort);
+                    } catch (_) {}
+
+                    final success = await apiService.restart(port: newPort);
+                    if (mounted) {
+                      setState(() {});
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            success
+                                ? 'Сервер перезапущено на порті $newPort'
+                                : (apiService.lastError ??
+                                    'Помилка перезапуску сервера'),
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Застосувати'),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Копіювати URL статусу'),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(
+                        text: 'http://127.0.0.1:$activePort/api/v1/status'));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                            'URL скопійовано: http://127.0.0.1:$activePort/api/v1/status'),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.code, size: 16),
+                  label: const Text('Копіювати URL OpenAPI'),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(
+                        text:
+                            'http://127.0.0.1:$activePort/api/v1/openapi.json'));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                            'URL скопійовано: http://127.0.0.1:$activePort/api/v1/openapi.json'),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.menu_book, size: 16),
+                  label: const Text('Копіювати URL документації'),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(
+                        text: 'http://127.0.0.1:$activePort/api/v1/docs'));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                            'URL скопійовано: http://127.0.0.1:$activePort/api/v1/docs (Swagger UI)'),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 

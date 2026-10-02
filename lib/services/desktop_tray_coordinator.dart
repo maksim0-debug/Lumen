@@ -3,6 +3,8 @@ import 'package:path/path.dart' as p;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'api/local_api_service.dart';
+
 class DesktopTrayCoordinator with WindowListener, TrayListener {
   Future<void> init() async {
     if (Platform.isWindows) {
@@ -17,6 +19,7 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
     }
+    LocalApiService().stop();
   }
 
   Future<void> _initTray() async {
@@ -41,11 +44,12 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
   void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
 
   @override
-  void onTrayMenuItemClick(MenuItem menuItem) {
+  void onTrayMenuItemClick(MenuItem menuItem) async {
     if (menuItem.key == 'show_window') {
       windowManager.show();
       windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
+      await LocalApiService().stop();
       windowManager.destroy();
     }
   }

@@ -48,6 +48,13 @@ class ScheduleSyncService {
   final HistoryService _historyService;
   final Duration cooldown;
 
+  static final StreamController<Map<String, FullSchedule>> _syncBroadcast =
+      StreamController<Map<String, FullSchedule>>.broadcast();
+
+  /// Stream of all newly synced schedules for real-time subscribers (SSE, background workers, UI).
+  static Stream<Map<String, FullSchedule>> get onSyncCompleted =>
+      _syncBroadcast.stream;
+
   bool _isFetching = false;
   DateTime? lastFetchTime;
 
@@ -136,6 +143,7 @@ class ScheduleSyncService {
       if (allData.isEmpty) throw Exception("Пустий список");
 
       lastFetchTime = DateTime.now();
+      _syncBroadcast.add(allData);
       return ScheduleSyncResult.success(allData);
     } catch (e) {
       AppLogger.e("Error loading data", tag: 'Main', error: e);
@@ -195,6 +203,7 @@ class ScheduleSyncService {
       if (allData.isEmpty) throw Exception("Пустий список");
 
       lastFetchTime = DateTime.now();
+      _syncBroadcast.add(allData);
 
       await onFetchSuccess(allData);
     } catch (e) {

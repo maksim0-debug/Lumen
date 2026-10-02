@@ -5,6 +5,7 @@ import 'package:home_widget/home_widget.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'api/local_api_service.dart';
 import 'app_info_service.dart';
 import 'app_logger.dart';
 import 'background_service.dart';
@@ -56,6 +57,15 @@ class PlatformInitService {
         );
       } catch (e) {
         AppLogger.e("Помилка автозапуску", tag: 'MAIN', error: e);
+      }
+    }
+
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        await LocalApiService().init();
+      } catch (e) {
+        AppLogger.e("Помилка ініціалізації Local REST API",
+            tag: 'MAIN', error: e);
       }
     }
 

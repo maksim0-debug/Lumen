@@ -22,9 +22,7 @@ class PowerEvent {
   Map<String, dynamic> toMap() => {
         'firebase_key': firebaseKey,
         'status': status,
-        'timestamp':
-            '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
-                '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}:${timestamp.second.toString().padLeft(2, '0')}',
+        'timestamp': timestamp.toIso8601String(),
         'device': device,
         'is_manual': isManual ? 1 : 0,
         'synced_at': DateTime.now().toIso8601String(),

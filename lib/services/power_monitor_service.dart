@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/power_event.dart';
 import '../models/power_monitor_status.dart';
 import 'app_logger.dart';
@@ -30,6 +31,7 @@ class PowerMonitorService {
   DateTime? _lastSeen;
   DateTime? _lastSuccessfulSync;
   bool _isEnabled = false;
+  bool _isLastEventManual = false;
   Duration _heartbeatTtl = defaultHeartbeatTtl;
   final Duration _eventTtl = defaultEventTtl;
   PowerMonitorSnapshot _snapshot = PowerMonitorSnapshot.unknown();
@@ -95,10 +97,23 @@ class PowerMonitorService {
     Duration ttl = defaultHeartbeatTtl,
     Duration eventTtl = defaultEventTtl,
     DateTime? now,
+    bool isLastEventManual = false,
   }) {
     final currentTime = now ?? DateTime.now();
 
-    if (!isEnabled || customUrl == null || customUrl.trim().isEmpty) {
+    if (!isEnabled) {
+      return PowerMonitorSnapshot.unknown(
+        reason: PowerStateReason.disabled,
+        lastSeen: lastSeen,
+        lastEventTime: lastEventTime,
+        lastSyncTime: lastSyncTime,
+        errorMessage: errorMessage,
+        ttl: ttl,
+      );
+    }
+
+    final hasValidUrl = customUrl != null && customUrl.trim().isNotEmpty;
+    if (!hasValidUrl && !isLastEventManual) {
       return PowerMonitorSnapshot.unknown(
         reason: PowerStateReason.notConfigured,
         lastSeen: lastSeen,
@@ -109,7 +124,7 @@ class PowerMonitorService {
       );
     }
 
-    if (consecutiveErrors >= 3) {
+    if (consecutiveErrors >= 3 && !isLastEventManual) {
       return PowerMonitorSnapshot.unknown(
         reason: PowerStateReason.networkError,
         lastSeen: lastSeen,
@@ -168,7 +183,11 @@ class PowerMonitorService {
     }
 
     // 3. Пріоритет: перевірка Heartbeat (last_seen), якщо налаштовано
-    if (lastSeen != null) {
+    final hasFresherManualEvent = isLastEventManual &&
+        lastEventTime != null &&
+        (lastSeen == null || lastEventTime.isAfter(lastSeen));
+
+    if (lastSeen != null && !hasFresherManualEvent) {
       final age = currentTime.difference(lastSeen);
       if (age > ttl) {
         return PowerMonitorSnapshot.unknown(
@@ -711,11 +730,12 @@ class PowerMonitorService {
       // Events are sorted by timestamp ASC, so last is the latest
       final latest = events.last;
       _rawLastStatus = latest.status;
-
-      // Ensure we track the latest update time
-      if (_lastEventTime == null || latest.timestamp.isAfter(_lastEventTime!)) {
-        _lastEventTime = latest.timestamp;
-      }
+      _lastEventTime = latest.timestamp;
+      _isLastEventManual = latest.isManual;
+    } else {
+      _rawLastStatus = 'unknown';
+      _lastEventTime = null;
+      _isLastEventManual = false;
     }
 
     _applySnapshotUpdate();
@@ -736,6 +756,7 @@ class PowerMonitorService {
       rawStatus: _rawLastStatus,
       ttl: _heartbeatTtl,
       eventTtl: _eventTtl,
+      isLastEventManual: _isLastEventManual,
     );
 
     _currentStatus = _snapshot.status.toSerializedString();
@@ -776,7 +797,7 @@ class PowerMonitorService {
     final db = await HistoryService().database;
     final maps = await db.query(
       'power_events',
-      orderBy: 'timestamp ASC',
+      orderBy: "timestamp ASC",
     );
     return maps.map((m) => PowerEvent.fromMap(m)).toList();
   }
@@ -786,12 +807,16 @@ class PowerMonitorService {
     final db = await HistoryService().database;
     final dateStr =
         '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final nextDay =
+        DateTime(date.year, date.month, date.day).add(const Duration(days: 1));
+    final nextDayStr =
+        '${nextDay.year}-${nextDay.month.toString().padLeft(2, '0')}-${nextDay.day.toString().padLeft(2, '0')}';
 
     final maps = await db.query(
       'power_events',
-      where: "timestamp LIKE ?",
-      whereArgs: ['$dateStr%'],
-      orderBy: 'timestamp ASC',
+      where: "timestamp >= ? AND timestamp < ?",
+      whereArgs: ['${dateStr}T00:00:00', '${nextDayStr}T00:00:00'],
+      orderBy: "timestamp ASC",
     );
     return maps.map((m) => PowerEvent.fromMap(m)).toList();
   }
@@ -917,6 +942,7 @@ class PowerMonitorService {
     await db.delete('power_events', where: 'id = ?', whereArgs: [id]);
     final events = await getLocalEvents();
     _updateCurrentStatus(events);
+    _applySnapshotUpdate();
   }
 
   Future<PowerEvent?> getEvent(int id) async {
@@ -934,9 +960,7 @@ class PowerMonitorService {
 
   Future<void> updateEventTimestamp(int id, DateTime newTime) async {
     final db = await HistoryService().database;
-    final timeStr =
-        '${newTime.year}-${newTime.month.toString().padLeft(2, '0')}-${newTime.day.toString().padLeft(2, '0')} '
-        '${newTime.hour.toString().padLeft(2, '0')}:${newTime.minute.toString().padLeft(2, '0')}:${newTime.second.toString().padLeft(2, '0')}';
+    final timeStr = newTime.toIso8601String();
 
     // Set is_manual = 1 to protect from future sync overwrites
     await db.update('power_events', {'timestamp': timeStr, 'is_manual': 1},
@@ -947,15 +971,105 @@ class PowerMonitorService {
 
   Future<void> deleteEventByTimestamp(DateTime timestamp) async {
     final db = await HistoryService().database;
-    final timeStr =
-        '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
-        '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}:${timestamp.second.toString().padLeft(2, '0')}';
+    final isoPrefix =
+        timestamp.toIso8601String().substring(0, 19); // YYYY-MM-DDTHH:mm:ss
+    final spacePrefix = isoPrefix.replaceFirst('T', ' ');
 
-    // Delete by timestamp (and optionally status/device if needed, but timestamp is usually unique enough for user action)
-    await db.delete('power_events',
-        where: 'timestamp LIKE ?', whereArgs: ['$timeStr%']);
+    // Delete by timestamp matching both standard ISO-8601 and legacy space format
+    await db.delete(
+      'power_events',
+      where: 'timestamp LIKE ? OR timestamp LIKE ?',
+      whereArgs: ['$isoPrefix%', '$spacePrefix%'],
+    );
     final events = await getLocalEvents();
     _updateCurrentStatus(events);
+  }
+
+  /// Атомарне додавання ручної події та негайне оновлення статусу моніторингу
+  Future<int> insertManualEvent(PowerEvent event) async {
+    final db = await HistoryService().database;
+    final id = await db.insert(
+      'power_events',
+      event.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    if (!_isEnabled) {
+      await setEnabled(true);
+    }
+    _consecutiveErrors = 0;
+    _lastSyncError = null;
+    final events = await getLocalEvents();
+    _updateCurrentStatus(events);
+    return id;
+  }
+
+  /// Отримати події за період з пагінацією та контролем сортування
+  Future<List<PowerEvent>> getEventsRange({
+    DateTime? startDate,
+    DateTime? endDate,
+    int limit = 100,
+    bool descending = true,
+  }) async {
+    final db = await HistoryService().database;
+    String? where;
+    List<dynamic>? whereArgs;
+
+    String formatIsoTime(DateTime dt) =>
+        '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}T'
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+
+    if (startDate != null && endDate != null) {
+      final startStr = formatIsoTime(startDate);
+      // If endDate represents full day boundary (23:59:59), use strict next day boundary to capture all fractional seconds
+      if (endDate.hour == 23 && endDate.minute == 59 && endDate.second >= 59) {
+        final endNextDay = DateTime(endDate.year, endDate.month, endDate.day)
+            .add(const Duration(days: 1));
+        final endNextDayStr =
+            '${endNextDay.year}-${endNextDay.month.toString().padLeft(2, '0')}-${endNextDay.day.toString().padLeft(2, '0')}T00:00:00';
+        where = "timestamp >= ? AND timestamp < ?";
+        whereArgs = [startStr, endNextDayStr];
+      } else {
+        final endStr = formatIsoTime(endDate);
+        where = "timestamp >= ? AND timestamp <= ?";
+        whereArgs = [startStr, endStr];
+      }
+    } else if (startDate != null) {
+      final startStr = formatIsoTime(startDate);
+      where = "timestamp >= ?";
+      whereArgs = [startStr];
+    } else if (endDate != null) {
+      if (endDate.hour == 23 && endDate.minute == 59 && endDate.second >= 59) {
+        final endNextDay = DateTime(endDate.year, endDate.month, endDate.day)
+            .add(const Duration(days: 1));
+        final endNextDayStr =
+            '${endNextDay.year}-${endNextDay.month.toString().padLeft(2, '0')}-${endNextDay.day.toString().padLeft(2, '0')}T00:00:00';
+        where = "timestamp < ?";
+        whereArgs = [endNextDayStr];
+      } else {
+        final endStr = formatIsoTime(endDate);
+        where = "timestamp <= ?";
+        whereArgs = [endStr];
+      }
+    }
+
+    final safeLimit = limit.clamp(1, 1000);
+    final orderBy = descending ? "timestamp DESC" : "timestamp ASC";
+
+    final maps = await db.query(
+      'power_events',
+      where: where,
+      whereArgs: whereArgs,
+      orderBy: orderBy,
+      limit: safeLimit,
+    );
+    return maps.map((m) => PowerEvent.fromMap(m)).toList();
+  }
+
+  /// Перезавантажити статус сенсора виключно з локальної БД (без запитів до мережі)
+  Future<void> reloadStatusFromLocal() async {
+    final events = await getLocalEvents();
+    _updateCurrentStatus(events);
+    _applySnapshotUpdate();
   }
 
   Future<void> cleanupPhantomEvents() async {

@@ -111,6 +111,13 @@ class HistoryService {
           }
         }
       },
+      onOpen: (db) async {
+        // Seamless migration: normalize legacy timestamp strings with space to standard ISO-8601 ('T')
+        await db.execute(
+            "UPDATE power_events SET timestamp = replace(timestamp, ' ', 'T') WHERE timestamp LIKE '% %'");
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_power_events_timestamp ON power_events(timestamp)');
+      },
     );
   }
 
@@ -510,7 +517,6 @@ class HistoryService {
         "${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}";
     final endStr =
         "${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}";
-    final endStrTime = "$endStr 23:59:59"; // Для подій з часом
 
     // 1. Отримуємо графіки
     final schedules = await db.query(
@@ -520,10 +526,16 @@ class HistoryService {
     );
 
     // 2. Отримуємо реальні події сенсора
+    final endNextDay = DateTime(endDate.year, endDate.month, endDate.day)
+        .add(const Duration(days: 1));
+    final endNextDayStr =
+        "${endNextDay.year}-${endNextDay.month.toString().padLeft(2, '0')}-${endNextDay.day.toString().padLeft(2, '0')}";
+
     final events = await db.query(
       'power_events',
-      where: 'timestamp >= ? AND timestamp <= ?',
-      whereArgs: ["$startStr 00:00:00", endStrTime],
+      where: 'timestamp >= ? AND timestamp < ?',
+      whereArgs: ["${startStr}T00:00:00", "${endNextDayStr}T00:00:00"],
+      orderBy: 'timestamp DESC',
     );
 
     // Пакуємо в єдиний JSON
@@ -562,15 +574,20 @@ class HistoryService {
       importedCount++;
     }
 
-    // 2. Імпорт подій сенсора
+    // 2. Імпорт подій сенсора з обов'язковою нормалізацією таймстампу до ISO-8601 ('T')
     final events = data['power_events'] as List<dynamic>? ?? [];
     for (var e in events) {
+      final rawTimestamp = e['timestamp']?.toString() ?? '';
+      final normalizedTimestamp = rawTimestamp.contains(' ')
+          ? rawTimestamp.replaceFirst(' ', 'T')
+          : rawTimestamp;
+
       batch.insert(
         'power_events',
         {
           'firebase_key': e['firebase_key'],
           'status': e['status'],
-          'timestamp': e['timestamp'],
+          'timestamp': normalizedTimestamp,
           'device': e['device'],
           'synced_at': e['synced_at'],
           'is_manual': e['is_manual'] ?? 0,
@@ -659,5 +676,82 @@ class HistoryService {
     }
 
     return result;
+  }
+
+  /// Отримати список усіх унікальних дат, за які збережено дані (графіки або події)
+  Future<List<String>> getAvailableDates() async {
+    final db = await database;
+    final List<Map<String, dynamic>> rows = await db.rawQuery('''
+      SELECT DISTINCT target_date AS dt FROM schedule_history WHERE target_date IS NOT NULL
+      UNION
+      SELECT DISTINCT substr(timestamp, 1, 10) AS dt FROM power_events WHERE timestamp IS NOT NULL
+      ORDER BY dt DESC
+    ''');
+
+    return rows
+        .map((r) => r['dt'] as String?)
+        .where((dt) => dt != null && dt.trim().isNotEmpty)
+        .cast<String>()
+        .toList();
+  }
+
+  /// Отримати дані експорту за період у вигляді Map (без зайвих JSON encode/decode циклів)
+  Future<Map<String, dynamic>> getExportDataMap({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final db = await database;
+
+    String? schedWhere;
+    List<dynamic>? schedArgs;
+    String? eventWhere;
+    List<dynamic>? eventArgs;
+
+    if (startDate != null && endDate != null) {
+      final startStr =
+          "${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}";
+      final endStr =
+          "${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}";
+      final endNextDay = DateTime(endDate.year, endDate.month, endDate.day)
+          .add(const Duration(days: 1));
+      final endNextDayStr =
+          "${endNextDay.year}-${endNextDay.month.toString().padLeft(2, '0')}-${endNextDay.day.toString().padLeft(2, '0')}";
+
+      schedWhere = 'target_date >= ? AND target_date <= ?';
+      schedArgs = [startStr, endStr];
+      eventWhere = 'timestamp >= ? AND timestamp < ?';
+      eventArgs = ["${startStr}T00:00:00", "${endNextDayStr}T00:00:00"];
+    }
+
+    final schedules = await db.query(
+      'schedule_history',
+      where: schedWhere,
+      whereArgs: schedArgs,
+      orderBy: 'target_date DESC, id DESC',
+    );
+
+    final events = await db.query(
+      'power_events',
+      where: eventWhere,
+      whereArgs: eventArgs,
+      orderBy: 'timestamp DESC',
+    );
+
+    return {
+      'version': 1,
+      'export_date': DateTime.now().toUtc().toIso8601String(),
+      'filters': {
+        'from': startDate != null
+            ? "${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}"
+            : null,
+        'to': endDate != null
+            ? "${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}"
+            : null,
+      },
+      'schedules_count': schedules.length,
+      'events_count': events.length,
+      'schedules': schedules,
+      'power_events': events,
+    };
   }
 }

@@ -1,7 +1,7 @@
 name: vikl
 description: A new Flutter project.
-publish_to: 'none'
-version: 2.92.18+19
+publish_to: "none"
+version: 2.93.18+19
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -15,7 +15,7 @@ dependencies:
   http: ^1.2.0
   html: ^0.15.4
   intl: ^0.20.3
-  
+
   flutter_local_notifications: 19.5.0
   timezone: 0.10.1
   # workmanager несовместим с Android v2 embedding, убран
@@ -29,7 +29,7 @@ dependencies:
   window_manager: ^0.4.3
   tray_manager: ^0.2.4
   workmanager: ^0.9.0+3
-  flutter_inappwebview: ^6.0.0 
+  flutter_inappwebview: ^6.0.0
   shared_preferences: ^2.2.2
   path_provider: ^2.1.5
   win32: ^5.15.0
@@ -55,7 +55,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-     - assets/icon.png
+    - assets/icon.png
 
 flutter_launcher_icons:
   android: "launcher_icon"
