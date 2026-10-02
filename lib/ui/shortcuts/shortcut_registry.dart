@@ -411,7 +411,8 @@ class AppKeyboardShortcuts {
             ShortcutHelpItem(
               actionName: 'Діалог версій графіка',
               keyLabels: ['V'],
-              description: 'Відкриває історію змін графіка за обраний день',
+              description:
+                  'Відкриває або закриває історію змін графіка за обраний день',
             ),
             ShortcutHelpItem(
               actionName: 'Швидка зміна версії',

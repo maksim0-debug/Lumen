@@ -37,28 +37,43 @@ class VersionPickerSheet extends StatefulWidget {
     required this.onVersionSelected,
   });
 
+  static bool _isOpen = false;
+
+  /// Returns true if the version picker modal bottom sheet is currently open.
+  static bool get isOpen => _isOpen;
+
+  @visibleForTesting
+  static void resetOpenState() {
+    _isOpen = false;
+  }
+
   static Future<void> show({
     required BuildContext context,
     required List<ScheduleVersion> versions,
     required int selectedVersionIndex,
     required ValueChanged<int> onVersionSelected,
-  }) {
-    if (versions.isEmpty) return Future.value();
+  }) async {
+    if (versions.isEmpty || _isOpen) return;
 
-    return showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (BuildContext context) {
-        return VersionPickerSheet(
-          versions: versions,
-          selectedVersionIndex: selectedVersionIndex,
-          onVersionSelected: onVersionSelected,
-        );
-      },
-    );
+    _isOpen = true;
+    try {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (BuildContext context) {
+          return VersionPickerSheet(
+            versions: versions,
+            selectedVersionIndex: selectedVersionIndex,
+            onVersionSelected: onVersionSelected,
+          );
+        },
+      );
+    } finally {
+      _isOpen = false;
+    }
   }
 
   @override
@@ -91,6 +106,9 @@ class _VersionPickerSheetState extends State<VersionPickerSheet> {
         const _VersionConfirmIntent(),
     const SingleActivator(LogicalKeyboardKey.escape):
         const _VersionCloseIntent(),
+    const AppShortcutActivator(LogicalKeyboardKey.keyV,
+        physicalKey: PhysicalKeyboardKey.keyV,
+        includeRepeats: false): const _VersionCloseIntent(),
   };
 
   late int _focusedListIndex;
@@ -192,83 +210,88 @@ class _VersionPickerSheetState extends State<VersionPickerSheet> {
         },
         child: Focus(
           autofocus: true,
-          child: Container(
-            constraints: BoxConstraints(maxHeight: screenHeight * 0.75),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
-            ),
-            padding: const EdgeInsets.only(top: 16, bottom: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Оберіть версію",
-                        style: TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      Text(
-                        "↑ / ↓ • Enter • Esc",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? Colors.white38 : Colors.black38,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Flexible(
-                  child: ListView.separated(
-                    controller: _scrollController,
-                    shrinkWrap: true,
-                    itemCount: widget.versions.length,
-                    separatorBuilder: (context, index) =>
-                        const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final versionIndex = widget.versions.length - 1 - index;
-                      final version = widget.versions[versionIndex];
-                      final effectiveSelected = widget.selectedVersionIndex >= 0
-                          ? widget.selectedVersionIndex
-                          : widget.versions.length - 1;
-                      final isSelected = versionIndex == effectiveSelected;
-                      final isFocused = index == _focusedListIndex;
-
-                      return Container(
-                        color: isFocused
-                            ? accentColor.withValues(alpha: 0.12)
-                            : Colors.transparent,
-                        child: ListTile(
-                          leading:
-                              const Icon(Icons.history, color: Colors.orange),
-                          title: Text(
-                            version.timeString,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+          child: Material(
+            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: screenHeight * 0.75),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 16, bottom: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "Оберіть версію",
+                            style: TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.bold),
                           ),
-                          subtitle: Text("(${version.outageString})"),
-                          trailing: isSelected
-                              ? const Icon(Icons.check, color: Colors.green)
-                              : (isFocused
-                                  ? Icon(Icons.keyboard_return,
-                                      size: 18, color: accentColor)
-                                  : null),
-                          onTap: () {
-                            widget.onVersionSelected(versionIndex);
-                            Navigator.pop(context);
-                          },
-                        ),
-                      );
-                    },
-                  ),
+                          Text(
+                            "↑ / ↓ • Enter • Esc",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white38 : Colors.black38,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Flexible(
+                      child: ListView.separated(
+                        controller: _scrollController,
+                        shrinkWrap: true,
+                        itemCount: widget.versions.length,
+                        separatorBuilder: (context, index) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final versionIndex =
+                              widget.versions.length - 1 - index;
+                          final version = widget.versions[versionIndex];
+                          final effectiveSelected =
+                              widget.selectedVersionIndex >= 0
+                                  ? widget.selectedVersionIndex
+                                  : widget.versions.length - 1;
+                          final isSelected = versionIndex == effectiveSelected;
+                          final isFocused = index == _focusedListIndex;
+
+                          return Material(
+                            color: isFocused
+                                ? accentColor.withValues(alpha: 0.12)
+                                : Colors.transparent,
+                            child: ListTile(
+                              leading: const Icon(Icons.history,
+                                  color: Colors.orange),
+                              title: Text(
+                                version.timeString,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text("(${version.outageString})"),
+                              trailing: isSelected
+                                  ? const Icon(Icons.check, color: Colors.green)
+                                  : (isFocused
+                                      ? Icon(Icons.keyboard_return,
+                                          size: 18, color: accentColor)
+                                      : null),
+                              onTap: () {
+                                widget.onVersionSelected(versionIndex);
+                                Navigator.pop(context);
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),

@@ -457,6 +457,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         OpenVersionPickerIntent: CallbackAction<OpenVersionPickerIntent>(
           onInvoke: (intent) {
+            if (VersionPickerSheet.isOpen) {
+              Navigator.of(context).maybePop();
+              return null;
+            }
             final current = ref.read(homeNotifierProvider);
             if (current.historyVersions.isNotEmpty) {
               _showVersionPicker(current);
