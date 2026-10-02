@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vikl/models/power_event.dart';
+import 'package:lumen/models/power_event.dart';
 
 // Mock function representing the logic in getOutageIntervalsForDate
 List<PowerOutageInterval> calculateIntervals(
@@ -117,3 +117,4 @@ void main() {
     });
   });
 }
+

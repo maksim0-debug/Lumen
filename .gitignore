@@ -80,3 +80,4 @@ nuget.exe
 test/
 changes.txt
 Changelog.md
+.agents

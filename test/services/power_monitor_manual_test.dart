@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vikl/models/power_event.dart';
+import 'package:lumen/models/power_event.dart';
 
 // Mock DB and Logic
 class MockPowerMonitorService {
@@ -89,3 +89,4 @@ void main() {
     });
   });
 }
+

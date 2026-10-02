@@ -23,7 +23,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // This is required for Windows notifications to work correctly (persistence,
   // grouping). This ID must match the one used in the shortcut and MSIX
   // manifest.
-  LPCWSTR aumid = L"Vikl.Lumen.App";
+  LPCWSTR aumid = L"Maksim0Debug.Lumen.App";
   SetCurrentProcessExplicitAppUserModelID(aumid);
 
   flutter::DartProject project(L"data");
@@ -35,7 +35,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin = {10, 10};
   Win32Window::Size size = {1280, 720};
-  if (!window.Create(L"Люмен", origin, size)) {
+  if (!window.Create(L"Lumen", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

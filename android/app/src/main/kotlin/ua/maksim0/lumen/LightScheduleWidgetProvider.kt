@@ -1,4 +1,4 @@
-package com.example.vikl
+package ua.maksim0.lumen
 
 import android.app.AlarmManager
 import android.app.PendingIntent

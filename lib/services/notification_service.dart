@@ -67,7 +67,7 @@ class NotificationService {
       const WindowsInitializationSettings windowsSettings =
           WindowsInitializationSettings(
               appName: 'Lumen',
-              appUserModelId: 'Vikl.Lumen.App',
+              appUserModelId: 'Maksim0Debug.Lumen.App',
               guid: '27042046-8148-4367-9d7a-757877477430');
 
       const InitializationSettings settings = InitializationSettings(

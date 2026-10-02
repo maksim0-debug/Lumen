@@ -39,8 +39,8 @@ class AppInfoService {
         stackTrace: stack,
       );
       _cachedPackageInfo = PackageInfo(
-        appName: 'Люмен',
-        packageName: 'vikl',
+        appName: 'Lumen',
+        packageName: 'lumen',
         version: '0.0.0',
         buildNumber: '',
         buildSignature: '',

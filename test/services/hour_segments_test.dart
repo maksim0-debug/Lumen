@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vikl/models/power_event.dart';
+import 'package:lumen/models/power_event.dart';
 
-import 'package:vikl/models/hour_segment.dart';
-import 'package:vikl/models/schedule_status.dart';
-import 'package:vikl/services/hour_segment_service.dart';
+import 'package:lumen/models/hour_segment.dart';
+import 'package:lumen/models/schedule_status.dart';
+import 'package:lumen/services/hour_segment_service.dart';
 
 // Test wrapper delegating to production HourSegmentService
 List<HourSegment> computeHourSegments(
@@ -243,3 +243,4 @@ void main() {
     });
   });
 }
+

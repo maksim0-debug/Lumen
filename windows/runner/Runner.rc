@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "Люмен" "\0"
+            VALUE "CompanyName", "maksim0-debug" "\0"
+            VALUE "FileDescription", "Lumen - Моніторинг графіків відключень електроенергії" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "Люмен" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "lumen.exe" "\0"
-            VALUE "ProductName", "Люмен" "\0"
+            VALUE "InternalName", "Lumen" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 maksim0-debug. All rights reserved." "\0"
+            VALUE "OriginalFilename", "Lumen.exe" "\0"
+            VALUE "ProductName", "Lumen" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vikl/models/power_event.dart';
+import 'package:lumen/models/power_event.dart';
 
 // Mock function to simulate the logic we want to implement in PowerMonitorService
 List<PowerEvent> processEvents(List<PowerEvent> fetchedEvents) {
@@ -66,3 +66,4 @@ void main() {
     });
   });
 }
+

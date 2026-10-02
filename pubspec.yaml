@@ -1,7 +1,7 @@
-name: vikl
-description: A new Flutter project.
+name: lumen
+description: "Lumen — Сучасний додаток для моніторингу графіків відключень електроенергії."
 publish_to: "none"
-version: 2.93.18+19
+version: 1.0.0+1
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -69,15 +69,14 @@ flutter_launcher_icons:
 
 msix_config:
   display_name: Lumen
-  publisher_display_name: Vikl
-  identity_name: Vikl.Lumen.App
-  msix_version: 2.3.2.7
+  publisher_display_name: maksim0-debug
+  identity_name: Maksim0Debug.Lumen.App
   logo_path: assets/icon_msix_transparent.png
   store_logo_path: assets/icon.png
   capabilities: internetClient
   execution_alias: lumen
   extensions:
     - |
-      <desktop:Extension Category="windows.startupTask" Executable="vikl.exe" EntryPoint="Windows.FullTrustApplication">
+      <desktop:Extension Category="windows.startupTask" Executable="Lumen.exe" EntryPoint="Windows.FullTrustApplication">
         <desktop:StartupTask TaskId="LumenStartup" Enabled="true" DisplayName="Lumen" />
       </desktop:Extension>

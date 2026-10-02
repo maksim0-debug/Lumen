@@ -693,25 +693,54 @@ class _SettingsPageState extends State<SettingsPage> {
                   },
                 ),
                 const SizedBox(height: 24),
-                if (_appVersion.isNotEmpty) ...[
-                  Center(
-                    child: Text(
-                      "Версія $_appVersion",
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.color
-                                ?.withValues(alpha: 0.5) ??
-                            Colors.grey,
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_appVersion.isNotEmpty)
+                        Text(
+                          "Lumen v$_appVersion",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.color
+                                    ?.withValues(alpha: 0.7) ??
+                                Colors.grey,
+                          ),
+                        ),
+                      const SizedBox(height: 6),
+                      Text(
+                        "Розробник: @maksim0-debug",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color
+                                  ?.withValues(alpha: 0.6) ??
+                              Colors.grey,
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "© 2026 maksim0-debug. All rights reserved.",
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color
+                                  ?.withValues(alpha: 0.4) ??
+                              Colors.grey,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 24),
-                ] else ...[
-                  const SizedBox(height: 20),
-                ],
+                ),
+                const SizedBox(height: 32),
               ],
             ),
     );

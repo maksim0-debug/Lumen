@@ -112,11 +112,53 @@ class HistoryService {
         }
       },
       onOpen: (db) async {
+        // Ensure all required tables exist even if imported from legacy/partial backups
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS schedule_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_key TEXT,
+            target_date TEXT,
+            schedule_code TEXT,
+            dtek_updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS app_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            level TEXT,
+            message TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS power_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firebase_key TEXT UNIQUE,
+            status TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            device TEXT,
+            synced_at TEXT,
+            is_manual INTEGER DEFAULT 0
+          )
+        ''');
+
+        // Verify and add is_manual column if missing in legacy power_events table
+        final List<Map<String, dynamic>> columns =
+            await db.rawQuery('PRAGMA table_info(power_events)');
+        final hasIsManual =
+            columns.any((column) => column['name'] == 'is_manual');
+        if (!hasIsManual) {
+          await db.execute(
+              'ALTER TABLE power_events ADD COLUMN is_manual INTEGER DEFAULT 0');
+        }
+
         // Seamless migration: normalize legacy timestamp strings with space to standard ISO-8601 ('T')
         await db.execute(
             "UPDATE power_events SET timestamp = replace(timestamp, ' ', 'T') WHERE timestamp LIKE '% %'");
         await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_power_events_timestamp ON power_events(timestamp)');
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_schedule_history_group_date ON schedule_history(group_key, target_date)');
       },
     );
   }
