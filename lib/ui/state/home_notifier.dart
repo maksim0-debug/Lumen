@@ -13,6 +13,7 @@ import '../../services/darkness_theme_service.dart';
 import '../../services/history_service.dart';
 import '../../services/hour_segment_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/parser_service.dart';
 import '../../services/power_monitor_service.dart';
 import '../../services/preferences_helper.dart';
 import '../../services/schedule_calculation_service.dart';
@@ -242,6 +243,40 @@ class HomeNotifier extends Notifier<HomeState> {
 
   Future<void> setDataSourceMode(DataSourceMode mode) => switchMode(mode);
 
+  Future<void> toggleDataSourceMode() async {
+    if (!state.powerMonitorEnabled) return;
+    final next = state.dataSourceMode == DataSourceMode.real
+        ? DataSourceMode.predicted
+        : DataSourceMode.real;
+    await switchMode(next);
+  }
+
+  Future<void> cycleGroup(int direction) async {
+    if (direction == 0) return;
+    final nextGroup = ParserService.cycleGroup(state.currentGroup, direction);
+    await changeGroup(nextGroup);
+  }
+
+  Future<void> selectGroupByIndex(int groupNumber) async {
+    if (groupNumber < 1 || groupNumber > 6) return;
+    final matching = ParserService.allGroups
+        .where(
+            (g) => g.startsWith("GPV$groupNumber.") || g == "GPV$groupNumber")
+        .toList();
+    if (matching.isEmpty) return;
+    if (matching.length == 1) {
+      await changeGroup(matching.first);
+      return;
+    }
+    final currentSubIdx = matching.indexOf(state.currentGroup);
+    if (currentSubIdx != -1) {
+      final nextSubIdx = (currentSubIdx + 1) % matching.length;
+      await changeGroup(matching[nextSubIdx]);
+    } else {
+      await changeGroup(matching.first);
+    }
+  }
+
   // --- 3. NAVIGATE DATE ---
   Future<void> navigateDate(int offset) async {
     if (offset == 0) return;
@@ -363,6 +398,18 @@ class HomeNotifier extends Notifier<HomeState> {
           : state.statusMessage,
     );
     recalculateDisplayData();
+  }
+
+  /// Cycle through available schedule versions (+1 newer/next, -1 older/previous).
+  void cycleVersion(int direction) {
+    if (state.historyVersions.length <= 1 || direction == 0) return;
+    final currentIndex = state.selectedVersionIndex >= 0
+        ? state.selectedVersionIndex
+        : state.historyVersions.length - 1;
+    final count = state.historyVersions.length;
+    final newIndex = (currentIndex + direction) % count;
+    final targetIndex = newIndex < 0 ? newIndex + count : newIndex;
+    selectVersion(targetIndex);
   }
 
   // --- SELECT DATE ---

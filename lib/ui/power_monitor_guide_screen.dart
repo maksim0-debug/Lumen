@@ -1,27 +1,50 @@
 import 'package:flutter/material.dart';
 
+import 'dialogs/shortcut_help_dialog.dart';
+import 'shortcuts/app_intents.dart';
+import 'shortcuts/keyboard_shortcut_wrapper.dart';
+import 'shortcuts/shortcut_registry.dart';
+
 class PowerMonitorGuideScreen extends StatelessWidget {
   const PowerMonitorGuideScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Як налаштувати сенсор?'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16.0),
-        children: [
-          _buildIntroCard(context),
-          const SizedBox(height: 16),
-          _buildFirebaseCard(context),
-          const SizedBox(height: 16),
-          _buildMethod1Card(context),
-          const SizedBox(height: 16),
-          _buildMethod2Card(context),
-          const SizedBox(height: 16),
-          _buildMethod3Card(context),
-        ],
+    return KeyboardShortcutWrapper(
+      shortcuts: AppKeyboardShortcuts.modalShortcuts,
+      actions: {
+        CloseTopModalOrGoBackIntent:
+            CallbackAction<CloseTopModalOrGoBackIntent>(
+          onInvoke: (intent) {
+            Navigator.of(context).maybePop();
+            return null;
+          },
+        ),
+        ToggleShortcutHelpIntent: CallbackAction<ToggleShortcutHelpIntent>(
+          onInvoke: (intent) {
+            ShortcutHelpDialog.show(context);
+            return null;
+          },
+        ),
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Як налаштувати сенсор?'),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(16.0),
+          children: [
+            _buildIntroCard(context),
+            const SizedBox(height: 16),
+            _buildFirebaseCard(context),
+            const SizedBox(height: 16),
+            _buildMethod1Card(context),
+            const SizedBox(height: 16),
+            _buildMethod2Card(context),
+            const SizedBox(height: 16),
+            _buildMethod3Card(context),
+          ],
+        ),
       ),
     );
   }

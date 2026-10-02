@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../models/achievement.dart';
 import '../services/achievement_service.dart';
+import 'dialogs/shortcut_help_dialog.dart';
+import 'shortcuts/app_intents.dart';
+import 'shortcuts/keyboard_shortcut_wrapper.dart';
+import 'shortcuts/shortcut_registry.dart';
 
 class AchievementsScreen extends StatefulWidget {
   const AchievementsScreen({super.key});
@@ -47,55 +51,74 @@ class _AchievementsScreenState extends State<AchievementsScreen>
     final unlockedTotal = _states.values.where((s) => s.unlocked).length;
     final total = AchievementCatalog.all.length;
 
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0A0A0A) : Colors.grey[50],
-      appBar: AppBar(
-        title: const Text('Досягнення'),
-        centerTitle: true,
-        actions: [
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? Colors.orange.withValues(alpha: 0.15)
-                      : Colors.deepPurple.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
+    return KeyboardShortcutWrapper(
+      shortcuts: AppKeyboardShortcuts.modalShortcuts,
+      actions: {
+        CloseTopModalOrGoBackIntent:
+            CallbackAction<CloseTopModalOrGoBackIntent>(
+          onInvoke: (intent) {
+            Navigator.of(context).maybePop();
+            return null;
+          },
+        ),
+        ToggleShortcutHelpIntent: CallbackAction<ToggleShortcutHelpIntent>(
+          onInvoke: (intent) {
+            ShortcutHelpDialog.show(context);
+            return null;
+          },
+        ),
+      },
+      child: Scaffold(
+        backgroundColor: isDark ? const Color(0xFF0A0A0A) : Colors.grey[50],
+        appBar: AppBar(
+          title: const Text('Досягнення'),
+          centerTitle: true,
+          actions: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
                     color: isDark
-                        ? Colors.orange.withValues(alpha: 0.3)
-                        : Colors.deepPurple.withValues(alpha: 0.3),
+                        ? Colors.orange.withValues(alpha: 0.15)
+                        : Colors.deepPurple.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isDark
+                          ? Colors.orange.withValues(alpha: 0.3)
+                          : Colors.deepPurple.withValues(alpha: 0.3),
+                    ),
                   ),
-                ),
-                child: Text(
-                  '🏆 $unlockedTotal / $total',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    color: isDark ? Colors.orange : Colors.deepPurple,
+                  child: Text(
+                    '🏆 $unlockedTotal / $total',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: isDark ? Colors.orange : Colors.deepPurple,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: Colors.orange))
+            : ListView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 40),
+                children: [
+                  // Прогрес-хедер
+                  _buildProgressHeader(isDark, unlockedTotal, total),
+                  // Категорії
+                  for (final cat in AchievementCategory.values)
+                    _buildCategorySection(cat, isDark),
+                ],
+              ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
-          : ListView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.only(bottom: 40),
-              children: [
-                // Прогрес-хедер
-                _buildProgressHeader(isDark, unlockedTotal, total),
-                // Категорії
-                for (final cat in AchievementCategory.values)
-                  _buildCategorySection(cat, isDark),
-              ],
-            ),
     );
   }
 

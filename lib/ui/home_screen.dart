@@ -7,15 +7,22 @@ import '../models/data_source_mode.dart';
 import '../models/schedule_status.dart';
 import '../models/schedule_view_mode.dart';
 import '../services/achievement_service.dart';
+import '../services/app_logger.dart';
 import '../services/darkness_theme_service.dart';
 import '../services/desktop_tray_coordinator.dart';
 import '../services/parser_service.dart';
+import '../services/preferences_helper.dart';
 import '../services/schedule_calculation_service.dart';
 import 'achievements_screen.dart';
 import 'analytics_screen.dart';
 import 'dialogs/hour_detail_dialog.dart';
+import 'dialogs/shortcut_help_dialog.dart';
 import 'dialogs/version_picker_sheet.dart';
+import 'logs_page.dart';
 import 'settings_page.dart';
+import 'shortcuts/app_intents.dart';
+import 'shortcuts/keyboard_shortcut_wrapper.dart';
+import 'shortcuts/shortcut_registry.dart';
 import 'state/home_notifier.dart';
 import 'widgets/home/countdown_card.dart';
 import 'widgets/home/darkness_stage_banner.dart';
@@ -39,6 +46,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       DesktopTrayCoordinator();
   final AchievementService _achievementService = AchievementService();
   final FocusNode _focusNode = FocusNode();
+  bool _isNavigating = false;
 
   int _lastAutoRefreshMinute = -1;
   int _lastRenderedMinute = -1;
@@ -260,6 +268,66 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  void _openAnalytics(String groupKey) {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AnalyticsScreen(groupKey: groupKey),
+      ),
+    ).whenComplete(() {
+      _isNavigating = false;
+    });
+  }
+
+  Future<void> _openSettings() async {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => SettingsPage(
+            onThemeChanged: widget.onThemeChanged,
+            onScaleChanged: widget.onScaleChanged,
+          ),
+        ),
+      );
+    } finally {
+      _isNavigating = false;
+    }
+    if (!mounted) return;
+    ref.read(homeNotifierProvider.notifier).loadPreferencesAndData();
+    ref.read(homeNotifierProvider.notifier).initPowerMonitor();
+  }
+
+  void _openAchievements() {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AchievementsScreen(),
+      ),
+    ).whenComplete(() {
+      _isNavigating = false;
+    });
+  }
+
+  void _openLogs() {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const LogsPage(),
+      ),
+    ).whenComplete(() {
+      _isNavigating = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(homeNotifierProvider);
@@ -270,27 +338,244 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return FocusableActionDetector(
+    return KeyboardShortcutWrapper(
       focusNode: _focusNode,
-      autofocus: true,
-      shortcuts: {
-        LogicalKeySet(LogicalKeyboardKey.keyA):
-            const _SwitchModeIntent(DataSourceMode.predicted),
-        LogicalKeySet(LogicalKeyboardKey.arrowLeft):
-            const _SwitchModeIntent(DataSourceMode.predicted),
-        LogicalKeySet(LogicalKeyboardKey.numpad4):
-            const _SwitchModeIntent(DataSourceMode.predicted),
-        LogicalKeySet(LogicalKeyboardKey.keyD):
-            const _SwitchModeIntent(DataSourceMode.real),
-        LogicalKeySet(LogicalKeyboardKey.arrowRight):
-            const _SwitchModeIntent(DataSourceMode.real),
-        LogicalKeySet(LogicalKeyboardKey.numpad6):
-            const _SwitchModeIntent(DataSourceMode.real),
-      },
+      shortcuts: AppKeyboardShortcuts.homeShortcuts,
       actions: {
-        _SwitchModeIntent: CallbackAction<_SwitchModeIntent>(
+        NavigateDateIntent: CallbackAction<NavigateDateIntent>(
+          onInvoke: (intent) {
+            notifier.navigateDate(intent.offset);
+            return null;
+          },
+        ),
+        JumpToTodayIntent: CallbackAction<JumpToTodayIntent>(
+          onInvoke: (intent) {
+            final current = ref.read(homeNotifierProvider);
+            if (current.viewMode != ScheduleViewMode.today) {
+              notifier.setViewMode(ScheduleViewMode.today);
+            } else if (current.selectedVersionIndex != -1 &&
+                current.historyVersions.isNotEmpty) {
+              notifier.selectVersion(current.historyVersions.length - 1);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content:
+                        Text("Повернуто до актуального графіка на сьогодні"),
+                    duration: Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            }
+            return null;
+          },
+        ),
+        JumpToYesterdayIntent: CallbackAction<JumpToYesterdayIntent>(
+          onInvoke: (intent) {
+            final current = ref.read(homeNotifierProvider);
+            if (current.viewMode != ScheduleViewMode.yesterday) {
+              notifier.setViewMode(ScheduleViewMode.yesterday);
+            }
+            return null;
+          },
+        ),
+        JumpToTomorrowIntent: CallbackAction<JumpToTomorrowIntent>(
+          onInvoke: (intent) {
+            final current = ref.read(homeNotifierProvider);
+            if (current.viewMode != ScheduleViewMode.tomorrow) {
+              notifier.setViewMode(ScheduleViewMode.tomorrow);
+            }
+            return null;
+          },
+        ),
+        CopyScheduleSummaryIntent: CallbackAction<CopyScheduleSummaryIntent>(
+          onInvoke: (intent) async {
+            final current = ref.read(homeNotifierProvider);
+            final text = _getOutageInfoText(current);
+            if (text.isNotEmpty) {
+              await Clipboard.setData(ClipboardData(text: text));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content:
+                        Text("Інформацію про відключення скопійовано в буфер"),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            } else if (context.mounted) {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("Немає даних для копіювання"),
+                  duration: Duration(seconds: 1),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+            return null;
+          },
+        ),
+        ToggleDataSourceModeIntent: CallbackAction<ToggleDataSourceModeIntent>(
+          onInvoke: (intent) {
+            notifier.toggleDataSourceMode();
+            return null;
+          },
+        ),
+        SetDataSourceModeIntent: CallbackAction<SetDataSourceModeIntent>(
           onInvoke: (intent) {
             notifier.switchMode(intent.mode);
+            return null;
+          },
+        ),
+        CycleGroupIntent: CallbackAction<CycleGroupIntent>(
+          onInvoke: (intent) {
+            notifier.cycleGroup(intent.direction);
+            return null;
+          },
+        ),
+        SelectGroupNumberIntent: CallbackAction<SelectGroupNumberIntent>(
+          onInvoke: (intent) {
+            notifier.selectGroupByIndex(intent.groupNumber);
+            return null;
+          },
+        ),
+        RefreshDataIntent: CallbackAction<RefreshDataIntent>(
+          onInvoke: (intent) {
+            notifier.refresh();
+            return null;
+          },
+        ),
+        OpenDatePickerIntent: CallbackAction<OpenDatePickerIntent>(
+          onInvoke: (intent) {
+            _selectDateAndLoad(ref.read(homeNotifierProvider));
+            return null;
+          },
+        ),
+        OpenVersionPickerIntent: CallbackAction<OpenVersionPickerIntent>(
+          onInvoke: (intent) {
+            final current = ref.read(homeNotifierProvider);
+            if (current.historyVersions.isNotEmpty) {
+              _showVersionPicker(current);
+            }
+            return null;
+          },
+        ),
+        CycleVersionIntent: CallbackAction<CycleVersionIntent>(
+          onInvoke: (intent) {
+            final current = ref.read(homeNotifierProvider);
+            if (current.historyVersions.length > 1) {
+              notifier.cycleVersion(intent.direction);
+              final updated = ref.read(homeNotifierProvider);
+              final ver = updated.selectedVersionIndex >= 0 &&
+                      updated.selectedVersionIndex <
+                          updated.historyVersions.length
+                  ? updated.historyVersions[updated.selectedVersionIndex]
+                  : null;
+              if (ver != null && context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Версія графіка: ${ver.timeString} (${ver.outageString})',
+                    ),
+                    duration: const Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            } else if (current.historyVersions.length == 1) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content:
+                        Text('Доступна лише одна версія графіка за цей день'),
+                    duration: Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            } else if (current.historyVersions.isEmpty) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Для обраного дня немає збережених версій'),
+                    duration: Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            }
+            return null;
+          },
+        ),
+        ToggleThemeIntent: CallbackAction<ToggleThemeIntent>(
+          onInvoke: (intent) async {
+            try {
+              final prefs = await PreferencesHelper.getSafeInstance();
+              final current = prefs.getBool('is_dark_mode') ?? true;
+              final next = !current;
+              await prefs.setBool('is_dark_mode', next);
+              AchievementService().trackThemeToggle();
+              widget.onThemeChanged?.call();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      next ? 'Увімкнено темну тему' : 'Увімкнено світлу тему',
+                    ),
+                    duration: const Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            } catch (e) {
+              AppLogger.e('Error toggling theme via shortcut',
+                  tag: 'HomeScreen', error: e);
+            }
+            return null;
+          },
+        ),
+        OpenAnalyticsIntent: CallbackAction<OpenAnalyticsIntent>(
+          onInvoke: (intent) {
+            _openAnalytics(ref.read(homeNotifierProvider).currentGroup);
+            return null;
+          },
+        ),
+        OpenSettingsIntent: CallbackAction<OpenSettingsIntent>(
+          onInvoke: (intent) {
+            _openSettings();
+            return null;
+          },
+        ),
+        OpenAchievementsIntent: CallbackAction<OpenAchievementsIntent>(
+          onInvoke: (intent) {
+            _openAchievements();
+            return null;
+          },
+        ),
+        OpenLogsIntent: CallbackAction<OpenLogsIntent>(
+          onInvoke: (intent) {
+            _openLogs();
+            return null;
+          },
+        ),
+        ToggleShortcutHelpIntent: CallbackAction<ToggleShortcutHelpIntent>(
+          onInvoke: (intent) {
+            ShortcutHelpDialog.show(context);
+            return null;
+          },
+        ),
+        CloseTopModalOrGoBackIntent:
+            CallbackAction<CloseTopModalOrGoBackIntent>(
+          onInvoke: (intent) {
+            Navigator.of(context).maybePop();
             return null;
           },
         ),
@@ -329,6 +614,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               IconButton(
                 icon: Icon(Icons.refresh,
                     color: isDark ? Colors.white : Colors.black87),
+                tooltip: 'Оновити (R / F5)',
                 onPressed: () async {
                   await notifier.refresh();
                 },
@@ -336,32 +622,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               IconButton(
                 icon: Icon(Icons.analytics_outlined,
                     color: isDark ? Colors.orange : Colors.deepPurple),
-                tooltip: 'Аналітика',
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          AnalyticsScreen(groupKey: state.currentGroup),
-                    ),
-                  );
-                },
+                tooltip: 'Аналітика (G / F2)',
+                onPressed: () => _openAnalytics(state.currentGroup),
               ),
+              if (Theme.of(context).platform == TargetPlatform.windows ||
+                  Theme.of(context).platform == TargetPlatform.linux ||
+                  Theme.of(context).platform == TargetPlatform.macOS ||
+                  MediaQuery.sizeOf(context).width >= 500)
+                IconButton(
+                  icon: Icon(Icons.keyboard_outlined,
+                      color: isDark ? Colors.white70 : Colors.black54),
+                  tooltip: 'Гарячі клавіші (F1)',
+                  onPressed: () => ShortcutHelpDialog.show(context),
+                ),
               IconButton(
                 icon: Icon(Icons.settings,
                     color: isDark ? Colors.white : Colors.black87),
-                onPressed: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => SettingsPage(
-                            onThemeChanged: widget.onThemeChanged,
-                            onScaleChanged: widget.onScaleChanged)),
-                  );
-                  if (!mounted) return;
-                  notifier.loadPreferencesAndData();
-                  notifier.initPowerMonitor();
-                },
+                tooltip: 'Налаштування (O / F10)',
+                onPressed: _openSettings,
               ),
             ],
           ),
@@ -554,9 +832,4 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
   }
-}
-
-class _SwitchModeIntent extends Intent {
-  final DataSourceMode mode;
-  const _SwitchModeIntent(this.mode);
 }

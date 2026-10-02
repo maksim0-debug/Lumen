@@ -7,6 +7,10 @@ import '../services/app_logger.dart';
 import '../services/history_service.dart';
 import '../services/parser_service.dart';
 import '../services/preferences_helper.dart';
+import 'dialogs/shortcut_help_dialog.dart';
+import 'shortcuts/app_intents.dart';
+import 'shortcuts/keyboard_shortcut_wrapper.dart';
+import 'shortcuts/shortcut_registry.dart';
 
 class ManualScheduleEditor extends StatefulWidget {
   const ManualScheduleEditor({super.key});
@@ -20,6 +24,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
   String _selectedGroup = 'GPV1.1'; // Default, will update in initState
   List<LightStatus> _schedule = List.filled(24, LightStatus.unknown);
   bool _isLoading = true;
+  bool _isDirty = false;
   final TextEditingController _importController = TextEditingController();
 
   @override
@@ -61,6 +66,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
         // No data, default to ON (optimistic default for editing outages)
         _schedule = List.filled(24, LightStatus.on);
       }
+      _isDirty = false;
     } catch (e) {
       AppLogger.e("Error fetching schedule",
           tag: 'ManualScheduleEditor', error: e);
@@ -71,6 +77,33 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<bool> _confirmDiscardChanges() async {
+    if (!_isDirty) return true;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Незбережені зміни"),
+        content: const Text(
+          "Ви внесли зміни в графік. Якщо ви вийдете зараз, зміни буде втрачено. Вийти?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("Залишитися"),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text("Вийти без збереження"),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   Future<void> _saveSchedule() async {
@@ -90,6 +123,8 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
         scheduleCode: scheduleCode,
         dtekUpdatedAt: updateTimeStr,
       );
+
+      _isDirty = false;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -134,6 +169,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
           next = LightStatus.on;
       }
       _schedule[index] = next;
+      _isDirty = true;
     });
   }
 
@@ -142,6 +178,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
       for (int i = 0; i < 24; i++) {
         _schedule[i] = status;
       }
+      _isDirty = true;
     });
   }
 
@@ -173,6 +210,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
 
       setState(() {
         _schedule = newSchedule;
+        _isDirty = true;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -209,33 +247,76 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Редактор графіку"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.save),
-            onPressed: _isLoading ? null : _saveSchedule,
-          )
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildControls(),
-          const Divider(),
-          _buildImportSection(),
-          const Divider(),
-          _buildQuickActions(),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _buildGrid(),
+    return KeyboardShortcutWrapper(
+      shortcuts: AppKeyboardShortcuts.editorShortcuts,
+      actions: {
+        CloseTopModalOrGoBackIntent:
+            CallbackAction<CloseTopModalOrGoBackIntent>(
+          onInvoke: (intent) async {
+            final shouldPop = await _confirmDiscardChanges();
+            if (shouldPop && context.mounted) {
+              setState(() => _isDirty = false);
+              Navigator.of(context).pop();
+            }
+            return null;
+          },
+        ),
+        ToggleShortcutHelpIntent: CallbackAction<ToggleShortcutHelpIntent>(
+          onInvoke: (intent) {
+            ShortcutHelpDialog.show(context);
+            return null;
+          },
+        ),
+        SaveEditorDataIntent: CallbackAction<SaveEditorDataIntent>(
+          onInvoke: (intent) {
+            if (!_isLoading) {
+              _saveSchedule();
+            }
+            return null;
+          },
+        ),
+      },
+      child: PopScope(
+        canPop: !_isDirty,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          final shouldPop = await _confirmDiscardChanges();
+          if (shouldPop && context.mounted) {
+            setState(() => _isDirty = false);
+            Navigator.of(context).pop();
+          }
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text("Редактор графіку"),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.save),
+                tooltip: "Зберегти (Ctrl + S)",
+                onPressed: _isLoading ? null : _saveSchedule,
+              )
+            ],
           ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _isLoading ? null : _saveSchedule,
-        child: const Icon(Icons.save),
+          body: Column(
+            children: [
+              _buildControls(),
+              const Divider(),
+              _buildImportSection(),
+              const Divider(),
+              _buildQuickActions(),
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _buildGrid(),
+              ),
+            ],
+          ),
+          floatingActionButton: FloatingActionButton(
+            tooltip: "Зберегти (Ctrl + S)",
+            onPressed: _isLoading ? null : _saveSchedule,
+            child: const Icon(Icons.save),
+          ),
+        ),
       ),
     );
   }
@@ -284,6 +365,11 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
               Expanded(
                 child: InkWell(
                   onTap: () async {
+                    if (_isDirty) {
+                      final discard = await _confirmDiscardChanges();
+                      if (!discard) return;
+                    }
+                    if (!mounted) return;
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: _selectedDate,
@@ -327,8 +413,13 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
                       child: Text(g.replaceAll("GPV", "Група ")),
                     );
                   }).toList(),
-                  onChanged: (val) {
+                  onChanged: (val) async {
                     if (val != null && val != _selectedGroup) {
+                      if (_isDirty) {
+                        final discard = await _confirmDiscardChanges();
+                        if (!discard) return;
+                      }
+                      if (!mounted) return;
                       setState(() {
                         _selectedGroup = val;
                       });

@@ -13,9 +13,13 @@ import '../services/power_monitor_service.dart';
 import '../services/preferences_helper.dart';
 import '../services/achievement_service.dart';
 import '../services/darkness_theme_service.dart';
+import 'dialogs/shortcut_help_dialog.dart';
 import 'logs_page.dart';
 import 'manual_schedule_editor.dart';
 import 'power_monitor_guide_screen.dart';
+import 'shortcuts/app_intents.dart';
+import 'shortcuts/keyboard_shortcut_wrapper.dart';
+import 'shortcuts/shortcut_registry.dart';
 import '../services/history_service.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -234,515 +238,538 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Налаштування"),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              children: [
-                _buildSwitchTile(
-                    "Темна тема",
-                    "Використовувати темне оформлення",
-                    _isDarkMode, (val) async {
-                  setState(() => _isDarkMode = val);
-                  await _saveSetting('is_dark_mode', val);
-                  AchievementService().trackThemeToggle();
-                  if (widget.onThemeChanged != null) widget.onThemeChanged!();
-                }),
-                _buildCompactThemeSelector(),
-                _buildSwitchTile(
-                    "Анімації",
-                    "Увімкнути візуальні ефекти та анімації",
-                    _animationsEnabled, (val) async {
-                  setState(() => _animationsEnabled = val);
-                  await DarknessThemeService().setAnimationsEnabled(val);
-                  // Trigger theme rebuild if needed, though service likely notifies listeners
-                  if (widget.onThemeChanged != null) widget.onThemeChanged!();
-                }),
-                _buildScaleSelector(),
-                if (Platform.isWindows) ...[
+    return KeyboardShortcutWrapper(
+      shortcuts: AppKeyboardShortcuts.modalShortcuts,
+      actions: {
+        CloseTopModalOrGoBackIntent:
+            CallbackAction<CloseTopModalOrGoBackIntent>(
+          onInvoke: (intent) {
+            Navigator.of(context).maybePop();
+            return null;
+          },
+        ),
+        ToggleShortcutHelpIntent: CallbackAction<ToggleShortcutHelpIntent>(
+          onInvoke: (intent) {
+            ShortcutHelpDialog.show(context);
+            return null;
+          },
+        ),
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text("Налаштування"),
+        ),
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
+                children: [
                   _buildSwitchTile(
-                      "Автозапуск при старті Windows",
-                      "Запускати програму автоматично при вході в систему",
-                      _launchAtStartup, (val) async {
-                    setState(() => _launchAtStartup = val);
-                    if (val) {
-                      await launchAtStartup.enable();
-                    } else {
-                      await launchAtStartup.disable();
-                    }
+                      "Темна тема",
+                      "Використовувати темне оформлення",
+                      _isDarkMode, (val) async {
+                    setState(() => _isDarkMode = val);
+                    await _saveSetting('is_dark_mode', val);
+                    AchievementService().trackThemeToggle();
+                    if (widget.onThemeChanged != null) widget.onThemeChanged!();
                   }),
-                ],
-                const Divider(),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Text(
-                    "Групи для сповіщень",
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.orange,
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Wrap(
-                    spacing: 8,
-                    children: ParserService.allGroups.map((group) {
-                      final isSelected = _notificationGroups.contains(group);
-                      return FilterChip(
-                        label: Text(group.replaceAll("GPV", "Група ")),
-                        selected: isSelected,
-                        onSelected: (val) {
-                          setState(() {
-                            if (val) {
-                              _notificationGroups.add(group);
-                            } else {
-                              if (_notificationGroups.length > 1) {
-                                _notificationGroups.remove(group);
-                              }
-                            }
-                          });
-                          _saveGroups();
-                        },
-                      );
-                    }).toList(),
-                  ),
-                ),
-                const Divider(),
-                _buildSwitchTile(
-                  "За 1 годину до відключення",
-                  "Сповіщення, що скоро вимкнуть світло",
-                  _notify1hBeforeOff,
-                  (val) {
-                    setState(() => _notify1hBeforeOff = val);
-                    _saveSetting('notify_1h_before_off', val);
-                  },
-                ),
-                _buildSwitchTile(
-                  "За 30 хвилин до відключення",
-                  "Сповіщення, що скоро вимкнуть світло",
-                  _notify30mBeforeOff,
-                  (val) {
-                    setState(() => _notify30mBeforeOff = val);
-                    _saveSetting('notify_30m_before_off', val);
-                  },
-                ),
-                _buildSwitchTile(
-                  "За 5 хвилин до відключення",
-                  "Сповіщення, що світло вимкнуть прямо зараз",
-                  _notify5mBeforeOff,
-                  (val) {
-                    setState(() => _notify5mBeforeOff = val);
-                    _saveSetting('notify_5m_before_off', val);
-                  },
-                ),
-                _buildSwitchTile(
-                  "За 1 годину до ввімкнення",
-                  "Сповіщення, що скоро світло ввімкнуть",
-                  _notify1hBeforeOn,
-                  (val) {
-                    setState(() => _notify1hBeforeOn = val);
-                    _saveSetting('notify_1h_before_on', val);
-                  },
-                ),
-                _buildSwitchTile(
-                  "За 30 хвилин до ввімкнення",
-                  "Сповіщення, що скоро світло ввімкнуть",
-                  _notify30mBeforeOn,
-                  (val) {
-                    setState(() => _notify30mBeforeOn = val);
-                    _saveSetting('notify_30m_before_on', val);
-                  },
-                ),
-                const Divider(),
-                _buildSwitchTile(
-                  "Зміна графіку",
-                  "Сповіщення, якщо кількість годин зі світлом змінилась",
-                  _notifyScheduleChange,
-                  (val) {
-                    setState(() => _notifyScheduleChange = val);
-                    _saveSetting('notify_schedule_change', val);
-                  },
-                ),
-                const Divider(),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Text(
-                    "Моніторинг 220В",
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.amber,
-                    ),
-                  ),
-                ),
-                _buildSwitchTile(
-                  "Реальний моніторинг",
-                  "Статус електроенергії через сенсор (Firebase)",
-                  _powerMonitorEnabled,
-                  (val) async {
-                    setState(() => _powerMonitorEnabled = val);
-                    await _saveSetting('power_monitor_enabled', val);
-                    await PowerMonitorService().setEnabled(val);
-                  },
-                ),
-                if (_powerMonitorEnabled) ...[
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _customUrlController,
-                            decoration: const InputDecoration(
-                              labelText: 'URL бази даних Firebase',
-                              hintText: 'https://xxx.firebasedatabase.app',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton(
-                          onPressed: _testAndSaveUrl,
-                          child: const Text('Зберегти'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: DropdownButtonFormField<int>(
-                      initialValue: _powerMonitorTtlMinutes,
-                      decoration: const InputDecoration(
-                        labelText: 'Таймаут застарівання даних (TTL)',
-                        helperText:
-                            'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: 15, child: Text('15 хвилин')),
-                        DropdownMenuItem(
-                            value: 25,
-                            child: Text('25 хвилин (Рекомендовано)')),
-                        DropdownMenuItem(value: 45, child: Text('45 хвилин')),
-                        DropdownMenuItem(
-                            value: 60, child: Text('60 хвилин (1 година)')),
-                        DropdownMenuItem(
-                            value: 720,
-                            child: Text('12 годин (Рідкісний пінг)')),
-                        DropdownMenuItem(
-                            value: 1440, child: Text('24 години (1 доба)')),
-                        DropdownMenuItem(
-                            value: 0, child: Text('Вимкнено (без таймауту)')),
-                      ],
-                      onChanged: (val) async {
-                        if (val != null) {
-                          setState(() => _powerMonitorTtlMinutes = val);
-                          await PowerMonitorService().setTtlMinutes(val);
-                        }
-                      },
-                    ),
-                  ),
-                  if (PowerMonitorService.isAuthorizationError(
-                      PowerMonitorService().lastSyncError)) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      child: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color: Colors.redAccent.withValues(alpha: 0.4)),
-                        ),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.warning_amber_rounded,
-                                color: Colors.redAccent, size: 20),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                "Помилка доступу до Firebase (HTTP 401/403). Перевірте правила бази даних (.read: true). Опитування тимчасово призупинено для збереження батареї.",
-                                style: TextStyle(
-                                    fontSize: 12, color: Colors.redAccent),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  _buildCompactThemeSelector(),
+                  _buildSwitchTile(
+                      "Анімації",
+                      "Увімкнути візуальні ефекти та анімації",
+                      _animationsEnabled, (val) async {
+                    setState(() => _animationsEnabled = val);
+                    await DarknessThemeService().setAnimationsEnabled(val);
+                    // Trigger theme rebuild if needed, though service likely notifies listeners
+                    if (widget.onThemeChanged != null) widget.onThemeChanged!();
+                  }),
+                  _buildScaleSelector(),
+                  if (Platform.isWindows) ...[
+                    _buildSwitchTile(
+                        "Автозапуск при старті Windows",
+                        "Запускати програму автоматично при вході в систему",
+                        _launchAtStartup, (val) async {
+                      setState(() => _launchAtStartup = val);
+                      if (val) {
+                        await launchAtStartup.enable();
+                      } else {
+                        await launchAtStartup.disable();
+                      }
+                    }),
                   ],
-                  ListTile(
-                    leading: const Icon(Icons.help_outline, color: Colors.blue),
-                    title:
-                        const Text("Як налаштувати свій сенсор? (Інструкція)"),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                    onTap: () {
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const PowerMonitorGuideScreen()));
-                    },
-                  ),
-                ],
-                const Divider(),
-                Theme(
-                  data: Theme.of(context)
-                      .copyWith(dividerColor: Colors.transparent),
-                  child: ExpansionTile(
-                    title: const Text(
-                      "Резервне копіювання (Beta)",
+                  const Divider(),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Text(
+                      "Групи для сповіщень",
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
-                        color: Colors.blue,
+                        color: Colors.orange,
                       ),
                     ),
-                    children: [
-                      ListTile(
-                        leading: const Icon(Icons.download),
-                        title: const Text("Створити резервну копію"),
-                        subtitle: const Text("Зберегти базу даних у файл"),
-                        onTap: () async {
-                          try {
-                            setState(() => _isLoading = true);
-                            final path = await BackupService().exportDatabase();
-                            if (context.mounted) {
-                              if (path != null) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                        content: Text("Збережено в: $path")));
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Wrap(
+                      spacing: 8,
+                      children: ParserService.allGroups.map((group) {
+                        final isSelected = _notificationGroups.contains(group);
+                        return FilterChip(
+                          label: Text(group.replaceAll("GPV", "Група ")),
+                          selected: isSelected,
+                          onSelected: (val) {
+                            setState(() {
+                              if (val) {
+                                _notificationGroups.add(group);
                               } else {
-                                // Share sheet opened, no specific success message needed usually
+                                if (_notificationGroups.length > 1) {
+                                  _notificationGroups.remove(group);
+                                }
                               }
-                            }
-                          } catch (e) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text("Помилка експорту: $e")));
-                            }
-                          } finally {
-                            if (mounted) setState(() => _isLoading = false);
+                            });
+                            _saveGroups();
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const Divider(),
+                  _buildSwitchTile(
+                    "За 1 годину до відключення",
+                    "Сповіщення, що скоро вимкнуть світло",
+                    _notify1hBeforeOff,
+                    (val) {
+                      setState(() => _notify1hBeforeOff = val);
+                      _saveSetting('notify_1h_before_off', val);
+                    },
+                  ),
+                  _buildSwitchTile(
+                    "За 30 хвилин до відключення",
+                    "Сповіщення, що скоро вимкнуть світло",
+                    _notify30mBeforeOff,
+                    (val) {
+                      setState(() => _notify30mBeforeOff = val);
+                      _saveSetting('notify_30m_before_off', val);
+                    },
+                  ),
+                  _buildSwitchTile(
+                    "За 5 хвилин до відключення",
+                    "Сповіщення, що світло вимкнуть прямо зараз",
+                    _notify5mBeforeOff,
+                    (val) {
+                      setState(() => _notify5mBeforeOff = val);
+                      _saveSetting('notify_5m_before_off', val);
+                    },
+                  ),
+                  _buildSwitchTile(
+                    "За 1 годину до ввімкнення",
+                    "Сповіщення, що скоро світло ввімкнуть",
+                    _notify1hBeforeOn,
+                    (val) {
+                      setState(() => _notify1hBeforeOn = val);
+                      _saveSetting('notify_1h_before_on', val);
+                    },
+                  ),
+                  _buildSwitchTile(
+                    "За 30 хвилин до ввімкнення",
+                    "Сповіщення, що скоро світло ввімкнуть",
+                    _notify30mBeforeOn,
+                    (val) {
+                      setState(() => _notify30mBeforeOn = val);
+                      _saveSetting('notify_30m_before_on', val);
+                    },
+                  ),
+                  const Divider(),
+                  _buildSwitchTile(
+                    "Зміна графіку",
+                    "Сповіщення, якщо кількість годин зі світлом змінилась",
+                    _notifyScheduleChange,
+                    (val) {
+                      setState(() => _notifyScheduleChange = val);
+                      _saveSetting('notify_schedule_change', val);
+                    },
+                  ),
+                  const Divider(),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Text(
+                      "Моніторинг 220В",
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.amber,
+                      ),
+                    ),
+                  ),
+                  _buildSwitchTile(
+                    "Реальний моніторинг",
+                    "Статус електроенергії через сенсор (Firebase)",
+                    _powerMonitorEnabled,
+                    (val) async {
+                      setState(() => _powerMonitorEnabled = val);
+                      await _saveSetting('power_monitor_enabled', val);
+                      await PowerMonitorService().setEnabled(val);
+                    },
+                  ),
+                  if (_powerMonitorEnabled) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _customUrlController,
+                              decoration: const InputDecoration(
+                                labelText: 'URL бази даних Firebase',
+                                hintText: 'https://xxx.firebasedatabase.app',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: _testAndSaveUrl,
+                            child: const Text('Зберегти'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      child: DropdownButtonFormField<int>(
+                        initialValue: _powerMonitorTtlMinutes,
+                        decoration: const InputDecoration(
+                          labelText: 'Таймаут застарівання даних (TTL)',
+                          helperText:
+                              'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 15, child: Text('15 хвилин')),
+                          DropdownMenuItem(
+                              value: 25,
+                              child: Text('25 хвилин (Рекомендовано)')),
+                          DropdownMenuItem(value: 45, child: Text('45 хвилин')),
+                          DropdownMenuItem(
+                              value: 60, child: Text('60 хвилин (1 година)')),
+                          DropdownMenuItem(
+                              value: 720,
+                              child: Text('12 годин (Рідкісний пінг)')),
+                          DropdownMenuItem(
+                              value: 1440, child: Text('24 години (1 доба)')),
+                          DropdownMenuItem(
+                              value: 0, child: Text('Вимкнено (без таймауту)')),
+                        ],
+                        onChanged: (val) async {
+                          if (val != null) {
+                            setState(() => _powerMonitorTtlMinutes = val);
+                            await PowerMonitorService().setTtlMinutes(val);
                           }
                         },
                       ),
-                      ListTile(
-                        leading: const Icon(Icons.upload),
-                        title: const Text("Відновити з файлу"),
-                        subtitle: const Text("Замінити поточну базу даних"),
-                        onTap: () async {
-                          // Show confirmation dialog
-                          bool? confirm = await showDialog<bool>(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                    title: const Text("Відновлення даних"),
-                                    content: const Text(
-                                        "УВАГА! Всі поточні дані будуть замінені даними з файлу. Це неможливо скасувати.\n\nПродовжити?"),
-                                    actions: [
-                                      TextButton(
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, false),
-                                          child: const Text("Скасувати")),
-                                      TextButton(
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, true),
-                                          child: const Text("Відновити",
-                                              style: TextStyle(
-                                                  color: Colors.red))),
-                                    ],
-                                  ));
-
-                          if (confirm != true) return;
-
-                          try {
-                            setState(() => _isLoading = true);
-                            await BackupService().importDatabase();
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text(
-                                          "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних.")));
-                            }
-                          } catch (e) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content:
-                                          Text("Помилка відновлення: $e")));
-                            }
-                          } finally {
-                            if (mounted) setState(() => _isLoading = false);
-                          }
-                        },
+                    ),
+                    if (PowerMonitorService.isAuthorizationError(
+                        PowerMonitorService().lastSyncError)) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: Colors.redAccent.withValues(alpha: 0.4)),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.warning_amber_rounded,
+                                  color: Colors.redAccent, size: 20),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  "Помилка доступу до Firebase (HTTP 401/403). Перевірте правила бази даних (.read: true). Опитування тимчасово призупинено для збереження батареї.",
+                                  style: TextStyle(
+                                      fontSize: 12, color: Colors.redAccent),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      ListTile(
-                        leading: const Icon(Icons.date_range),
-                        title: const Text("Експорт історії за період (JSON)"),
-                        subtitle: const Text("Зберегти дані до обраної дати"),
-                        onTap: () async {
-                          final DateTimeRange? picked =
-                              await showDateRangePicker(
-                            context: context,
-                            firstDate: DateTime(2024),
-                            lastDate: DateTime.now(),
-                            helpText: 'Оберіть період для експорту',
-                          );
-
-                          if (picked != null) {
+                    ],
+                    ListTile(
+                      leading:
+                          const Icon(Icons.help_outline, color: Colors.blue),
+                      title: const Text(
+                          "Як налаштувати свій сенсор? (Інструкція)"),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                      onTap: () {
+                        Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const PowerMonitorGuideScreen()));
+                      },
+                    ),
+                  ],
+                  const Divider(),
+                  Theme(
+                    data: Theme.of(context)
+                        .copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                      title: const Text(
+                        "Резервне копіювання (Beta)",
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue,
+                        ),
+                      ),
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.download),
+                          title: const Text("Створити резервну копію"),
+                          subtitle: const Text("Зберегти базу даних у файл"),
+                          onTap: () async {
                             try {
                               setState(() => _isLoading = true);
-                              final path = await BackupService()
-                                  .exportPartialHistory(
-                                      picked.start, picked.end);
+                              final path =
+                                  await BackupService().exportDatabase();
                               if (context.mounted) {
                                 if (path != null) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                           content: Text("Збережено в: $path")));
+                                } else {
+                                  // Share sheet opened, no specific success message needed usually
                                 }
                               }
                             } catch (e) {
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text("Помилка: $e")));
+                                    SnackBar(
+                                        content: Text("Помилка експорту: $e")));
                               }
                             } finally {
                               if (mounted) setState(() => _isLoading = false);
                             }
-                          }
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.data_object),
-                        title: const Text("Імпорт історії з JSON"),
-                        subtitle: const Text(
-                            "Додати збережені раніше події та графіки"),
-                        onTap: () async {
-                          try {
-                            setState(() => _isLoading = true);
-                            final count =
-                                await BackupService().importPartialHistory();
-                            if (context.mounted && count > 0) {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                  content: Text(
-                                      "Успішно додано записів: $count. Перезапустіть додаток.")));
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.upload),
+                          title: const Text("Відновити з файлу"),
+                          subtitle: const Text("Замінити поточну базу даних"),
+                          onTap: () async {
+                            // Show confirmation dialog
+                            bool? confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                      title: const Text("Відновлення даних"),
+                                      content: const Text(
+                                          "УВАГА! Всі поточні дані будуть замінені даними з файлу. Це неможливо скасувати.\n\nПродовжити?"),
+                                      actions: [
+                                        TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(ctx, false),
+                                            child: const Text("Скасувати")),
+                                        TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(ctx, true),
+                                            child: const Text("Відновити",
+                                                style: TextStyle(
+                                                    color: Colors.red))),
+                                      ],
+                                    ));
+
+                            if (confirm != true) return;
+
+                            try {
+                              setState(() => _isLoading = true);
+                              await BackupService().importDatabase();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text(
+                                            "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних.")));
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content:
+                                            Text("Помилка відновлення: $e")));
+                              }
+                            } finally {
+                              if (mounted) setState(() => _isLoading = false);
                             }
-                          } catch (e) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text("Помилка імпорту: $e")));
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.date_range),
+                          title: const Text("Експорт історії за період (JSON)"),
+                          subtitle: const Text("Зберегти дані до обраної дати"),
+                          onTap: () async {
+                            final DateTimeRange? picked =
+                                await showDateRangePicker(
+                              context: context,
+                              firstDate: DateTime(2024),
+                              lastDate: DateTime.now(),
+                              helpText: 'Оберіть період для експорту',
+                            );
+
+                            if (picked != null) {
+                              try {
+                                setState(() => _isLoading = true);
+                                final path = await BackupService()
+                                    .exportPartialHistory(
+                                        picked.start, picked.end);
+                                if (context.mounted) {
+                                  if (path != null) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                            content:
+                                                Text("Збережено в: $path")));
+                                  }
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text("Помилка: $e")));
+                                }
+                              } finally {
+                                if (mounted) setState(() => _isLoading = false);
+                              }
                             }
-                          } finally {
-                            if (mounted) setState(() => _isLoading = false);
-                          }
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.edit_calendar),
-                        title: const Text("Ручне редагування графіку"),
-                        subtitle:
-                            const Text("Створити або змінити дані історії"),
-                        trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                        onTap: () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (context) =>
-                                      const ManualScheduleEditor()));
-                        },
-                      ),
-                    ],
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.data_object),
+                          title: const Text("Імпорт історії з JSON"),
+                          subtitle: const Text(
+                              "Додати збережені раніше події та графіки"),
+                          onTap: () async {
+                            try {
+                              setState(() => _isLoading = true);
+                              final count =
+                                  await BackupService().importPartialHistory();
+                              if (context.mounted && count > 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                    content: Text(
+                                        "Успішно додано записів: $count. Перезапустіть додаток.")));
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text("Помилка імпорту: $e")));
+                              }
+                            } finally {
+                              if (mounted) setState(() => _isLoading = false);
+                            }
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.edit_calendar),
+                          title: const Text("Ручне редагування графіку"),
+                          subtitle:
+                              const Text("Створити або змінити дані історії"),
+                          trailing:
+                              const Icon(Icons.arrow_forward_ios, size: 14),
+                          onTap: () {
+                            Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (context) =>
+                                        const ManualScheduleEditor()));
+                          },
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                if (Platform.isWindows ||
-                    Platform.isLinux ||
-                    Platform.isMacOS) ...[
+                  if (Platform.isWindows ||
+                      Platform.isLinux ||
+                      Platform.isMacOS) ...[
+                    const Divider(),
+                    _buildLocalApiSection(),
+                  ],
                   const Divider(),
-                  _buildLocalApiSection(),
-                ],
-                const Divider(),
-                ListTile(
-                  title: const Text("Переглянути логи"),
-                  subtitle: const Text("Історія роботи фонових завдань"),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                  onTap: () {
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const LogsPage()));
-                  },
-                ),
-                _buildSwitchTile(
-                  "Увімкнути логування",
-                  "Записувати детальну інформацію про роботу",
-                  _enableLogging,
-                  (val) {
-                    setState(() => _enableLogging = val);
-                    _saveSetting('enable_logging', val);
-                  },
-                ),
-                const SizedBox(height: 24),
-                Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_appVersion.isNotEmpty)
+                  ListTile(
+                    title: const Text("Переглянути логи"),
+                    subtitle: const Text("Історія роботи фонових завдань"),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                    onTap: () {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => const LogsPage()));
+                    },
+                  ),
+                  _buildSwitchTile(
+                    "Увімкнути логування",
+                    "Записувати детальну інформацію про роботу",
+                    _enableLogging,
+                    (val) {
+                      setState(() => _enableLogging = val);
+                      _saveSetting('enable_logging', val);
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_appVersion.isNotEmpty)
+                          Text(
+                            "Lumen v$_appVersion",
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.color
+                                      ?.withValues(alpha: 0.7) ??
+                                  Colors.grey,
+                            ),
+                          ),
+                        const SizedBox(height: 6),
                         Text(
-                          "Lumen v$_appVersion",
+                          "Розробник: @maksim0-debug",
                           style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
                             color: Theme.of(context)
                                     .textTheme
-                                    .bodyMedium
+                                    .bodySmall
                                     ?.color
-                                    ?.withValues(alpha: 0.7) ??
+                                    ?.withValues(alpha: 0.6) ??
                                 Colors.grey,
                           ),
                         ),
-                      const SizedBox(height: 6),
-                      Text(
-                        "Розробник: @maksim0-debug",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color
-                                  ?.withValues(alpha: 0.6) ??
-                              Colors.grey,
+                        const SizedBox(height: 4),
+                        Text(
+                          "© 2026 maksim0-debug. All rights reserved.",
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.color
+                                    ?.withValues(alpha: 0.4) ??
+                                Colors.grey,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        "© 2026 maksim0-debug. All rights reserved.",
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color
-                                  ?.withValues(alpha: 0.4) ??
-                              Colors.grey,
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 32),
-              ],
-            ),
+                  const SizedBox(height: 32),
+                ],
+              ),
+      ),
     );
   }
 

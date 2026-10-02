@@ -8,7 +8,12 @@ import '../services/analytics_service.dart';
 import '../models/analytics_models.dart';
 import '../models/schedule_status.dart';
 import '../models/power_event.dart';
+import '../services/parser_service.dart';
 import 'achievements_screen.dart';
+import 'dialogs/shortcut_help_dialog.dart';
+import 'shortcuts/app_intents.dart';
+import 'shortcuts/keyboard_shortcut_wrapper.dart';
+import 'shortcuts/shortcut_registry.dart';
 
 /// Екран аналітики відключень електроенергії.
 class AnalyticsScreen extends StatefulWidget {
@@ -67,11 +72,38 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   bool _comparisonLoading = false;
   bool _comparisonInitialized = false;
 
+  late String _currentGroup;
+  int _loadRequestId = 0;
+  bool _isNavigating = false;
+
+  void _openAchievements() {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AchievementsScreen(),
+      ),
+    ).whenComplete(() {
+      _isNavigating = false;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _currentGroup = widget.groupKey;
     _tabController = TabController(length: 5, vsync: this);
     _loadSavedMode();
+  }
+
+  void _cycleGroup(int direction) {
+    if (direction == 0) return;
+    final next = ParserService.cycleGroup(_currentGroup, direction);
+    setState(() {
+      _currentGroup = next;
+    });
+    _loadAllData();
   }
 
   Future<void> _loadSavedMode() async {
@@ -97,6 +129,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   }
 
   Future<void> _loadAllData() async {
+    final requestId = ++_loadRequestId;
     setState(() {
       _isLoading = true;
       _error = null;
@@ -109,33 +142,32 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       // Load all data in parallel where possible
       final results = await Future.wait([
         _analytics.getOutageStatsForToday(
-            mode: _currentMode, groupKey: widget.groupKey), // 0
+            mode: _currentMode, groupKey: _currentGroup), // 0
         _analytics.getOutageStatsForPeriod(7,
-            mode: _currentMode, groupKey: widget.groupKey), // 1
+            mode: _currentMode, groupKey: _currentGroup), // 1
         _analytics.getOutageStatsForPeriod(30,
-            mode: _currentMode, groupKey: widget.groupKey), // 2
+            mode: _currentMode, groupKey: _currentGroup), // 2
         _analytics.getWorstDays(7,
-            mode: _currentMode, groupKey: widget.groupKey), // 3
-        _analytics.getAccuracyScore(DateTime.now(), widget.groupKey), // 4
-        _analytics.getAccuracyScoreForPeriod(7, widget.groupKey), // 5
-        _analytics.getTimelineComparison(DateTime.now(), widget.groupKey), // 6
+            mode: _currentMode, groupKey: _currentGroup), // 3
+        _analytics.getAccuracyScore(DateTime.now(), _currentGroup), // 4
+        _analytics.getAccuracyScoreForPeriod(7, _currentGroup), // 5
+        _analytics.getTimelineComparison(DateTime.now(), _currentGroup), // 6
         _analytics.getSwitchLag(
-            lagStartOffset, lagEndOffset, widget.groupKey), // 7
-        _analytics.getRecords(
-            mode: _currentMode, groupKey: widget.groupKey), // 8
+            lagStartOffset, lagEndOffset, _currentGroup), // 7
+        _analytics.getRecords(mode: _currentMode, groupKey: _currentGroup), // 8
         _analytics.getHeatmapData(_selectedHeatmapDays,
-            mode: _currentMode, groupKey: widget.groupKey), // 9
+            mode: _currentMode, groupKey: _currentGroup), // 9
         _analytics.getDailyOutageHours(_selectedTrendDays,
-            mode: _currentMode, groupKey: widget.groupKey), // 10
+            mode: _currentMode, groupKey: _currentGroup), // 10
         _analytics.getProductivityImpact(7,
-            mode: _currentMode, groupKey: widget.groupKey), // 11
+            mode: _currentMode, groupKey: _currentGroup), // 11
         _analytics.getDailyOutageHours(_selectedAccuracyTrendDays,
-            mode: DataSourceMode.real, groupKey: widget.groupKey), // 12
+            mode: DataSourceMode.real, groupKey: _currentGroup), // 12
         _analytics.getDailyOutageHours(_selectedAccuracyTrendDays,
-            mode: DataSourceMode.predicted, groupKey: widget.groupKey), // 13
+            mode: DataSourceMode.predicted, groupKey: _currentGroup), // 13
       ]);
 
-      if (mounted) {
+      if (mounted && requestId == _loadRequestId) {
         setState(() {
           _statsToday = results[0] as OutageStats;
           _stats7d = results[1] as OutageStats;
@@ -155,7 +187,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && requestId == _loadRequestId) {
         setState(() {
           _isLoading = false;
           _error = 'Помилка завантаження: $e';
@@ -169,96 +201,241 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accentColor = isDark ? Colors.orange : Colors.deepPurple;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          children: [
-            const Text('Аналітика',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            const SizedBox(height: 8),
-            CupertinoSlidingSegmentedControl<DataSourceMode>(
-              groupValue: _currentMode,
-              thumbColor: accentColor,
-              backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
-              children: {
-                DataSourceMode.real: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text('Фактичні дані',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: _currentMode == DataSourceMode.real
-                              ? Colors.white
-                              : Colors.grey)),
-                ),
-                DataSourceMode.predicted: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text('За графіком',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: _currentMode == DataSourceMode.predicted
-                              ? Colors.white
-                              : Colors.grey)),
-                ),
-              },
-              onValueChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    _currentMode = value;
-                    _saveMode(value);
-                    _loadAllData();
-                  });
-                }
-              },
+    return KeyboardShortcutWrapper(
+      shortcuts: AppKeyboardShortcuts.analyticsShortcuts,
+      actions: {
+        AnalyticsNextTabIntent: CallbackAction<AnalyticsNextTabIntent>(
+          onInvoke: (intent) {
+            if (_tabController.index < _tabController.length - 1) {
+              _tabController.animateTo(_tabController.index + 1);
+            }
+            return null;
+          },
+        ),
+        AnalyticsPrevTabIntent: CallbackAction<AnalyticsPrevTabIntent>(
+          onInvoke: (intent) {
+            if (_tabController.index > 0) {
+              _tabController.animateTo(_tabController.index - 1);
+            }
+            return null;
+          },
+        ),
+        AnalyticsSelectTabIntent: CallbackAction<AnalyticsSelectTabIntent>(
+          onInvoke: (intent) {
+            if (intent.tabIndex >= 0 &&
+                intent.tabIndex < _tabController.length) {
+              _tabController.animateTo(intent.tabIndex);
+            }
+            return null;
+          },
+        ),
+        CycleGroupIntent: CallbackAction<CycleGroupIntent>(
+          onInvoke: (intent) {
+            _cycleGroup(intent.direction);
+            return null;
+          },
+        ),
+        RefreshDataIntent: CallbackAction<RefreshDataIntent>(
+          onInvoke: (intent) {
+            _loadAllData();
+            return null;
+          },
+        ),
+        ToggleShortcutHelpIntent: CallbackAction<ToggleShortcutHelpIntent>(
+          onInvoke: (intent) {
+            ShortcutHelpDialog.show(context);
+            return null;
+          },
+        ),
+        OpenAchievementsIntent: CallbackAction<OpenAchievementsIntent>(
+          onInvoke: (intent) {
+            _openAchievements();
+            return null;
+          },
+        ),
+        ToggleDataSourceModeIntent: CallbackAction<ToggleDataSourceModeIntent>(
+          onInvoke: (intent) {
+            final next = _currentMode == DataSourceMode.real
+                ? DataSourceMode.predicted
+                : DataSourceMode.real;
+            setState(() {
+              _currentMode = next;
+              _saveMode(next);
+              _loadAllData();
+            });
+            return null;
+          },
+        ),
+        CloseTopModalOrGoBackIntent:
+            CallbackAction<CloseTopModalOrGoBackIntent>(
+          onInvoke: (intent) {
+            Navigator.of(context).maybePop();
+            return null;
+          },
+        ),
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Column(
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Аналітика',
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(width: 8),
+                  PopupMenuButton<String>(
+                    tooltip: 'Вибрати чергу',
+                    initialValue: _currentGroup,
+                    onSelected: (newGroup) {
+                      if (newGroup != _currentGroup) {
+                        setState(() {
+                          _currentGroup = newGroup;
+                        });
+                        _loadAllData();
+                      }
+                    },
+                    itemBuilder: (context) {
+                      return ParserService.allGroups.map((group) {
+                        return PopupMenuItem<String>(
+                          value: group,
+                          child: Text(
+                            group.replaceFirst('GPV', 'Група '),
+                            style: TextStyle(
+                              fontWeight: group == _currentGroup
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color:
+                                  group == _currentGroup ? accentColor : null,
+                            ),
+                          ),
+                        );
+                      }).toList();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: accentColor.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _currentGroup.replaceFirst('GPV', 'Група '),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: accentColor,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(Icons.arrow_drop_down,
+                              size: 14, color: accentColor),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              CupertinoSlidingSegmentedControl<DataSourceMode>(
+                groupValue: _currentMode,
+                thumbColor: accentColor,
+                backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
+                children: {
+                  DataSourceMode.real: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('Фактичні дані',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: _currentMode == DataSourceMode.real
+                                ? Colors.white
+                                : Colors.grey)),
+                  ),
+                  DataSourceMode.predicted: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('За графіком',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: _currentMode == DataSourceMode.predicted
+                                ? Colors.white
+                                : Colors.grey)),
+                  ),
+                },
+                onValueChanged: (value) {
+                  if (value != null) {
+                    setState(() {
+                      _currentMode = value;
+                      _saveMode(value);
+                      _loadAllData();
+                    });
+                  }
+                },
+              ),
+            ],
+          ),
+          centerTitle: true,
+          actions: [
+            if (Theme.of(context).platform == TargetPlatform.windows ||
+                Theme.of(context).platform == TargetPlatform.linux ||
+                Theme.of(context).platform == TargetPlatform.macOS ||
+                MediaQuery.sizeOf(context).width >= 500)
+              IconButton(
+                icon: const Icon(Icons.keyboard_outlined),
+                tooltip: 'Гарячі клавіші (F1)',
+                onPressed: () => ShortcutHelpDialog.show(context),
+              ),
+            IconButton(
+              icon: Icon(Icons.refresh,
+                  color: isDark ? Colors.white : Colors.black87),
+              tooltip: 'Оновити (R / F5)',
+              onPressed: _loadAllData,
+            ),
+            IconButton(
+              icon: Icon(Icons.emoji_events_outlined,
+                  color: isDark ? Colors.amber : Colors.deepOrange),
+              tooltip: 'Досягнення (F3 / L)',
+              onPressed: _openAchievements,
             ),
           ],
-        ),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.emoji_events_outlined,
-                color: isDark ? Colors.amber : Colors.deepOrange),
-            tooltip: 'Досягнення',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const AchievementsScreen(),
-                ),
-              );
-            },
+          bottom: TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            indicatorColor: accentColor,
+            labelColor: accentColor,
+            unselectedLabelColor: Colors.grey,
+            tabs: const [
+              Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+              Tab(icon: Icon(Icons.fact_check), text: 'Точність'),
+              Tab(icon: Icon(Icons.emoji_events), text: 'Рекорди'),
+              Tab(icon: Icon(Icons.show_chart), text: 'Графіки'),
+              Tab(icon: Icon(Icons.compare_arrows), text: 'Порівняння'),
+            ],
           ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          indicatorColor: accentColor,
-          labelColor: accentColor,
-          unselectedLabelColor: Colors.grey,
-          tabs: const [
-            Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
-            Tab(icon: Icon(Icons.fact_check), text: 'Точність'),
-            Tab(icon: Icon(Icons.emoji_events), text: 'Рекорди'),
-            Tab(icon: Icon(Icons.show_chart), text: 'Графіки'),
-            Tab(icon: Icon(Icons.compare_arrows), text: 'Порівняння'),
-          ],
         ),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: Colors.orange))
+            : _error != null
+                ? Center(
+                    child: Text(_error!,
+                        style: const TextStyle(color: Colors.red)))
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildDashboardTab(isDark, accentColor),
+                      _buildAccuracyTab(isDark, accentColor),
+                      _buildRecordsTab(isDark, accentColor),
+                      _buildChartsTab(isDark, accentColor),
+                      _buildComparisonTab(isDark, accentColor),
+                    ],
+                  ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
-          : _error != null
-              ? Center(
-                  child:
-                      Text(_error!, style: const TextStyle(color: Colors.red)))
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildDashboardTab(isDark, accentColor),
-                    _buildAccuracyTab(isDark, accentColor),
-                    _buildRecordsTab(isDark, accentColor),
-                    _buildChartsTab(isDark, accentColor),
-                    _buildComparisonTab(isDark, accentColor),
-                  ],
-                ),
     );
   }
 
@@ -274,12 +451,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   Future<void> _updateTrendChart(int days) async {
     setState(() {
       _selectedTrendDays = days;
-      // Optional: show local loading state for chart if needed
     });
+    final expectedGroup = _currentGroup;
+    final expectedMode = _currentMode;
     try {
       final data = await _analytics.getDailyOutageHours(days,
-          mode: _currentMode, groupKey: widget.groupKey);
-      if (mounted) {
+          mode: expectedMode, groupKey: expectedGroup);
+      if (mounted &&
+          _currentGroup == expectedGroup &&
+          _currentMode == expectedMode) {
         setState(() {
           _dailyTrend = data;
         });
@@ -294,14 +474,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     setState(() {
       _selectedAccuracyTrendDays = days;
     });
+    final expectedGroup = _currentGroup;
     try {
       final results = await Future.wait([
         _analytics.getDailyOutageHours(days,
-            mode: DataSourceMode.real, groupKey: widget.groupKey),
+            mode: DataSourceMode.real, groupKey: expectedGroup),
         _analytics.getDailyOutageHours(days,
-            mode: DataSourceMode.predicted, groupKey: widget.groupKey),
+            mode: DataSourceMode.predicted, groupKey: expectedGroup),
       ]);
-      if (mounted) {
+      if (mounted && _currentGroup == expectedGroup) {
         setState(() {
           _accuracyTrendReal = results[0];
           _accuracyTrendPredicted = results[1];
@@ -317,12 +498,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     setState(() {
       _selectedLagDays = days;
     });
+    final expectedGroup = _currentGroup;
     try {
       int startDayOffset = days == 2 ? 1 : 0;
       int endDayOffset = days == 2 ? 1 : days - 1;
       final lagData = await _analytics.getSwitchLag(
-          startDayOffset, endDayOffset, widget.groupKey);
-      if (mounted) {
+          startDayOffset, endDayOffset, expectedGroup);
+      if (mounted && _currentGroup == expectedGroup) {
         setState(() {
           _switchLag = lagData;
         });
@@ -1549,12 +1731,18 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   }
 
   Future<void> _reloadHeatmap() async {
+    final expectedGroup = _currentGroup;
+    final expectedMode = _currentMode;
     final data = await _analytics.getHeatmapData(
       _selectedHeatmapDays,
-      mode: _currentMode,
-      groupKey: widget.groupKey,
+      mode: expectedMode,
+      groupKey: expectedGroup,
     );
-    if (mounted) setState(() => _heatmapData = data);
+    if (mounted &&
+        _currentGroup == expectedGroup &&
+        _currentMode == expectedMode) {
+      setState(() => _heatmapData = data);
+    }
   }
 
   Widget _buildHeatmap(bool isDark) {
@@ -1825,7 +2013,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
 
     // Знаходимо групу користувача
     final userGroup = data.ranked.firstWhere(
-      (g) => g.groupKey == widget.groupKey,
+      (g) => g.groupKey == _currentGroup,
       orElse: () => data.ranked.first,
     );
 
@@ -1837,7 +2025,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
 
     // Позиція користувача
     final userPosition =
-        data.ranked.indexWhere((g) => g.groupKey == widget.groupKey) + 1;
+        data.ranked.indexWhere((g) => g.groupKey == _currentGroup) + 1;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2016,7 +2204,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         children: List.generate(data.ranked.length, (index) {
           final group = data.ranked[index];
           final position = index + 1;
-          final isUserGroup = group.groupKey == widget.groupKey;
+          final isUserGroup = group.groupKey == _currentGroup;
           final progress =
               worstMinutes > 0 ? group.totalOffMinutes / worstMinutes : 0.0;
 

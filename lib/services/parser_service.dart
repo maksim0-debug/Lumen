@@ -33,6 +33,16 @@ class ParserService {
     "GPV6.2",
   ];
 
+  /// Returns the next or previous group in the cycle based on [direction] (+1 next, -1 previous).
+  static String cycleGroup(String currentGroup, int direction) {
+    if (direction == 0) return currentGroup;
+    final currentIndex = allGroups.indexOf(currentGroup);
+    final validIndex = currentIndex == -1 ? 0 : currentIndex;
+    final newIndex = (validIndex + direction) % allGroups.length;
+    final targetIndex = newIndex < 0 ? newIndex + allGroups.length : newIndex;
+    return allGroups[targetIndex];
+  }
+
   HeadlessInAppWebView? _headlessWebView;
   Future<Map<String, FullSchedule>>? _ongoingFetch;
 
