@@ -819,7 +819,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _buildLocalApiSection() {
     final apiService = LocalApiService();
-    final isRunning = apiService.isRunning;
+    final isRunning = _localApiEnabled && apiService.isRunning;
     final lastError = apiService.lastError;
     final activePort = isRunning ? apiService.port : _localApiPort;
 

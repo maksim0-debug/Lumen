@@ -30,6 +30,7 @@ class LocalApiService {
   int _configuredPort = defaultPort;
   String? _lastError;
   DateTime? _startedAt;
+  Future<void>? _stoppingFuture;
 
   late final PowerController _powerController = PowerController();
   late final ScheduleController _scheduleController = ScheduleController();
@@ -38,7 +39,14 @@ class LocalApiService {
   SseStreamController? _streamController;
 
   bool get isRunning => _server != null;
-  int get port => _server?.port ?? _configuredPort;
+  int get port {
+    try {
+      return _server?.port ?? _configuredPort;
+    } catch (_) {
+      return _configuredPort;
+    }
+  }
+
   String? get lastError => _lastError;
   DateTime? get startedAt => _startedAt;
   Duration get uptime => _startedAt != null
@@ -75,6 +83,10 @@ class LocalApiService {
       return false;
     }
 
+    if (_stoppingFuture != null) {
+      await _stoppingFuture;
+    }
+
     if (_server != null) {
       await stop();
     }
@@ -84,13 +96,14 @@ class LocalApiService {
 
     try {
       // Strictly bind to IPv4 loopback (127.0.0.1) with shared: false for true single-instance ownership
-      _server = await HttpServer.bind(
+      final server = await HttpServer.bind(
         InternetAddress.loopbackIPv4,
         targetPort,
         shared: false,
       );
 
-      _configuredPort = _server!.port;
+      _server = server;
+      _configuredPort = server.port;
       _startedAt = DateTime.now();
       _streamController = SseStreamController();
 
@@ -98,13 +111,17 @@ class LocalApiService {
           'Local REST API started at http://127.0.0.1:$_configuredPort/api/v1',
           tag: 'LocalApi');
 
-      _server!.listen(
+      server.listen(
         _handleRequest,
         onError: (e) {
           AppLogger.e('Server error encountered', tag: 'LocalApi', error: e);
         },
         onDone: () {
           AppLogger.d('Server socket closed', tag: 'LocalApi');
+          if (identical(_server, server)) {
+            _server = null;
+            _startedAt = null;
+          }
         },
       );
 
@@ -126,19 +143,32 @@ class LocalApiService {
 
   /// Stops the running HTTP server and cleans up SSE connections.
   Future<void> stop() async {
-    _streamController?.dispose();
-    _streamController = null;
+    if (_stoppingFuture != null) {
+      return _stoppingFuture!;
+    }
 
-    if (_server != null) {
-      try {
-        await _server!.close(force: true);
-        AppLogger.i('Local REST API stopped', tag: 'LocalApi');
-      } catch (e) {
-        AppLogger.w('Error stopping server: $e', tag: 'LocalApi');
-      } finally {
-        _server = null;
-        _startedAt = null;
+    final completer = Completer<void>();
+    _stoppingFuture = completer.future;
+
+    try {
+      _streamController?.dispose();
+      _streamController = null;
+
+      final serverToClose = _server;
+      _server = null;
+      _startedAt = null;
+
+      if (serverToClose != null) {
+        try {
+          await serverToClose.close(force: true);
+          AppLogger.i('Local REST API stopped', tag: 'LocalApi');
+        } catch (e) {
+          AppLogger.w('Error stopping server: $e', tag: 'LocalApi');
+        }
       }
+    } finally {
+      completer.complete();
+      _stoppingFuture = null;
     }
   }
 
