@@ -107,11 +107,18 @@ class HomeNotifier extends Notifier<HomeState> {
         displayDate,
         baseSchedule: currentDisplay,
       );
-      final cachedIntervals = ScheduleCalculationService.generateRealIntervals(
-        state.realOutageIntervals,
-        displayDate,
-        isOffline: _powerMonitor.isOffline,
-      );
+      final now = DateTime.now();
+      final isFuture = !DateUtils.isSameDay(displayDate, now) &&
+          DateTime(displayDate.year, displayDate.month, displayDate.day)
+              .isAfter(DateTime(now.year, now.month, now.day));
+      final cachedIntervals = isFuture
+          ? ScheduleCalculationService.generateIntervals(currentDisplay)
+          : ScheduleCalculationService.generateRealIntervals(
+              state.realOutageIntervals,
+              displayDate,
+              isOffline: _powerMonitor.isOffline,
+              baseSchedule: currentDisplay,
+            );
       final realHourSegments = _computeAllHourSegments(
         state.realOutageIntervals,
         displayDate,
@@ -121,6 +128,7 @@ class HomeNotifier extends Notifier<HomeState> {
         currentDisplaySchedule: realSchedule,
         cachedIntervals: cachedIntervals,
         realHourSegments: realHourSegments,
+        isRealSourceConfigured: _powerMonitor.isSourceConfigured,
       );
     } else {
       final cachedIntervals =
@@ -130,6 +138,7 @@ class HomeNotifier extends Notifier<HomeState> {
         clearCurrentDisplaySchedule: currentDisplay == null,
         cachedIntervals: cachedIntervals,
         clearRealHourSegments: true,
+        isRealSourceConfigured: _powerMonitor.isSourceConfigured,
       );
     }
   }
@@ -800,17 +809,35 @@ class HomeNotifier extends Notifier<HomeState> {
     final requestId = ++_realOutageLoadRequestId;
     final dateAtCall = date;
     try {
-      final intervals = await _powerMonitor.getOutageIntervalsForDate(date);
+      final allEvents = await _powerMonitor.getLocalEvents();
       if (!ref.mounted) return;
       if (requestId != _realOutageLoadRequestId) return;
       if (!DateUtils.isSameDay(dateAtCall, state.displayDate)) return;
-      state = state.copyWith(realOutageIntervals: intervals);
+
+      final intervals = await _powerMonitor.getOutageIntervalsForDate(
+        date,
+        preloadedEvents: allEvents,
+      );
+      final hasCoverage = await _powerMonitor.hasCoverageForDate(
+        date,
+        preloadedEvents: allEvents,
+      );
+      if (!ref.mounted) return;
+      if (requestId != _realOutageLoadRequestId) return;
+      if (!DateUtils.isSameDay(dateAtCall, state.displayDate)) return;
+      state = state.copyWith(
+        realOutageIntervals: intervals,
+        hasRealCoverage: hasCoverage,
+      );
     } catch (e) {
       AppLogger.e('Error loading real outage data', tag: 'Main', error: e);
       if (!ref.mounted) return;
       if (requestId == _realOutageLoadRequestId &&
           DateUtils.isSameDay(dateAtCall, state.displayDate)) {
-        state = state.copyWith(realOutageIntervals: const []);
+        state = state.copyWith(
+          realOutageIntervals: const [],
+          hasRealCoverage: false,
+        );
       }
     }
   }

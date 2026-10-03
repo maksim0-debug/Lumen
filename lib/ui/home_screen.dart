@@ -191,6 +191,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   String _getScheduleClipboardText(HomeState state) {
+    if (!state.hasDisplayData || state.isMissingRealDataSource) {
+      return "";
+    }
+
     final outageText = _getOutageInfoText(state);
     final intervals = state.cachedIntervals.isNotEmpty
         ? state.cachedIntervals
@@ -203,6 +207,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     .read(homeNotifierProvider.notifier)
                     .powerMonitor
                     .isOffline,
+                baseSchedule: state.currentDisplaySchedule,
               )
             : ScheduleCalculationService.generateIntervals(
                 state.currentDisplaySchedule));
@@ -232,50 +237,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         powerStatus: state.powerStatus,
       );
 
+  Widget _buildPlaceholder(BuildContext context, String message) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 280, maxHeight: 500),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(40),
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 16,
+              color: Theme.of(context)
+                  .textTheme
+                  .bodyLarge
+                  ?.color
+                  ?.withValues(alpha: 0.7),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildGrid(HomeState state, int columns) {
+    if (state.isMissingRealDataSource) {
+      return _buildPlaceholder(
+        context,
+        "URL бази даних не налаштовано. Перейдіть в Налаштування.",
+      );
+    }
+
+    if (!state.hasDisplayData) {
+      return _buildPlaceholder(context, "Дані відсутні");
+    }
+
     final bool isRealMode = state.powerMonitorEnabled &&
         state.dataSourceMode == DataSourceMode.real;
-    final powerMonitor = ref.read(homeNotifierProvider.notifier).powerMonitor;
-
-    if (isRealMode &&
-        (powerMonitor.customUrl == null ||
-            powerMonitor.customUrl!.trim().isEmpty)) {
-      return const SizedBox(
-        height: 500,
-        child: Center(
-          child: Padding(
-            padding: EdgeInsets.all(40),
-            child: Text(
-              "URL бази даних не налаштовано. Перейдіть в Налаштування.",
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16),
-            ),
-          ),
-        ),
-      );
-    }
-
     final schedule = state.currentDisplaySchedule;
-    if (!isRealMode && (schedule == null || schedule.isEmpty)) {
-      return RefreshIndicator(
-        onRefresh: () async {
-          await ref.read(homeNotifierProvider.notifier).refresh(silent: true);
-        },
-        child: const SingleChildScrollView(
-          physics: AlwaysScrollableScrollPhysics(),
-          child: SizedBox(
-            height: 500,
-            child: Center(
-              child: Padding(
-                padding: EdgeInsets.all(40),
-                child: Text("Дані відсутні"),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
     final realHourSegments = state.realHourSegments;
 
     return GridView.builder(
@@ -864,10 +863,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                       horizontal: 12.0),
                                   child: _buildGrid(state, cols),
                                 ),
-                                ScheduleIntervalsList(
-                                  intervals: state.cachedIntervals,
-                                  onIntervalLongPress: _showIntervalMenu,
-                                ),
+                                if (state.hasDisplayData &&
+                                    !state.isMissingRealDataSource)
+                                  ScheduleIntervalsList(
+                                    intervals: state.cachedIntervals,
+                                    onIntervalLongPress: _showIntervalMenu,
+                                  ),
                               ],
                             ),
                           ),

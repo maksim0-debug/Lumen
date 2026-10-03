@@ -347,6 +347,12 @@ class PowerMonitorService {
   bool _isLocalApiAvailable = false;
   bool get isLocalApiAvailable => _isLocalApiAvailable;
 
+  /// Whether a data source is configured (either remote database URL or local API).
+  bool get isSourceConfigured {
+    final hasUrl = _customUrl != null && _customUrl!.trim().isNotEmpty;
+    return hasUrl || _isLocalApiAvailable;
+  }
+
   void setLocalApiAvailable(bool available) {
     if (_isLocalApiAvailable != available) {
       _isLocalApiAvailable = available;
@@ -838,8 +844,7 @@ class PowerMonitorService {
     final db = await HistoryService().database;
     final dateStr =
         '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-    final nextDay =
-        DateTime(date.year, date.month, date.day).add(const Duration(days: 1));
+    final nextDay = DateTime(date.year, date.month, date.day + 1);
     final nextDayStr =
         '${nextDay.year}-${nextDay.month.toString().padLeft(2, '0')}-${nextDay.day.toString().padLeft(2, '0')}';
 
@@ -852,19 +857,14 @@ class PowerMonitorService {
     return maps.map((m) => PowerEvent.fromMap(m)).toList();
   }
 
-  Future<List<PowerOutageInterval>> getOutageIntervalsForDate(
-      DateTime date) async {
-    // 1. Определяем границы дня
+  Future<List<PowerOutageInterval>> getOutageIntervalsForDate(DateTime date,
+      {List<PowerEvent>? preloadedEvents}) async {
+    // 1. Визначаємо межі дня (DST safe)
     final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
+    final dayEnd = DateTime(date.year, date.month, date.day + 1);
 
-    // 2. Получаем ВСЕ события (сортированные), чтобы найти контекст
-    // Оптимизация: берем события за этот день + 1 последнее событие ДО этого дня
-    // (чтобы понять, с чем мы вошли в этот день - со светом или без)
-
-    // Для простоты берем все локальные (SQLite быстр), но лучше сделать запрос:
-    // "SELECT * FROM power_events WHERE timestamp <= dayEnd ORDER BY timestamp ASC"
-    final allEvents = await getLocalEvents();
+    // 2. Отримуємо події (відсортовані за часом)
+    final allEvents = preloadedEvents ?? await getLocalEvents();
 
     if (allEvents.isEmpty) return [];
 
@@ -966,6 +966,51 @@ class PowerMonitorService {
     }
 
     return intervals;
+  }
+
+  /// Checks whether power monitor tracking data covers the given date:
+  /// either events occurred on that date, or monitoring was active before and continues through it.
+  Future<bool> hasCoverageForDate(DateTime date,
+      {List<PowerEvent>? preloadedEvents}) async {
+    try {
+      final now = DateTime.now();
+      final dayStart = DateTime(date.year, date.month, date.day);
+      final todayStart = DateTime(now.year, now.month, now.day);
+      if (dayStart.isAfter(todayStart)) return false;
+
+      final allEvents = preloadedEvents ?? await getLocalEvents();
+      if (allEvents.isEmpty) return false;
+
+      final dayEnd = DateTime(date.year, date.month, date.day + 1);
+
+      final hasEventOnDay = allEvents.any((e) =>
+          !e.timestamp.isBefore(dayStart) && e.timestamp.isBefore(dayEnd));
+      if (hasEventOnDay) return true;
+
+      final hasEventBefore =
+          allEvents.any((e) => e.timestamp.isBefore(dayStart));
+      if (!hasEventBefore) return false;
+
+      final hasEventAfter = allEvents.any((e) => !e.timestamp.isBefore(dayEnd));
+      if (hasEventAfter) return true;
+
+      final isRecent = now.difference(dayStart).inDays <= 30;
+      final isCurrentlyActive = isSourceConfigured &&
+          (isOnline || _lastSeen != null || _lastSuccessfulSync != null);
+
+      if (isRecent && isCurrentlyActive) {
+        final lastEventBefore =
+            allEvents.where((e) => e.timestamp.isBefore(dayStart)).lastOrNull;
+        if (lastEventBefore != null && lastEventBefore.isOnline) {
+          return true;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      AppLogger.w('Error checking coverage for date: $e', tag: 'PowerMonitor');
+      return false;
+    }
   }
 
   Future<void> deleteEvent(int id) async {
@@ -1117,7 +1162,7 @@ class PowerMonitorService {
   Future<int> getTotalOutageMinutesForDate(DateTime date) async {
     final intervals = await getOutageIntervalsForDate(date);
     final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
+    final dayEnd = DateTime(date.year, date.month, date.day + 1);
     int total = 0;
 
     for (final interval in intervals) {

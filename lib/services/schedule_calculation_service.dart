@@ -131,14 +131,18 @@ class ScheduleCalculationService {
   static DailySchedule buildRealScheduleFromIntervals(
       List<PowerOutageInterval> intervals, DateTime date,
       {DailySchedule? baseSchedule, DateTime? nowOverride}) {
-    // Якщо є прогноз, беремо його за основу, інакше все зелене
+    final now = nowOverride ?? DateTime.now();
+    final isToday = DateUtils.isSameDay(date, now);
+    final isFuture = !isToday &&
+        DateTime(date.year, date.month, date.day)
+            .isAfter(DateTime(now.year, now.month, now.day));
+
+    // Use forecast as base if available; otherwise for future days default to unknown, for today/past default to on.
     List<LightStatus> hours = baseSchedule != null
         ? List.from(baseSchedule.hours)
-        : List.filled(24, LightStatus.on);
-
-    final now = nowOverride ?? DateTime.now();
-    final isToday =
-        date.year == now.year && date.month == now.month && date.day == now.day;
+        : (isFuture
+            ? List.filled(24, LightStatus.unknown)
+            : List.filled(24, LightStatus.on));
 
     // Якщо це сьогодні - перезаписуємо минуле і поточну годину реальними даними.
     // Майбутнє залишаємо як у прогнозі (або зеленим якщо прогнозу немає).
@@ -151,7 +155,7 @@ class ScheduleCalculationService {
       // Поточна година теж формується тут, але в GridView вона перекривається _buildRealModeCell.
       // Для total outage minutes важливо порахувати і поточну годину з оффлайном.
       limitHour = now.hour + 1;
-    } else if (date.isAfter(now)) {
+    } else if (isFuture) {
       // Майбутній день - повністю прогноз
       limitHour = 0;
     }
@@ -203,21 +207,30 @@ class ScheduleCalculationService {
   /// Генерація реальних інтервалів (ON / OFF / OFF ⏳) за день.
   static List<IntervalInfo> generateRealIntervals(
       List<PowerOutageInterval> intervals, DateTime date,
-      {bool isOffline = false, DateTime? nowOverride}) {
-    final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
+      {bool isOffline = false,
+      DateTime? nowOverride,
+      DailySchedule? baseSchedule}) {
     final now = nowOverride ?? DateTime.now();
+    final isToday = DateUtils.isSameDay(date, now);
+    final isFuture = !isToday &&
+        DateTime(date.year, date.month, date.day)
+            .isAfter(DateTime(now.year, now.month, now.day));
+
+    // Майбутній день не містить історичних фактів — формуємо інтервали з прогнозу
+    if (isFuture) {
+      return baseSchedule != null ? generateIntervals(baseSchedule) : [];
+    }
+
+    final dayStart = DateTime(date.year, date.month, date.day);
+    final dayEnd = DateTime(date.year, date.month, date.day + 1);
 
     List<IntervalInfo> result = [];
     DateTime cursor = dayStart;
 
-    final isToday =
-        date.year == now.year && date.month == now.month && date.day == now.day;
-
-    // Если интервалов нет вообще
+    // Якщо інтервалів немає взагалі
     if (intervals.isEmpty) {
       if (isToday && isOffline) {
-        // Весь день нет света?
+        // Весь день немає світла?
         return [IntervalInfo("00:00 - 24:00", "OFF ⏳", "24г", Colors.red)];
       }
       return [IntervalInfo("00:00 - 24:00", "ON", "24г", Colors.green)];
@@ -249,7 +262,7 @@ class ScheduleCalculationService {
 
       if (interval.end == null) {
         // Это текущее отключение
-        if (date.day != now.day) {
+        if (!isToday) {
           // Если смотрим историю (вчера), то отключение шло до конца дня
           intervalEnd = dayEnd;
           endLabel = "24:00";
@@ -281,18 +294,8 @@ class ScheduleCalculationService {
       // Важно проверить, не продолжается ли отключение.
       final lastInterval = intervals.last;
       if (lastInterval.end != null) {
-        // Отключение закончилось, значит дальше свет есть
-        // Но нужно обрезать по "сейчас", если смотрим сегодня
-        DateTime tailEnd = dayEnd;
-        if (date.year == now.year &&
-            date.month == now.month &&
-            date.day == now.day) {
-          // Если сегодня, то зеленый рисуем "до сейчас" или прогнозом до конца
-          // Обычно ON рисуют до 24:00 как прогноз "будет свет"
-          tailEnd = dayEnd;
-        }
-
-        final tailDiff = tailEnd.difference(cursor).inMinutes;
+        // Outage ended, power is restored (forecast ON until 24:00)
+        final tailDiff = dayEnd.difference(cursor).inMinutes;
         if (tailDiff > 0) {
           result.add(IntervalInfo(
             "${AppFormatters.fmtTime(cursor)} - 24:00",

@@ -30,6 +30,8 @@ class HomeState {
   final List<List<HourSegment>>? realHourSegments;
   final DailySchedule? currentDisplaySchedule;
   final List<IntervalInfo> cachedIntervals;
+  final bool isRealSourceConfigured;
+  final bool hasRealCoverage;
 
   const HomeState({
     this.allSchedules = const {},
@@ -53,6 +55,8 @@ class HomeState {
     this.realHourSegments,
     this.currentDisplaySchedule,
     this.cachedIntervals = const [],
+    this.isRealSourceConfigured = false,
+    this.hasRealCoverage = false,
   });
 
   bool get isHistoryMode =>
@@ -77,6 +81,43 @@ class HomeState {
     final firstAllowed = DateTime(2024);
     return displayDate.isBefore(firstAllowed) ||
         DateUtils.isSameDay(displayDate, firstAllowed);
+  }
+
+  /// Whether the real data source is missing when in real mode for today.
+  bool get isMissingRealDataSource {
+    if (!powerMonitorEnabled || dataSourceMode != DataSourceMode.real) {
+      return false;
+    }
+    if (viewMode != ScheduleViewMode.today) {
+      return false;
+    }
+    if (realOutageIntervals.isNotEmpty) {
+      return false;
+    }
+    return !isRealSourceConfigured;
+  }
+
+  /// Whether valid data is available to display the schedule in the current view mode.
+  bool get hasDisplayData {
+    final schedule = currentDisplaySchedule;
+    final bool isRealMode =
+        powerMonitorEnabled && dataSourceMode == DataSourceMode.real;
+
+    if (!isRealMode) {
+      return schedule != null && !schedule.isEmpty;
+    }
+
+    if (viewMode == ScheduleViewMode.today) {
+      return realHourSegments != null;
+    }
+
+    if (viewMode == ScheduleViewMode.tomorrow) {
+      return realHourSegments != null && schedule != null && !schedule.isEmpty;
+    }
+
+    // Yesterday or archived date in history: valid if active monitoring coverage or recorded outages
+    return realHourSegments != null &&
+        (hasRealCoverage || realOutageIntervals.isNotEmpty);
   }
 
   HomeState copyWith({
@@ -105,6 +146,8 @@ class HomeState {
     DailySchedule? currentDisplaySchedule,
     bool clearCurrentDisplaySchedule = false,
     List<IntervalInfo>? cachedIntervals,
+    bool? isRealSourceConfigured,
+    bool? hasRealCoverage,
   }) {
     return HomeState(
       allSchedules: allSchedules ?? this.allSchedules,
@@ -134,6 +177,9 @@ class HomeState {
           ? null
           : (currentDisplaySchedule ?? this.currentDisplaySchedule),
       cachedIntervals: cachedIntervals ?? this.cachedIntervals,
+      isRealSourceConfigured:
+          isRealSourceConfigured ?? this.isRealSourceConfigured,
+      hasRealCoverage: hasRealCoverage ?? this.hasRealCoverage,
     );
   }
 }
