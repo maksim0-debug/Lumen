@@ -18,6 +18,7 @@ import 'analytics_screen.dart';
 import 'dialogs/hour_detail_dialog.dart';
 import 'dialogs/shortcut_help_dialog.dart';
 import 'dialogs/version_picker_sheet.dart';
+import 'helpers/horizontal_swipe_detector.dart';
 import 'logs_page.dart';
 import 'settings_page.dart';
 import 'shortcuts/app_intents.dart';
@@ -123,7 +124,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final today = DateTime(now.year, now.month, now.day);
     final firstAllowed = DateTime(2024);
     DateTime defaultInitial =
-        state.historyDate ?? DateTime(now.year, now.month, now.day - 2);
+        state.historyDate ?? DateTime(now.year, now.month, now.day - 1);
     if (defaultInitial.isAfter(today)) {
       defaultInitial = today;
     }
@@ -139,7 +140,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       locale: const Locale("uk", "UA"),
     );
     if (picked != null) {
-      await ref.read(homeNotifierProvider.notifier).selectDate(picked);
+      if (DateUtils.isSameDay(picked, today)) {
+        await ref
+            .read(homeNotifierProvider.notifier)
+            .setViewMode(ScheduleViewMode.today);
+      } else {
+        await ref.read(homeNotifierProvider.notifier).selectDate(picked);
+      }
     } else {
       ref.read(homeNotifierProvider.notifier).cancelDateSelection();
     }
@@ -584,14 +591,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           },
         ),
       },
-      child: GestureDetector(
-        onHorizontalDragEnd: (details) {
-          if (details.primaryVelocity! > 0) {
-            notifier.switchMode(DataSourceMode.predicted);
-          } else if (details.primaryVelocity! < 0) {
-            notifier.switchMode(DataSourceMode.real);
-          }
-        },
+      child: HorizontalSwipeDetector(
+        behavior: HitTestBehavior.translucent,
+        minDistance: 60.0,
+        onSwipeLeft: () => notifier.navigateDate(1),
+        onSwipeRight: () => notifier.navigateDate(-1),
         child: Scaffold(
           appBar: AppBar(
             title: DropdownButton<String>(
@@ -683,25 +687,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 const EdgeInsets.symmetric(horizontal: 4.0),
                             child: ChoiceChip(
                               label: const Text('Минуле'),
-                              selected:
-                                  state.viewMode == ScheduleViewMode.history,
+                              selected: state.isHistoryMode,
                               onSelected: (bool selected) async {
                                 await _selectDateAndLoad(state);
-                              },
-                            ),
-                          ),
-                          Padding(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 4.0),
-                            child: ChoiceChip(
-                              label: const Text('Вчора'),
-                              selected:
-                                  state.viewMode == ScheduleViewMode.yesterday,
-                              onSelected: (bool selected) {
-                                if (selected) {
-                                  notifier
-                                      .setViewMode(ScheduleViewMode.yesterday);
-                                }
                               },
                             ),
                           ),

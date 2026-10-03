@@ -237,6 +237,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
     if (mode == DataSourceMode.real) {
       await loadRealOutageData(state.displayDate);
+      if (!ref.mounted) return;
       recalculateDisplayData();
     }
   }
@@ -296,7 +297,7 @@ class HomeNotifier extends Notifier<HomeState> {
         break;
       case ScheduleViewMode.history:
         current =
-            state.historyDate ?? DateTime(now.year, now.month, now.day - 2);
+            state.historyDate ?? DateTime(now.year, now.month, now.day - 1);
         break;
     }
 
@@ -379,8 +380,10 @@ class HomeNotifier extends Notifier<HomeState> {
       );
       recalculateDisplayData();
       await loadHistoryData(newDate);
+      if (!ref.mounted) return;
       if (state.dataSourceMode == DataSourceMode.real) {
         await loadRealOutageData(newDate);
+        if (!ref.mounted) return;
         recalculateDisplayData();
       }
     }
@@ -414,6 +417,19 @@ class HomeNotifier extends Notifier<HomeState> {
 
   // --- SELECT DATE ---
   Future<void> selectDate(DateTime picked) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (DateUtils.isSameDay(picked, today)) {
+      await setViewMode(ScheduleViewMode.today);
+      return;
+    }
+    final yesterday = DateTime(now.year, now.month, now.day - 1);
+    if (DateUtils.isSameDay(picked, yesterday)) {
+      await setViewMode(ScheduleViewMode.yesterday);
+      _achievementService.trackHistoryView(picked);
+      return;
+    }
+
     state = state.copyWith(
       wasUpdated: false,
       viewMode: ScheduleViewMode.history,
@@ -424,9 +440,11 @@ class HomeNotifier extends Notifier<HomeState> {
     );
     recalculateDisplayData();
     await loadHistoryData(picked);
+    if (!ref.mounted) return;
     _achievementService.trackHistoryView(picked);
     if (state.dataSourceMode == DataSourceMode.real) {
       await loadRealOutageData(picked);
+      if (!ref.mounted) return;
       recalculateDisplayData();
     }
   }
@@ -458,7 +476,7 @@ class HomeNotifier extends Notifier<HomeState> {
       targetDate = DateTime(now.year, now.month, now.day - 1);
     } else {
       targetDate =
-          state.historyDate ?? DateTime(now.year, now.month, now.day - 2);
+          state.historyDate ?? DateTime(now.year, now.month, now.day - 1);
     }
 
     state = state.copyWith(
@@ -478,13 +496,17 @@ class HomeNotifier extends Notifier<HomeState> {
 
     if (mode == ScheduleViewMode.today || mode == ScheduleViewMode.tomorrow) {
       await refreshVersionsForCurrentMode();
-      updateStatusDate();
+      if (!ref.mounted) return;
+      await updateStatusDate();
+      if (!ref.mounted) return;
     } else {
       await loadHistoryData(targetDate);
+      if (!ref.mounted) return;
     }
 
     if (state.dataSourceMode == DataSourceMode.real) {
       await loadRealOutageData(targetDate);
+      if (!ref.mounted) return;
       recalculateDisplayData();
     }
   }
@@ -518,14 +540,19 @@ class HomeNotifier extends Notifier<HomeState> {
       if (groupChanged) {
         final targetDate = state.displayDate;
         await loadHistoryData(targetDate);
+        if (!ref.mounted) return;
       }
       await loadData(silent: true);
+      if (!ref.mounted) return;
     } else {
       if (groupChanged) {
         await refreshVersionsForCurrentMode();
-        updateStatusDate();
+        if (!ref.mounted) return;
+        await updateStatusDate();
+        if (!ref.mounted) return;
       }
       await loadData(silent: false, force: groupChanged);
+      if (!ref.mounted) return;
     }
   }
 
@@ -724,6 +751,7 @@ class HomeNotifier extends Notifier<HomeState> {
     try {
       final versions =
           await HistoryService().getVersionsForDate(date, state.currentGroup);
+      if (!ref.mounted) return;
       if (requestId != _historyLoadRequestId) return;
       if (state.currentGroup != groupAtCall) return;
       if (!DateUtils.isSameDay(dateAtCall, state.displayDate)) return;
@@ -750,6 +778,7 @@ class HomeNotifier extends Notifier<HomeState> {
       }
       recalculateDisplayData();
     } catch (e) {
+      if (!ref.mounted) return;
       if (requestId == _historyLoadRequestId &&
           state.currentGroup == groupAtCall &&
           DateUtils.isSameDay(dateAtCall, state.displayDate)) {
@@ -772,11 +801,13 @@ class HomeNotifier extends Notifier<HomeState> {
     final dateAtCall = date;
     try {
       final intervals = await _powerMonitor.getOutageIntervalsForDate(date);
+      if (!ref.mounted) return;
       if (requestId != _realOutageLoadRequestId) return;
       if (!DateUtils.isSameDay(dateAtCall, state.displayDate)) return;
       state = state.copyWith(realOutageIntervals: intervals);
     } catch (e) {
       AppLogger.e('Error loading real outage data', tag: 'Main', error: e);
+      if (!ref.mounted) return;
       if (requestId == _realOutageLoadRequestId &&
           DateUtils.isSameDay(dateAtCall, state.displayDate)) {
         state = state.copyWith(realOutageIntervals: const []);
@@ -808,11 +839,13 @@ class HomeNotifier extends Notifier<HomeState> {
 
     if (enabled) {
       await _powerMonitor.init();
+      if (!ref.mounted) return;
       state = state.copyWith(
         powerMonitorEnabled: true,
         powerStatus: _powerMonitor.currentStatus,
       );
       await loadRealOutageData(state.displayDate);
+      if (!ref.mounted) return;
       recalculateDisplayData();
     } else {
       state = state.copyWith(

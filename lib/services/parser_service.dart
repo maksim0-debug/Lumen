@@ -81,8 +81,17 @@ class ParserService {
     AppLogger.i("🚀 Запуск Headless браузера (Hybrid)...", tag: 'Parser');
     final completer = Completer<Map<String, FullSchedule>>();
     bool isDisposed = false;
+    Timer? fallbackTimeoutTimer;
+
+    void completeOnce(Map<String, FullSchedule> result) {
+      if (!completer.isCompleted) {
+        completer.complete(result);
+      }
+    }
 
     Future<void> safeDispose() async {
+      fallbackTimeoutTimer?.cancel();
+      fallbackTimeoutTimer = null;
       if (isDisposed) return;
       isDisposed = true;
       try {
@@ -180,7 +189,7 @@ class ParserService {
 
             if (jsonString.isNotEmpty && jsonString.length > 100) {
               var schedules = await _parseAndSaveAllGroups(jsonString);
-              if (!completer.isCompleted) completer.complete(schedules);
+              completeOnce(schedules);
 
               await safeDispose();
               return;
@@ -226,21 +235,22 @@ class ParserService {
 
         if (!completer.isCompleted && currentGen == loadStopGeneration) {
           AppLogger.w("❌ Тайм-аут", tag: 'Parser');
+          completeOnce({});
           await HistoryService()
               .logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
-          completer.complete({});
           await safeDispose();
         }
       },
     );
 
     // Страховочний тайм-аут: 25 секунд на весь процес WebView
-    Future.delayed(const Duration(seconds: 25), () async {
+    fallbackTimeoutTimer = Timer(const Duration(seconds: 25), () async {
       if (!completer.isCompleted) {
         AppLogger.e("❌ Глобальний тайм-аут WebView (25 сек)", tag: 'Parser');
-        HistoryService().logAction("Парсер: Глобальний тайм-аут WebView 25 сек",
+        completeOnce({});
+        await HistoryService().logAction(
+            "Парсер: Глобальний тайм-аут WebView 25 сек",
             level: "ERROR");
-        completer.complete({});
         await safeDispose();
       }
     });
@@ -249,9 +259,9 @@ class ParserService {
       await _headlessWebView?.run();
     } catch (e) {
       AppLogger.e("❌ Помилка запуску WebView", tag: 'Parser', error: e);
+      completeOnce({});
       await HistoryService()
           .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
-      if (!completer.isCompleted) completer.complete({});
       await safeDispose();
       return {};
     }
