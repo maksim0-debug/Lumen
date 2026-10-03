@@ -47,66 +47,57 @@ class PowerStatusBadge extends StatelessWidget {
       bgColor = isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06);
       textColor = isDark ? Colors.grey.shade300 : Colors.grey.shade700;
       snackBarIconColor = Colors.grey.shade300;
-      label = "UNKNOWN";
+      label = "N/A";
       icon = Icons.help_outline;
 
       final snapshot = PowerMonitorService().snapshot;
       final reasonMsg = snapshot.reason.userMessage;
-      tooltipMessage = "Стан невідомий (UNKNOWN): $reasonMsg";
+      tooltipMessage = "Стан невідомий: $reasonMsg";
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: Tooltip(
-        message: tooltipMessage,
-        child: Material(
-          color: bgColor,
+    return Tooltip(
+      message: tooltipMessage,
+      child: Material(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: () {
-              final activeMessage = isOnline
-                  ? "Електроенергія є (ON). Дані актуальні."
-                  : isOffline
-                      ? "Електроенергії немає (OFF). Зафіксовано сенсором."
-                      : "Стан невідомий (UNKNOWN): ${PowerMonitorService().snapshot.reason.userMessage}";
-
-              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Row(
-                    children: [
-                      Icon(icon, color: snackBarIconColor, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(activeMessage)),
-                    ],
-                  ),
-                  duration: const Duration(seconds: 3),
-                  behavior: SnackBarBehavior.floating,
+          onTap: () {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    Icon(icon, color: snackBarIconColor, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(tooltipMessage)),
+                  ],
                 ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: textColor.withValues(alpha: 0.3)),
+                duration: const Duration(seconds: 3),
+                behavior: SnackBarBehavior.floating,
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, color: textColor, size: 16),
-                  const SizedBox(width: 4),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: textColor.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: textColor, size: 16),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
