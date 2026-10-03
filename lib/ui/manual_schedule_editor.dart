@@ -7,6 +7,7 @@ import '../services/app_logger.dart';
 import '../services/history_service.dart';
 import '../services/parser_service.dart';
 import '../services/preferences_helper.dart';
+import '../utils/app_formatters.dart';
 import 'dialogs/shortcut_help_dialog.dart';
 import 'shortcuts/app_intents.dart';
 import 'shortcuts/keyboard_shortcut_wrapper.dart';
@@ -410,7 +411,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
                   items: ParserService.allGroups.map((g) {
                     return DropdownMenuItem(
                       value: g,
-                      child: Text(g.replaceAll("GPV", "Група ")),
+                      child: Text(AppFormatters.formatGroupName(g)),
                     );
                   }).toList(),
                   onChanged: (val) async {

@@ -13,6 +13,7 @@ import '../services/desktop_tray_coordinator.dart';
 import '../services/parser_service.dart';
 import '../services/preferences_helper.dart';
 import '../services/schedule_calculation_service.dart';
+import '../utils/app_formatters.dart';
 import 'achievements_screen.dart';
 import 'analytics_screen.dart';
 import 'dialogs/hour_detail_dialog.dart';
@@ -163,6 +164,61 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       wasUpdated: state.wasUpdated,
       currentGroup: state.currentGroup,
       lastUpdateOldStats: state.lastUpdateOldStats,
+    );
+  }
+
+  String? _getScheduleVersionString(HomeState state) {
+    if (state.historyVersions.isNotEmpty) {
+      final version = (state.selectedVersionIndex >= 0 &&
+              state.selectedVersionIndex < state.historyVersions.length)
+          ? state.historyVersions[state.selectedVersionIndex]
+          : state.historyVersions.last;
+      return version.timeString;
+    }
+
+    final source = state.allSchedules[state.currentGroup]?.lastUpdatedSource;
+    if (source != null) {
+      final clean = source
+          .replaceFirst('Оновлено ДТЕК:', '')
+          .replaceFirst("З пам'яті:", '')
+          .trim();
+      if (clean.isNotEmpty && clean != 'Невідомо' && clean != 'Немає даних') {
+        return clean;
+      }
+    }
+
+    return null;
+  }
+
+  String _getScheduleClipboardText(HomeState state) {
+    final outageText = _getOutageInfoText(state);
+    final intervals = state.cachedIntervals.isNotEmpty
+        ? state.cachedIntervals
+        : (state.powerMonitorEnabled &&
+                state.dataSourceMode == DataSourceMode.real
+            ? ScheduleCalculationService.generateRealIntervals(
+                state.realOutageIntervals,
+                state.displayDate,
+                isOffline: ref
+                    .read(homeNotifierProvider.notifier)
+                    .powerMonitor
+                    .isOffline,
+              )
+            : ScheduleCalculationService.generateIntervals(
+                state.currentDisplaySchedule));
+
+    final versionStr = _getScheduleVersionString(state);
+    final effectiveMode = state.powerMonitorEnabled
+        ? state.dataSourceMode
+        : DataSourceMode.predicted;
+
+    return ScheduleCalculationService.formatScheduleClipboardSummary(
+      group: state.currentGroup,
+      date: state.displayDate,
+      dataSourceMode: effectiveMode,
+      scheduleVersion: versionStr,
+      outageInfoText: outageText,
+      intervals: intervals,
     );
   }
 
@@ -399,7 +455,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         CopyScheduleSummaryIntent: CallbackAction<CopyScheduleSummaryIntent>(
           onInvoke: (intent) async {
             final current = ref.read(homeNotifierProvider);
-            final text = _getOutageInfoText(current);
+            final text = _getScheduleClipboardText(current);
             if (text.isNotEmpty) {
               await Clipboard.setData(ClipboardData(text: text));
               if (context.mounted) {
@@ -614,7 +670,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               items: ParserService.allGroups.map((String value) {
                 return DropdownMenuItem(
                     value: value,
-                    child: Text("Група ${value.replaceFirst('GPV', '')}"));
+                    child: Text(AppFormatters.formatGroupName(value)));
               }).toList(),
             ),
             centerTitle: true,

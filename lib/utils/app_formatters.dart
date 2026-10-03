@@ -34,6 +34,20 @@ class AppFormatters {
     return "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}";
   }
 
+  /// Форматування дати у вигляд "DD.MM.YYYY".
+  static String formatDate(DateTime dt) {
+    return "${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}";
+  }
+
+  /// Форматування коду черги/групи у читабельний рядок (наприклад, "GPV2.1" -> "Група 2.1").
+  static String formatGroupName(String groupKey) {
+    final trimmed = groupKey.trim();
+    if (trimmed.isEmpty) return "";
+    if (trimmed.startsWith("Група")) return trimmed;
+    final clean = trimmed.replaceFirst('GPV', '').trim();
+    return clean.isNotEmpty ? "Група $clean" : trimmed;
+  }
+
   /// Грамотне відмінювання українською: 1 версія, 2 версії, 5 версій.
   static String pluralVersions(int count) {
     final mod10 = count % 10;
@@ -54,4 +68,7 @@ String fmtTime(DateTime dt) => AppFormatters.fmtTime(dt);
 String fmtHM(int h, int m) => AppFormatters.fmtHM(h, m);
 String formatHourMinute(int h, int m) => AppFormatters.formatHourMinute(h, m);
 String formatDateKey(DateTime dt) => AppFormatters.formatDateKey(dt);
+String formatDate(DateTime dt) => AppFormatters.formatDate(dt);
+String formatGroupName(String groupKey) =>
+    AppFormatters.formatGroupName(groupKey);
 String pluralVersions(int count) => AppFormatters.pluralVersions(count);

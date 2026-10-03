@@ -306,4 +306,75 @@ class ScheduleCalculationService {
 
     return result;
   }
+
+  /// Форматування коду черги/групи у читабельний рядок (наприклад, "GPV2.1" -> "Група 2.1").
+  /// Фасад до [AppFormatters.formatGroupName] для зворотної сумісності.
+  static String formatGroupName(String groupKey) =>
+      AppFormatters.formatGroupName(groupKey);
+
+  /// Форматування окремого інтервалу у рядок виду "00:00 - 03:30  OFF  (3г 30хв)".
+  static String formatIntervalText(IntervalInfo interval) {
+    return "${interval.timeRange}  ${interval.statusText}  (${interval.duration})";
+  }
+
+  /// Формування повного структурованого тексту для копіювання розкладу в буфер обміну.
+  static String formatScheduleClipboardSummary({
+    String? group,
+    DateTime? date,
+    DataSourceMode? dataSourceMode,
+    String? scheduleVersion,
+    required String outageInfoText,
+    required List<IntervalInfo> intervals,
+  }) {
+    // Якщо немає ані інтервалів, ані тексту про відключення — корисних даних для зведення немає
+    if (outageInfoText.trim().isEmpty && intervals.isEmpty) {
+      return "";
+    }
+
+    final buffer = StringBuffer();
+
+    final List<String> headerParts = [];
+    if (group != null && group.trim().isNotEmpty) {
+      headerParts.add(AppFormatters.formatGroupName(group));
+    }
+    if (date != null) {
+      headerParts.add(AppFormatters.formatDate(date));
+    }
+
+    if (headerParts.isNotEmpty) {
+      buffer.writeln(headerParts.join(" — "));
+    }
+
+    if (dataSourceMode != null) {
+      if (dataSourceMode == DataSourceMode.real) {
+        buffer.writeln("Реальні відключення");
+      } else if (dataSourceMode == DataSourceMode.predicted) {
+        final cleanVersion = scheduleVersion?.trim();
+        if (cleanVersion != null &&
+            cleanVersion.isNotEmpty &&
+            cleanVersion != 'Невідомо' &&
+            cleanVersion != 'Немає даних') {
+          buffer.writeln("Графік (Версія $cleanVersion)");
+        } else {
+          buffer.writeln("Графік");
+        }
+      }
+    }
+
+    if (outageInfoText.trim().isNotEmpty) {
+      buffer.writeln(outageInfoText.trim());
+    }
+
+    if (intervals.isNotEmpty) {
+      if (buffer.isNotEmpty) {
+        buffer.writeln();
+      }
+      buffer.writeln("Розклад інтервалами:");
+      for (final interval in intervals) {
+        buffer.writeln(formatIntervalText(interval));
+      }
+    }
+
+    return buffer.toString().trimRight();
+  }
 }

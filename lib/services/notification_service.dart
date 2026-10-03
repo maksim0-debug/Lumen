@@ -9,6 +9,7 @@ import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'parser_service.dart';
 import 'preferences_helper.dart';
+import '../utils/app_formatters.dart';
 
 class NotificationService {
   static NotificationService? _instance;
@@ -251,7 +252,7 @@ class NotificationService {
 
       String finalTitle = title;
       if (groupName != null && notificationGroups.length > 1) {
-        String formattedGroup = groupName.replaceAll("GPV", "Група ");
+        String formattedGroup = AppFormatters.formatGroupName(groupName);
         finalTitle = "$formattedGroup: $title";
       }
 

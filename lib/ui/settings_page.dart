@@ -7,6 +7,7 @@ import '../services/api/local_api_service.dart';
 import '../services/app_info_service.dart';
 import '../services/app_logger.dart';
 import '../services/parser_service.dart';
+import '../utils/app_formatters.dart';
 
 import '../services/backup_service.dart';
 import '../services/power_monitor_service.dart';
@@ -317,7 +318,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       children: ParserService.allGroups.map((group) {
                         final isSelected = _notificationGroups.contains(group);
                         return FilterChip(
-                          label: Text(group.replaceAll("GPV", "Група ")),
+                          label: Text(AppFormatters.formatGroupName(group)),
                           selected: isSelected,
                           onSelected: (val) {
                             setState(() {

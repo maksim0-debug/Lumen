@@ -9,6 +9,7 @@ import '../models/analytics_models.dart';
 import '../models/schedule_status.dart';
 import '../models/power_event.dart';
 import '../services/parser_service.dart';
+import '../utils/app_formatters.dart';
 import 'achievements_screen.dart';
 import 'dialogs/shortcut_help_dialog.dart';
 import 'shortcuts/app_intents.dart';
@@ -301,7 +302,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                         return PopupMenuItem<String>(
                           value: group,
                           child: Text(
-                            group.replaceFirst('GPV', 'Група '),
+                            AppFormatters.formatGroupName(group),
                             style: TextStyle(
                               fontWeight: group == _currentGroup
                                   ? FontWeight.bold
@@ -326,7 +327,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            _currentGroup.replaceFirst('GPV', 'Група '),
+                            AppFormatters.formatGroupName(_currentGroup),
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
