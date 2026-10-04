@@ -18,6 +18,8 @@ dependencies:
 
   flutter_local_notifications: 19.5.0
   timezone: 0.10.1
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
   # workmanager несовместим с Android v2 embedding, убран
   # Для Android используем android_alarm_manager_plus или встроенный WorkManager напрямую
 

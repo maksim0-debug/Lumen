@@ -1,0 +1,17 @@
+name = "lumen-schedule-monitor"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Запуск Cron Triggers кожні 5 хвилин
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Безкоштовне сховище стану Cloudflare KV для збереження попередніх хешів графіків
+# Створіть через команду: wrangler kv:namespace create SCHEDULE_KV
+# і підставте згенерований ID сюди:
+[[kv_namespaces]]
+binding = "SCHEDULE_KV"
+id = "0ad93b752db04aaabe5a3876c68e41ba"
+
+[vars]
+PROJECT_ID = "lumen-power"

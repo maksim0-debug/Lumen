@@ -78,4 +78,16 @@ nuget.exe
 
 changes.txt
 .agents
-release.jks
+release.jks
+
+# Cloudflare Worker & Secrets
+cloudflare-worker/node_modules/
+cloudflare-worker/.wrangler/
+cloudflare-worker/.env
+cloudflare-worker/service-account*.json
+service-account*.json
+*firebase-adminsdk*.json
+cloudflare-worker/*firebase-adminsdk*.json
+*.pem
+*.key
+

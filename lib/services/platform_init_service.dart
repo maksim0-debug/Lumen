@@ -9,6 +9,7 @@ import 'api/local_api_service.dart';
 import 'app_info_service.dart';
 import 'app_logger.dart';
 import 'background_service.dart';
+import 'fcm_service.dart';
 import 'notification_service.dart';
 import 'widget_background_callback.dart';
 
@@ -74,6 +75,14 @@ class PlatformInitService {
       await notificationService.init().timeout(const Duration(seconds: 4));
     } catch (e) {
       AppLogger.e("Помилка сповіщень", tag: 'MAIN', error: e);
+    }
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        await FcmService().init();
+      } catch (e) {
+        AppLogger.e("Помилка ініціалізації FCM", tag: 'MAIN', error: e);
+      }
     }
 
     if (Platform.isAndroid) {

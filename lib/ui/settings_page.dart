@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../services/parser_service.dart';
 import '../utils/app_formatters.dart';
 
 import '../services/backup_service.dart';
+import '../services/fcm_service.dart';
 import '../services/power_monitor_service.dart';
 import '../services/preferences_helper.dart';
 import '../services/achievement_service.dart';
@@ -40,6 +42,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _notify1hBeforeOn = true;
   bool _notify30mBeforeOn = true;
   bool _notifyScheduleChange = true;
+  bool _notifyTomorrowSchedule = true;
   bool _isDarkMode = true;
   bool _animationsEnabled = true;
   bool _launchAtStartup = false;
@@ -106,6 +109,8 @@ class _SettingsPageState extends State<SettingsPage> {
           _notify30mBeforeOn = prefs.getBool('notify_30m_before_on') ?? true;
           _notifyScheduleChange =
               prefs.getBool('notify_schedule_change') ?? true;
+          _notifyTomorrowSchedule =
+              prefs.getBool('notify_tomorrow_schedule') ?? true;
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
           _animationsEnabled = DarknessThemeService().areAnimationsEnabled;
           _enableLogging = prefs.getBool('enable_logging') ?? true;
@@ -166,6 +171,7 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       await prefs.setStringList('notification_groups', _notificationGroups);
+      unawaited(FcmService().syncTopicSubscriptions());
     } catch (e) {
       AppLogger.e("Error saving groups", tag: 'SettingsPage', error: e);
     }
@@ -390,6 +396,18 @@ class _SettingsPageState extends State<SettingsPage> {
                     (val) {
                       setState(() => _notifyScheduleChange = val);
                       _saveSetting('notify_schedule_change', val);
+                      unawaited(FcmService().syncTopicSubscriptions());
+                    },
+                  ),
+                  const Divider(),
+                  _buildSwitchTile(
+                    "Графік на завтра",
+                    "Сповіщення при публікації або зміні графіка на наступний день",
+                    _notifyTomorrowSchedule,
+                    (val) {
+                      setState(() => _notifyTomorrowSchedule = val);
+                      _saveSetting('notify_tomorrow_schedule', val);
+                      unawaited(FcmService().syncTopicSubscriptions());
                     },
                   ),
                   const Divider(),

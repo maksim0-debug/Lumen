@@ -7,6 +7,7 @@ import 'widget_service.dart';
 import 'notification_service.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
+import '../utils/app_formatters.dart';
 
 const String taskUpdateSchedule = "taskUpdateSchedule";
 
@@ -74,7 +75,7 @@ void callbackDispatcher() {
                 final lastNotifTime = prefs.getInt(keyLastNotif) ?? 0;
 
                 final now = DateTime.now();
-                final todayStr = "${now.year}-${now.month}-${now.day}";
+                final todayStr = AppFormatters.formatDateKey(now);
                 final nowMs = now.millisecondsSinceEpoch;
 
                 final newHash = mySchedule.today.scheduleHash;
@@ -100,32 +101,35 @@ void callbackDispatcher() {
                     }
 
                     final diff = newMinutes - oldMinutes;
+                    final String msg;
                     if (diff != 0) {
                       final diffHours = (diff.abs() / 60);
                       final diffStr = diffHours == diffHours.toInt()
                           ? diffHours.toInt().toString()
                           : diffHours.toStringAsFixed(1);
-                      final msg = diff > 0
+                      msg = diff > 0
                           ? "Світла стало МЕНШЕ на $diffStr год. 😔"
                           : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
-
-                      AppLogger.i("📢 Виявлено зміну графіку для $group: $msg",
-                          tag: 'Background');
-
-                      try {
-                        await notificationService.showImmediate(
-                            "Графік змінено!", msg,
-                            groupName: group);
-                        await HistoryService()
-                            .logAction("Сповіщення про зміну надіслано: $msg");
-                      } catch (e) {
-                        await HistoryService().logAction(
-                            "Помилка надсилання сповіщення: $e",
-                            level: "ERROR");
-                      }
-
-                      await prefs.setInt(keyLastNotif, nowMs);
+                    } else {
+                      msg = "Змінився час відключень на сьогодні ⚡";
                     }
+
+                    AppLogger.i("📢 Виявлено зміну графіку для $group: $msg",
+                        tag: 'Background');
+
+                    try {
+                      await notificationService.showImmediate(
+                          "Графік змінено!", msg,
+                          groupName: group);
+                      await HistoryService()
+                          .logAction("Сповіщення про зміну надіслано: $msg");
+                    } catch (e) {
+                      await HistoryService().logAction(
+                          "Помилка надсилання сповіщення: $e",
+                          level: "ERROR");
+                    }
+
+                    await prefs.setInt(keyLastNotif, nowMs);
                   } else {
                     AppLogger.i(
                         "⏳ Зміни є ($group), але охолодження. Чекаємо...",

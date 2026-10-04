@@ -60,17 +60,20 @@ class ScheduleNotificationCoordinator {
                 DailySchedule.fromEncodedString(oldHash).totalOutageMinutes;
 
             final diff = newMinutes - oldMinutes;
+            final String msg;
             if (diff != 0) {
               final diffHours = (diff.abs() / 60);
               final diffStr = diffHours == diffHours.toInt()
                   ? diffHours.toInt().toString()
                   : diffHours.toStringAsFixed(1);
-              final msg = diff > 0
+              msg = diff > 0
                   ? "Світла стало МЕНШЕ на $diffStr год. 😔"
                   : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
-
-              _notifier.showImmediate("Графік змінено!", msg, groupName: group);
+            } else {
+              msg = "Змінився час відключень на сьогодні ⚡";
             }
+
+            _notifier.showImmediate("Графік змінено!", msg, groupName: group);
           }
         }
 

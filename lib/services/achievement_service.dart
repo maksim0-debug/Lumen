@@ -542,6 +542,7 @@ class AchievementService {
         'notify_1h_before_on',
         'notify_30m_before_on',
         'notify_schedule_change',
+        'notify_tomorrow_schedule',
       ];
       for (final key in keys) {
         if (prefs.getBool(key) == true) {

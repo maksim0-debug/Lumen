@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,7 @@ import '../../models/schedule_view_mode.dart';
 import '../../services/achievement_service.dart';
 import '../../services/app_logger.dart';
 import '../../services/darkness_theme_service.dart';
+import '../../services/fcm_service.dart';
 import '../../services/history_service.dart';
 import '../../services/hour_segment_service.dart';
 import '../../services/notification_service.dart';
@@ -53,6 +55,8 @@ class HomeNotifier extends Notifier<HomeState> {
   int _realOutageLoadRequestId = 0;
   int _historyLoadRequestId = 0;
 
+  StreamSubscription? _fcmSubscription;
+
   @override
   HomeState build() {
     _notifier = _customNotifier ?? NotificationService();
@@ -62,8 +66,19 @@ class HomeNotifier extends Notifier<HomeState> {
     _powerMonitor = _customPowerMonitor ?? PowerMonitorService();
     _achievementService = _customAchievementService ?? AchievementService();
 
+    _fcmSubscription = FcmService.onMessageStream.listen((message) {
+      if (!ref.mounted) return;
+      AppLogger.i(
+          "🔄 FCM оновлення отримано у foreground. Оновлюємо розклад...",
+          tag: 'HomeNotifier');
+      if (!state.isHistoryMode) {
+        loadData(force: true);
+      }
+    });
+
     ref.onDispose(() {
       _powerMonitor.onStatusChanged = null;
+      _fcmSubscription?.cancel();
     });
 
     return const HomeState();
@@ -187,6 +202,7 @@ class HomeNotifier extends Notifier<HomeState> {
         await prefs.setStringList('notification_groups', [newGroup]);
         state = state.copyWith(notificationGroups: [newGroup]);
       }
+      unawaited(FcmService().syncTopicSubscriptions());
     } catch (e) {
       AppLogger.e("Error saving group preference", tag: 'Main', error: e);
     }

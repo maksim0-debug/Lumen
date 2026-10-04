@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "516105818472",
+    "firebase_url": "https://lumen-power-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "lumen-power",
+    "storage_bucket": "lumen-power.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:516105818472:android:945d5c291e47e347d346dd",
+        "android_client_info": {
+          "package_name": "ua.maksim0.lumen"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAXQltSalGW8qH34U4gfKSEriLgdjZ6GZA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
