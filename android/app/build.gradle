@@ -22,6 +22,41 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+def keystoreProperties = [:]
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.eachLine('UTF-8') { line ->
+        def cleanLine = line.replaceAll(/[\r\n]+$/, '')
+        def trimmed = cleanLine.trim()
+        if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('!')) {
+            int idx = cleanLine.indexOf('=')
+            if (idx != -1) {
+                def key = cleanLine.substring(0, idx).trim()
+                def val = cleanLine.substring(idx + 1)
+                keystoreProperties[key] = val
+            }
+        }
+    }
+}
+
+def resolveKeystoreFile(String path) {
+    if (!path) return null
+    def candidate = file(path)
+    if (candidate.exists()) return candidate
+    candidate = rootProject.file(path)
+    if (candidate.exists()) return candidate
+    candidate = rootProject.file("../$path")
+    if (candidate.exists()) return candidate
+    return file(path)
+}
+
+def keyAliasValue = System.getenv("ANDROID_KEY_ALIAS") ?: keystoreProperties['keyAlias']
+def keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD") ?: keystoreProperties['keyPassword']
+def storeFileValue = System.getenv("ANDROID_STORE_FILE") ?: keystoreProperties['storeFile']
+def storePasswordValue = System.getenv("ANDROID_STORE_PASSWORD") ?: keystoreProperties['storePassword']
+def resolvedStoreFile = resolveKeystoreFile(storeFileValue)
+def isSigningConfigured = keyAliasValue && keyPasswordValue && storePasswordValue && resolvedStoreFile?.exists()
+
 android {
     namespace "ua.maksim0.lumen"
     compileSdk flutter.compileSdkVersion
@@ -49,12 +84,26 @@ android {
         versionName flutterVersionName
     }
 
+    signingConfigs {
+        release {
+            if (isSigningConfigured) {
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+                storeFile = resolvedStoreFile
+                storePassword = storePasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            if (isSigningConfigured) {
+                signingConfig = signingConfigs.release
+            } else {
+                signingConfig = signingConfigs.debug
+            }
             minifyEnabled false
             shrinkResources false
-
         }
     }
 }

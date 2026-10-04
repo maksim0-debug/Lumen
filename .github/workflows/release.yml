@@ -1,0 +1,271 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag name for release (e.g. v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: "android"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Configure Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: python3 .github/scripts/configure_keystore.py
+
+      - name: Determine Version
+        id: version
+        run: |
+          RAW_TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          CLEAN_VERSION="${RAW_TAG#v}"
+          if [ -z "$CLEAN_VERSION" ] || [ "$CLEAN_VERSION" = "main" ] || [ "$CLEAN_VERSION" = "master" ]; then
+            CLEAN_VERSION="1.0.0"
+          fi
+          echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build APK
+        env:
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_FILE: "release.jks"
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          flutter build apk --release \
+            --build-name="${{ steps.version.outputs.clean_version }}" \
+            --build-number="${{ github.run_number }}"
+
+      - name: Prepare Android Artifact
+        run: |
+          mkdir -p artifacts
+          cp build/app/outputs/flutter-apk/app-release.apk artifacts/Lumen-Android.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifact
+          path: artifacts/Lumen-Android.apk
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows (Installer & Portable)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build Windows
+        run: flutter build windows --release
+
+      - name: Package Windows Files
+        shell: pwsh
+        run: |
+          $buildDir = "build/windows/x64/runner/Release"
+          if (-not (Test-Path $buildDir)) {
+              $buildDir = "build/windows/runner/Release"
+          }
+          if (-not (Test-Path $buildDir)) {
+              throw "Flutter Windows release build output not found in expected paths!"
+          }
+          $releaseDir = "Lumen"
+          if (Test-Path $releaseDir) { Remove-Item -Recurse -Force $releaseDir }
+          New-Item -ItemType Directory -Path $releaseDir
+
+          # Copy executable, dlls, and data directory
+          Copy-Item "$buildDir/*.exe" -Destination "$releaseDir/"
+          Copy-Item "$buildDir/*.dll" -Destination "$releaseDir/"
+          Copy-Item -Path "$buildDir/data" -Destination "$releaseDir/data" -Recurse
+
+          # Copy app icon if present
+          if (Test-Path "$buildDir/app_icon.ico") {
+              Copy-Item "$buildDir/app_icon.ico" -Destination "$releaseDir/"
+          }
+
+          # Copy native assets manifest if generated
+          if (Test-Path "$buildDir/native_assets.json") {
+              Copy-Item "$buildDir/native_assets.json" -Destination "$releaseDir/"
+          }
+
+          # Ensure VC++ Redistributable runtime DLLs are bundled for clean Windows environments
+          if (-not (Test-Path "$releaseDir/msvcp140.dll")) {
+              $vcRedistDir = $env:VCToolsRedistDir
+              if (-not $vcRedistDir) {
+                  $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+                  if ($vsPath) {
+                      $vcRedistDir = Join-Path $vsPath "VC\Redist\MSVC"
+                  }
+              }
+              if ($vcRedistDir -and (Test-Path $vcRedistDir)) {
+                  $crtDir = Get-ChildItem -Path $vcRedistDir -Filter "*CRT" -Recurse | Where-Object { $_.FullName -like "*x64*" -and $_.FullName -notlike "*onecore*" -and $_.FullName -notlike "*debug*" } | Select-Object -First 1
+                  if ($crtDir) {
+                      Copy-Item "$($crtDir.FullName)/*.dll" -Destination "$releaseDir/" -Force
+                      Write-Host "Bundled VC++ runtime DLLs from $($crtDir.FullName)"
+                  }
+              }
+          }
+
+          # Copy documentation if available
+          if (Test-Path "README.md") { Copy-Item "README.md" -Destination "$releaseDir/" }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination "$releaseDir/" }
+
+          # Compress to Portable zip archive containing the Lumen folder
+          New-Item -ItemType Directory -Path "artifacts" -Force
+          Compress-Archive -Path "$releaseDir" -DestinationPath "artifacts/Lumen-Windows-Portable.zip" -Force
+
+      - name: Build Inno Setup Installer
+        shell: pwsh
+        run: |
+          # Install Inno Setup if not present
+          if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+              choco install innosetup -y
+          }
+
+          $isccPath = if (Get-Command iscc.exe -ErrorAction SilentlyContinue) {
+              "iscc.exe"
+          } elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          } else {
+              "ISCC"
+          }
+
+          $rawTag = "${{ github.event.inputs.tag_name || github.ref_name }}"
+          $cleanVersion = $rawTag.TrimStart('v')
+          if (-not $cleanVersion -or $cleanVersion -eq "main" -or $cleanVersion -eq "master") {
+              $cleanVersion = "1.0.0"
+          }
+
+          Write-Host "Compiling Inno Setup installer for version: $cleanVersion"
+          & $isccPath /Q /DMyAppVersion="$cleanVersion" /DMyAppSourceDir="..\..\Lumen" windows/packaging/installer.iss
+
+          if (-not (Test-Path "artifacts/Lumen-Windows-Setup.exe")) {
+              throw "Lumen-Windows-Setup.exe was not created!"
+          }
+          Write-Host "Successfully generated Lumen-Windows-Setup.exe"
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            artifacts/Lumen-Windows-Setup.exe
+            artifacts/Lumen-Windows-Portable.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Attest & Publish Release
+    needs: [build-android, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Checksums
+        run: |
+          cd dist
+          sha256sum Lumen-Android.apk Lumen-Windows-Setup.exe Lumen-Windows-Portable.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate Build Attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/Lumen-Android.apk
+            dist/Lumen-Windows-Setup.exe
+            dist/Lumen-Windows-Portable.zip
+            dist/SHA256SUMS.txt
+
+      - name: Publish Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.inputs.tag_name || github.ref_name }}
+          VERIFICATION_NOTES: |
+            ### 🛡️ Verification
+            This release is signed with a GitHub Artifact Attestation.
+            To verify the authenticity of the release assets, run:
+            ```bash
+            # Verify Windows installer
+            gh attestation verify Lumen-Windows-Setup.exe --owner ${{ github.repository_owner }}
+
+            # Verify Windows portable archive
+            gh attestation verify Lumen-Windows-Portable.zip --owner ${{ github.repository_owner }}
+
+            # Verify Android APK
+            gh attestation verify Lumen-Android.apk --owner ${{ github.repository_owner }}
+            ```
+
+            You can view the build attestation history here:
+            https://github.com/${{ github.repository }}/attestations
+        run: |
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ] || [ "$TAG_NAME" = "master" ]; then
+            echo "Error: Refusing to publish release with invalid or branch tag: '$TAG_NAME'"
+            exit 1
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists, uploading assets..."
+            gh release upload "$TAG_NAME" dist/* --clobber
+          else
+            gh release create "$TAG_NAME" dist/* \
+              --title "$TAG_NAME" \
+              --generate-notes \
+              --notes "$VERIFICATION_NOTES"
+          fi
