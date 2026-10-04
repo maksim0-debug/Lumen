@@ -76,8 +76,5 @@ installer/
 devtools_options.yaml
 nuget.exe
 
-# Tests
-test/
 changes.txt
-Changelog.md
 .agents
