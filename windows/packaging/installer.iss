@@ -12,7 +12,7 @@
 
 #define MyAppName "Lumen"
 #define MyAppPublisher "maksim0-debug"
-#define MyAppURL "https://github.com/maksim0-debug/vikl"
+#define MyAppURL "https://github.com/maksim0-debug/Lumen"
 #define MyAppExeName "Lumen.exe"
 
 [Setup]
