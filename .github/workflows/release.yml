@@ -233,26 +233,74 @@ jobs:
             dist/Lumen-Windows-Portable.zip
             dist/SHA256SUMS.txt
 
+      - name: Generate AI Release Notes
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TAG_NAME: ${{ github.event.inputs.tag_name || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ] || [ "$TAG_NAME" = "master" ]; then
+            echo "Non-release tag '$TAG_NAME', skipping release notes generation."
+            exit 0
+          fi
+
+          # 1. Resolve target ref (supports existing tag or HEAD if tag does not exist yet)
+          TARGET_REF="$TAG_NAME"
+          if ! git rev-parse -q --verify "$TARGET_REF" >/dev/null 2>&1; then
+            echo "Notice: Tag '$TARGET_REF' not found locally, using HEAD as target ref."
+            TARGET_REF="HEAD"
+          fi
+
+          # Discover previous tag relative to target ref
+          if [ "$TARGET_REF" = "$TAG_NAME" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 "${TARGET_REF}^" 2>/dev/null || echo "")
+          else
+            PREV_TAG=$(git describe --tags --abbrev=0 "$TARGET_REF" 2>/dev/null || echo "")
+          fi
+          echo "Current Tag: $TAG_NAME (Target ref: $TARGET_REF)"
+          echo "Previous Tag: $PREV_TAG"
+
+          # 2. Extract commit history including full subject and body
+          if [ -n "$PREV_TAG" ]; then
+            echo "Extracting git log between $PREV_TAG and $TARGET_REF..."
+            git log "$PREV_TAG..$TARGET_REF" --pretty=format:"Commit: %h%nAuthor: %an%nDate: %ad%nSubject: %s%nBody:%n%b%n---" > commits_log.txt
+            gh release view "$PREV_TAG" --json body -q .body > prev_notes.txt 2>/dev/null || echo "" > prev_notes.txt
+          else
+            echo "No previous tag found, extracting recent commits up to $TARGET_REF..."
+            git log "$TARGET_REF" -n 50 --pretty=format:"Commit: %h%nAuthor: %an%nDate: %ad%nSubject: %s%nBody:%n%b%n---" > commits_log.txt
+            echo "" > prev_notes.txt
+          fi
+
+          # 3. Generate notes via Python script (safe execution with fallback)
+          python3 .github/scripts/generate_release_notes.py commits_log.txt prev_notes.txt AI_RELEASE_NOTES.md || true
+
+          # 4. Generate Full Changelog compare link
+          if [ -n "$PREV_TAG" ]; then
+            printf "**Full Changelog**: [%s...%s](https://github.com/%s/compare/%s...%s)\n" "$PREV_TAG" "$TAG_NAME" "${{ github.repository }}" "$PREV_TAG" "$TAG_NAME" > full_changelog.txt
+          else
+            printf "**Full Changelog**: [%s](https://github.com/%s/commits/%s)\n" "$TAG_NAME" "${{ github.repository }}" "$TAG_NAME" > full_changelog.txt
+          fi
+
       - name: Publish Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.event.inputs.tag_name || github.ref_name }}
           VERIFICATION_NOTES: |
-            ### 🛡️ Verification
-            This release is signed with a GitHub Artifact Attestation.
-            To verify the authenticity of the release assets, run:
+            ### 🛡️ Перевірка автентичності
+            Цей випуск підписано цифровою атестацією збірки GitHub Artifact Attestation.
+            Щоб перевірити справжність файлів релізу, виконайте:
             ```bash
-            # Verify Windows installer
+            # Перевірка інсталятора для Windows
             gh attestation verify Lumen-Windows-Setup.exe --owner ${{ github.repository_owner }}
 
-            # Verify Windows portable archive
+            # Перевірка портативного архіву для Windows
             gh attestation verify Lumen-Windows-Portable.zip --owner ${{ github.repository_owner }}
 
-            # Verify Android APK
+            # Перевірка APK для Android
             gh attestation verify Lumen-Android.apk --owner ${{ github.repository_owner }}
             ```
 
-            You can view the build attestation history here:
+            Переглянути історію атестацій збірок можна тут:
             https://github.com/${{ github.repository }}/attestations
         run: |
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ] || [ "$TAG_NAME" = "master" ]; then
@@ -260,12 +308,36 @@ jobs:
             exit 1
           fi
 
+          # Combine AI release notes with verification notes and full changelog footer
+          if [ -f "AI_RELEASE_NOTES.md" ] && [ -s "AI_RELEASE_NOTES.md" ]; then
+            cat AI_RELEASE_NOTES.md > release_notes.txt
+            printf "\n\n---\n\n%s\n" "$VERIFICATION_NOTES" >> release_notes.txt
+            if [ -f "full_changelog.txt" ] && [ -s "full_changelog.txt" ]; then
+              printf "\n\n---\n\n" >> release_notes.txt
+              cat full_changelog.txt >> release_notes.txt
+            fi
+          else
+            echo "$VERIFICATION_NOTES" > release_notes.txt
+          fi
+
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             echo "Release $TAG_NAME already exists, uploading assets..."
             gh release upload "$TAG_NAME" dist/* --clobber
+            if [ -f "AI_RELEASE_NOTES.md" ] && [ -s "AI_RELEASE_NOTES.md" ]; then
+              echo "Updating release notes with newly generated AI notes..."
+              gh release edit "$TAG_NAME" --notes-file release_notes.txt
+            fi
           else
-            gh release create "$TAG_NAME" dist/* \
-              --title "$TAG_NAME" \
-              --generate-notes \
-              --notes "$VERIFICATION_NOTES"
+            if [ -f "AI_RELEASE_NOTES.md" ] && [ -s "AI_RELEASE_NOTES.md" ]; then
+              gh release create "$TAG_NAME" dist/* \
+                --title "$TAG_NAME" \
+                --notes-file release_notes.txt
+            else
+              # Fallback to standard automatic notes if AI notes are absent
+              gh release create "$TAG_NAME" dist/* \
+                --title "$TAG_NAME" \
+                --generate-notes \
+                --notes "$VERIFICATION_NOTES"
+            fi
           fi
+
