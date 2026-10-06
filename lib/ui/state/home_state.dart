@@ -1,3 +1,4 @@
+import '../../services/schedule_clock.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/data_source_mode.dart';
@@ -64,7 +65,7 @@ class HomeState {
       viewMode == ScheduleViewMode.yesterday;
 
   DateTime get displayDate {
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     if (viewMode == ScheduleViewMode.today) {
       return DateTime(now.year, now.month, now.day);
     }

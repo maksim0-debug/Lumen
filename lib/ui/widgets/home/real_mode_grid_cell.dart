@@ -1,3 +1,4 @@
+import '../../../services/schedule_clock.dart';
 import 'package:flutter/material.dart';
 
 import '../../../models/hour_segment.dart';
@@ -30,7 +31,7 @@ class RealModeGridCell extends StatelessWidget {
     final darknessService = DarknessThemeService();
     final stage =
         darknessService.isEnabled ? darknessService.currentStage : null;
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final bool showNowLine = isCurrentHour;
     final double nowFraction = showNowLine ? now.minute / 60.0 : 0;
     final stageStyle = DarknessStageStyle.of(stage);

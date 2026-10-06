@@ -1,0 +1,4 @@
+{
+  "admin_key": "REPLACE_WITH_YOUR_WORKER_ADMIN_KEY",
+  "worker_url": "https://lumen-schedule-monitor.maksim0.workers.dev"
+}

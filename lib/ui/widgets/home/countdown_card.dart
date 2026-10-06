@@ -1,3 +1,4 @@
+import '../../../services/schedule_clock.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 
@@ -25,18 +26,18 @@ class _CountdownCardState extends State<CountdownCard> {
   @override
   void initState() {
     super.initState();
-    _lastRenderedMinute = DateTime.now().minute;
+    _lastRenderedMinute = ScheduleClock.now().minute;
     _scheduleNextMinuteTick();
   }
 
   void _scheduleNextMinuteTick() {
     _ticker?.cancel();
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final msToNextMinute = (60 - now.second) * 1000 - now.millisecond + 100;
     _ticker = Timer(Duration(milliseconds: msToNextMinute), () {
       if (mounted) {
         if (widget.fullSchedule != null) {
-          final currentMinute = DateTime.now().minute;
+          final currentMinute = ScheduleClock.now().minute;
           if (currentMinute != _lastRenderedMinute) {
             _lastRenderedMinute = currentMinute;
             setState(() {});
@@ -51,7 +52,7 @@ class _CountdownCardState extends State<CountdownCard> {
   void didUpdateWidget(covariant CountdownCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.fullSchedule != widget.fullSchedule) {
-      _lastRenderedMinute = DateTime.now().minute;
+      _lastRenderedMinute = ScheduleClock.now().minute;
     }
   }
 
@@ -70,7 +71,7 @@ class _CountdownCardState extends State<CountdownCard> {
     final countdown = CountdownService.calculateCountdown(
       today: widget.fullSchedule!.today,
       tomorrow: widget.fullSchedule!.tomorrow,
-      now: DateTime.now(),
+      now: ScheduleClock.now(),
     );
 
     if (countdown == null) return const SizedBox.shrink();

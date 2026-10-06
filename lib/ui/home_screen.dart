@@ -1,3 +1,4 @@
+import '../services/schedule_clock.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../services/achievement_service.dart';
 import '../services/app_logger.dart';
 import '../services/darkness_theme_service.dart';
 import '../services/desktop_tray_coordinator.dart';
+import '../services/desktop_sync_service.dart';
 import '../services/parser_service.dart';
 import '../services/preferences_helper.dart';
 import '../services/schedule_calculation_service.dart';
@@ -58,6 +60,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     _desktopTrayCoordinator.init();
+    unawaited(DesktopSyncService().init());
     _initAchievements();
     _schedulePeriodicUpdates();
 
@@ -69,13 +72,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _schedulePeriodicUpdates() {
     _timer?.cancel();
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final msToNextMinute = (60 - now.second) * 1000 - now.millisecond + 100;
     _timer = Timer(Duration(milliseconds: msToNextMinute), () {
       if (!mounted) return;
-      final current = DateTime.now();
+      final current = ScheduleClock.now();
 
-      if (current.minute % 15 == 0 &&
+      if (!DesktopSyncService().isInitialized &&
+          current.minute % 15 == 0 &&
           current.minute != _lastAutoRefreshMinute) {
         _lastAutoRefreshMinute = current.minute;
         ref.read(homeNotifierProvider.notifier).loadData(silent: true);
@@ -121,7 +125,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _selectDateAndLoad(HomeState state) async {
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final today = DateTime(now.year, now.month, now.day);
     final firstAllowed = DateTime(2024);
     DateTime defaultInitial =
@@ -290,7 +294,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       itemCount: 24,
       itemBuilder: (context, index) {
         final bool isCurrentHour = state.viewMode == ScheduleViewMode.today &&
-            DateTime.now().hour == index;
+            ScheduleClock.now().hour == index;
 
         if (isRealMode &&
             realHourSegments != null &&

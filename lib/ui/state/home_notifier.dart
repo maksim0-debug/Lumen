@@ -21,6 +21,7 @@ import '../../services/preferences_helper.dart';
 import '../../services/schedule_calculation_service.dart';
 import '../../services/schedule_notification_coordinator.dart';
 import '../../services/schedule_sync_service.dart';
+import '../../services/schedule_clock.dart';
 import '../../utils/app_formatters.dart';
 import 'home_state.dart';
 
@@ -56,6 +57,7 @@ class HomeNotifier extends Notifier<HomeState> {
   int _historyLoadRequestId = 0;
 
   StreamSubscription? _fcmSubscription;
+  StreamSubscription<Map<String, FullSchedule>>? _scheduleSubscription;
 
   @override
   HomeState build() {
@@ -76,9 +78,19 @@ class HomeNotifier extends Notifier<HomeState> {
       }
     });
 
+    _scheduleSubscription =
+        ScheduleSyncService.onSyncCompleted.listen((schedules) {
+      if (!ref.mounted || _scheduleSyncService.isFetching) return;
+      unawaited(_applySyncedSchedules(schedules).catchError((Object error) {
+        AppLogger.e('Cannot apply synchronized schedule',
+            tag: 'HomeNotifier', error: error);
+      }));
+    });
+
     ref.onDispose(() {
       _powerMonitor.onStatusChanged = null;
       _fcmSubscription?.cancel();
+      _scheduleSubscription?.cancel();
     });
 
     return const HomeState();
@@ -122,7 +134,7 @@ class HomeNotifier extends Notifier<HomeState> {
         displayDate,
         baseSchedule: currentDisplay,
       );
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
       final isFuture = !DateUtils.isSameDay(displayDate, now) &&
           DateTime(displayDate.year, displayDate.month, displayDate.day)
               .isAfter(DateTime(now.year, now.month, now.day));
@@ -165,7 +177,7 @@ class HomeNotifier extends Notifier<HomeState> {
   }) {
     DailySchedule? forecast = baseSchedule;
     if (forecast == null || forecast.isEmpty) {
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
       final isToday = date.year == now.year &&
           date.month == now.month &&
           date.day == now.day;
@@ -173,7 +185,7 @@ class HomeNotifier extends Notifier<HomeState> {
         if (isToday) {
           forecast = state.allSchedules[state.currentGroup]!.today;
         } else {
-          final tomorrow = DateTime.now().add(const Duration(days: 1));
+          final tomorrow = ScheduleClock.day(now, 1);
           if (date.year == tomorrow.year &&
               date.month == tomorrow.month &&
               date.day == tomorrow.day) {
@@ -222,7 +234,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
     if (state.viewMode == ScheduleViewMode.today ||
         state.viewMode == ScheduleViewMode.tomorrow) {
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
       await refreshVersionsForCurrentMode();
       if (!ref.mounted) return;
 
@@ -307,7 +319,7 @@ class HomeNotifier extends Notifier<HomeState> {
   Future<void> navigateDate(int offset) async {
     if (offset == 0) return;
 
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final firstAllowed = DateTime(2024);
     DateTime current;
     switch (state.viewMode) {
@@ -442,7 +454,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
   // --- SELECT DATE ---
   Future<void> selectDate(DateTime picked) async {
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final today = DateTime(now.year, now.month, now.day);
     if (DateUtils.isSameDay(picked, today)) {
       await setViewMode(ScheduleViewMode.today);
@@ -491,7 +503,7 @@ class HomeNotifier extends Notifier<HomeState> {
   Future<void> setViewMode(ScheduleViewMode mode) async {
     if (state.viewMode == mode && mode != ScheduleViewMode.history) return;
 
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     DateTime targetDate;
     if (mode == ScheduleViewMode.today) {
       targetDate = DateTime(now.year, now.month, now.day);
@@ -582,6 +594,50 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- LOAD DATA (SYNC) ---
+  Future<void> _scheduleApplyTail = Future.value();
+  Map<String, FullSchedule>? _lastApplied;
+
+  Future<void> _applySyncedSchedules(Map<String, FullSchedule> allData) {
+    final result = _scheduleApplyTail.then((_) async {
+      if (!ref.mounted || identical(_lastApplied, allData)) return;
+      await _applySnapshot(allData);
+      if (ref.mounted) _lastApplied = allData;
+    });
+    _scheduleApplyTail =
+        result.then<void>((_) {}, onError: (Object error, StackTrace stack) {});
+    return result;
+  }
+
+  Future<void> _applySnapshot(Map<String, FullSchedule> allData) async {
+    if (!ref.mounted) return;
+    final currentIsHistory = state.isHistoryMode;
+    state = state.copyWith(
+      allSchedules: allData,
+      isCachedData: false,
+      wasUpdated: true,
+      isLoading: currentIsHistory ? state.isLoading : false,
+      statusColor: currentIsHistory ? state.statusColor : Colors.green,
+    );
+    recalculateDisplayData();
+
+    if (!currentIsHistory) {
+      await refreshVersionsForCurrentMode();
+      if (!ref.mounted) return;
+      await updateStatusDate();
+    }
+
+    await _scheduleNotificationCoordinator.handleScheduleUpdate(
+      allSchedules: allData,
+      currentGroup: state.currentGroup,
+      notificationGroups: state.notificationGroups,
+    );
+    if (!ref.mounted) return;
+    _achievementService.checkAll(
+      schedules: state.allSchedules,
+      currentGroup: state.currentGroup,
+    );
+  }
+
   Future<void> loadData({bool silent = false, bool force = false}) async {
     await _scheduleSyncService.sync(
       silent: silent,
@@ -589,7 +645,7 @@ class HomeNotifier extends Notifier<HomeState> {
       hasExistingData: state.allSchedules.isNotEmpty,
       isHistoryMode: state.isHistoryMode,
       onCooldownSkipped: () async {
-        updateStatusDate();
+        await updateStatusDate();
         if (state.isLoading) {
           state = state.copyWith(isLoading: false);
         }
@@ -618,33 +674,7 @@ class HomeNotifier extends Notifier<HomeState> {
           state = state.copyWith(lastUpdateOldStats: oldStats);
         }
       },
-      onFetchSuccess: (allData) async {
-        final currentIsHistory = state.isHistoryMode;
-        state = state.copyWith(
-          allSchedules: allData,
-          isCachedData: false,
-          wasUpdated: true,
-          isLoading: currentIsHistory ? state.isLoading : false,
-          statusColor: currentIsHistory ? state.statusColor : Colors.green,
-        );
-        recalculateDisplayData();
-
-        if (!currentIsHistory) {
-          await refreshVersionsForCurrentMode();
-          updateStatusDate();
-        }
-
-        await _scheduleNotificationCoordinator.handleScheduleUpdate(
-          allSchedules: allData,
-          currentGroup: state.currentGroup,
-          notificationGroups: state.notificationGroups,
-        );
-
-        _achievementService.checkAll(
-          schedules: state.allSchedules,
-          currentGroup: state.currentGroup,
-        );
-      },
+      onFetchSuccess: _applySyncedSchedules,
       onFetchError: (e) {
         if (!state.isHistoryMode) {
           state = state.copyWith(
@@ -709,7 +739,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
   // --- UPDATE STATUS DATE ---
   Future<void> updateStatusDate() async {
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     DateTime targetDate;
     if (state.viewMode == ScheduleViewMode.today) {
       targetDate = DateTime(now.year, now.month, now.day);

@@ -80,7 +80,7 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
         val intent = Intent(context, this::class.java).apply { action = ACTION_MIDNIGHT_UPDATE }
         val pendingIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val calendar = Calendar.getInstance().apply {
+        val calendar = Calendar.getInstance(java.util.TimeZone.getTimeZone("Europe/Kiev")).apply {
             timeInMillis = System.currentTimeMillis()
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 1) // 00:01 to be safe
@@ -127,7 +127,7 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
             
             // Date Check
             val lastUpdateDateStr = widgetData.getString("last_update_date", "")
-            val calendar = Calendar.getInstance()
+            val calendar = Calendar.getInstance(java.util.TimeZone.getTimeZone("Europe/Kiev"))
             val todayStr = "${calendar.get(Calendar.YEAR)}-${calendar.get(Calendar.MONTH) + 1}-${calendar.get(Calendar.DAY_OF_MONTH)}"
             
             if (lastUpdateDateStr != todayStr && lastUpdateDateStr != "") {

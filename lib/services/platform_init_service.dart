@@ -9,6 +9,7 @@ import 'api/local_api_service.dart';
 import 'app_info_service.dart';
 import 'app_logger.dart';
 import 'background_service.dart';
+import 'desktop_sync_service.dart';
 import 'fcm_service.dart';
 import 'notification_service.dart';
 import 'widget_background_callback.dart';
@@ -66,6 +67,13 @@ class PlatformInitService {
         await LocalApiService().init();
       } catch (e) {
         AppLogger.e("Помилка ініціалізації Local REST API",
+            tag: 'MAIN', error: e);
+      }
+
+      try {
+        await DesktopSyncService().init();
+      } catch (e) {
+        AppLogger.e("Помилка ініціалізації DesktopSyncService",
             tag: 'MAIN', error: e);
       }
     }

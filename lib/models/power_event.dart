@@ -1,3 +1,5 @@
+import '../services/schedule_clock.dart';
+
 /// Модель події електроенергії від Firebase RTDB сенсора.
 class PowerEvent {
   final int? id;
@@ -120,15 +122,16 @@ class PowerOutageInterval {
 
   /// Чи перетинається цей інтервал з вказаною датою.
   bool overlapsDate(DateTime date) {
-    final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
+    final dayStart = ScheduleClock.calendar(date.year, date.month, date.day);
+    final dayEnd = ScheduleClock.calendar(date.year, date.month, date.day + 1);
     final intervalEnd = end ?? DateTime.now();
     return start.isBefore(dayEnd) && intervalEnd.isAfter(dayStart);
   }
 
   /// Час відключення в межах конкретної години (0-59 хвилин offline).
   int minutesOfflineInHour(DateTime date, int hour) {
-    final hourStart = DateTime(date.year, date.month, date.day, hour);
+    final hourStart =
+        ScheduleClock.calendar(date.year, date.month, date.day, hour);
     final hourEnd = hourStart.add(const Duration(hours: 1));
     final intervalEnd = end ?? DateTime.now();
 

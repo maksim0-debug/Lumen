@@ -4,10 +4,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:intl/intl.dart';
+import 'dtek_snapshot.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'history_service.dart';
+
+class ParserFetchResult {
+  final Map<String, FullSchedule> schedules;
+  final String? html;
+  const ParserFetchResult(this.schedules, this.html);
+}
 
 class ParserService {
   static final ParserService _instance = ParserService._internal();
@@ -43,12 +49,16 @@ class ParserService {
     return allGroups[targetIndex];
   }
 
-  HeadlessInAppWebView? _headlessWebView;
-  Future<Map<String, FullSchedule>>? _ongoingFetch;
+  Future<ParserFetchResult>? _ongoingFetch;
 
   Future<void> init() async {}
 
   Future<Map<String, FullSchedule>> fetchAllSchedules() async {
+    return (await fetchSnapshot()).schedules;
+  }
+
+  /// HTML and schedules belong to the same completed fetch, including coalesced callers.
+  Future<ParserFetchResult> fetchSnapshot() async {
     if (_ongoingFetch != null) {
       AppLogger.d("⏳ Парсинг вже виконується, очікуємо спільний результат...",
           tag: 'Parser');
@@ -63,12 +73,12 @@ class ParserService {
     }
   }
 
-  Future<Map<String, FullSchedule>> _executeFetchAllSchedules() async {
+  Future<ParserFetchResult> _executeFetchAllSchedules() async {
     // 1. Try fast direct HTTP request first (works in background, < 500ms)
     await HistoryService()
         .logAction("Парсер: Старт fetchAllSchedules (v4 direct)");
     final httpResult = await _fetchWithHttpClient();
-    if (httpResult != null && httpResult.isNotEmpty) {
+    if (httpResult != null && httpResult.schedules.isNotEmpty) {
       await HistoryService()
           .logAction("Парсер: HTTP метод спрацював, повернення результату");
       return httpResult;
@@ -79,11 +89,12 @@ class ParserService {
     await HistoryService().logAction("Парсер: HTTP не вдалося, запуск WebView");
 
     AppLogger.i("🚀 Запуск Headless браузера (Hybrid)...", tag: 'Parser');
-    final completer = Completer<Map<String, FullSchedule>>();
+    final completer = Completer<ParserFetchResult>();
+    HeadlessInAppWebView? webView;
     bool isDisposed = false;
     Timer? fallbackTimeoutTimer;
 
-    void completeOnce(Map<String, FullSchedule> result) {
+    void completeOnce(ParserFetchResult result) {
       if (!completer.isCompleted) {
         completer.complete(result);
       }
@@ -95,19 +106,15 @@ class ParserService {
       if (isDisposed) return;
       isDisposed = true;
       try {
-        final wv = _headlessWebView;
-        _headlessWebView = null;
-        await wv?.dispose();
+        final wv = webView;
+        webView = null;
+        await wv?.dispose().timeout(const Duration(seconds: 3));
       } catch (_) {}
     }
 
-    if (_headlessWebView != null) {
-      await safeDispose();
-    }
-    isDisposed = false;
     int loadStopGeneration = 0;
 
-    _headlessWebView = HeadlessInAppWebView(
+    webView = HeadlessInAppWebView(
       // Завантажуємо сторінку графіків напряму без зайвого переходу з головної
       initialUrlRequest: URLRequest(url: WebUri(_url)),
       initialSettings: InAppWebViewSettings(
@@ -189,10 +196,16 @@ class ParserService {
 
             if (jsonString.isNotEmpty && jsonString.length > 100) {
               var schedules = await _parseAndSaveAllGroups(jsonString);
-              completeOnce(schedules);
-
-              await safeDispose();
-              return;
+              if (isDisposed ||
+                  completer.isCompleted ||
+                  currentGen != loadStopGeneration) {
+                return;
+              }
+              if (schedules.schedules.isNotEmpty) {
+                completeOnce(schedules);
+                await safeDispose();
+                return;
+              }
             } else {
               AppLogger.d("Спроба ${i + 1}/24: Дані поки не знайдено...",
                   tag: 'Parser');
@@ -235,7 +248,7 @@ class ParserService {
 
         if (!completer.isCompleted && currentGen == loadStopGeneration) {
           AppLogger.w("❌ Тайм-аут", tag: 'Parser');
-          completeOnce({});
+          completeOnce(const ParserFetchResult({}, null));
           await HistoryService()
               .logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
           await safeDispose();
@@ -247,7 +260,7 @@ class ParserService {
     fallbackTimeoutTimer = Timer(const Duration(seconds: 25), () async {
       if (!completer.isCompleted) {
         AppLogger.e("❌ Глобальний тайм-аут WebView (25 сек)", tag: 'Parser');
-        completeOnce({});
+        completeOnce(const ParserFetchResult({}, null));
         await HistoryService().logAction(
             "Парсер: Глобальний тайм-аут WebView 25 сек",
             level: "ERROR");
@@ -256,14 +269,14 @@ class ParserService {
     });
 
     try {
-      await _headlessWebView?.run();
+      await webView?.run().timeout(const Duration(seconds: 25));
     } catch (e) {
       AppLogger.e("❌ Помилка запуску WebView", tag: 'Parser', error: e);
-      completeOnce({});
+      completeOnce(const ParserFetchResult({}, null));
       await HistoryService()
           .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
       await safeDispose();
-      return {};
+      return const ParserFetchResult({}, null);
     }
 
     return completer.future;
@@ -309,10 +322,11 @@ class ParserService {
   }
 
   /// Прямий швидкий HTTP-запит з інтелектуальним авто-ретраєм
-  Future<Map<String, FullSchedule>?> _fetchWithHttpClient() async {
+  Future<ParserFetchResult?> _fetchWithHttpClient() async {
     // Спроба 1: Прямий запит
     final firstAttempt = await _singleDirectHttpRequest(attempt: 1);
-    if (firstAttempt.result != null && firstAttempt.result!.isNotEmpty) {
+    if (firstAttempt.result != null &&
+        firstAttempt.result!.schedules.isNotEmpty) {
       return firstAttempt.result;
     }
 
@@ -331,19 +345,23 @@ class ParserService {
     await Future.delayed(const Duration(milliseconds: 700));
 
     final retryAttempt = await _singleDirectHttpRequest(attempt: 2);
-    if (retryAttempt.result != null && retryAttempt.result!.isNotEmpty) {
+    if (retryAttempt.result != null &&
+        retryAttempt.result!.schedules.isNotEmpty) {
       return retryAttempt.result;
     }
 
     return null;
   }
 
-  Future<({Map<String, FullSchedule>? result, bool wasChallenge})>
+  Future<({ParserFetchResult? result, bool wasChallenge})>
       _singleDirectHttpRequest({required int attempt}) async {
     final client = HttpClient();
     client.userAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     client.connectionTimeout = const Duration(seconds: 12);
+    // connectionTimeout alone does not bound response headers or a stalled response body.
+    final deadline =
+        Timer(const Duration(seconds: 20), () => client.close(force: true));
 
     try {
       AppLogger.i("🌍 Пробуємо прямий HTTP запит (спроба $attempt)...",
@@ -359,7 +377,14 @@ class ParserService {
           "Парсер HTTP: Код відповіді ${response.statusCode} (спроба $attempt)");
 
       if (response.statusCode == 200) {
-        final html = await response.transform(utf8.decoder).join();
+        final bytes = <int>[];
+        await for (final chunk in response) {
+          if (bytes.length + chunk.length > 2 * 1024 * 1024) {
+            throw const FormatException('DTEK response exceeds 2 MiB');
+          }
+          bytes.addAll(chunk);
+        }
+        final html = utf8.decode(bytes);
         await HistoryService()
             .logAction("Парсер HTTP: Отримано ${html.length} байт HTML");
 
@@ -384,7 +409,7 @@ class ParserService {
           try {
             final result = await _parseAndSaveAllGroups(jsonString);
             await HistoryService().logAction(
-                "Парсер HTTP: Успішно розібрано ${result.length} груп");
+                "Парсер HTTP: Успішно розібрано ${result.schedules.length} груп");
             return (result: result, wasChallenge: false);
           } catch (e) {
             await HistoryService().logAction(
@@ -411,143 +436,39 @@ class ParserService {
       await HistoryService()
           .logAction("Парсер HTTP Помилка ($attempt): $e", level: "WARN");
     } finally {
+      deadline.cancel();
       client.close(force: true);
     }
     return (result: null, wasChallenge: false);
   }
 
   /// Публічний екстрактор для тестування та внутрішнього використання
-  String extractJsonFromHtml(String html) {
+  String extractJsonFromHtml(String html) => DtekSnapshot.extractJson(html);
+
+  Future<ParserFetchResult> _parseAndSaveAllGroups(String rawJson) async {
     try {
-      const String searchStart = 'DisconSchedule.fact =';
-      int startIndex = html.indexOf(searchStart);
-      if (startIndex == -1) return "";
-
-      startIndex += searchStart.length;
-      int endIndex = html.indexOf('DisconSchedule.showCurOutage', startIndex);
-
-      if (endIndex == -1) endIndex = html.indexOf('</script>', startIndex);
-      if (endIndex == -1) return "";
-
-      String rawJson = html.substring(startIndex, endIndex).trim();
-
-      int lastBrace = rawJson.lastIndexOf('}');
-      if (lastBrace != -1) {
-        rawJson = rawJson.substring(0, lastBrace + 1);
-      }
-      return rawJson;
-    } catch (e) {
-      return "";
-    }
-  }
-
-  Future<Map<String, FullSchedule>> _parseAndSaveAllGroups(
-      String rawJson) async {
-    try {
-      if (rawJson.startsWith('"') && rawJson.endsWith('"')) {
-        rawJson = jsonDecode(rawJson);
-      }
-
-      rawJson = rawJson.replaceAll(r'\"', '"');
-      if (rawJson.startsWith('"') && rawJson.endsWith('"')) {
-        rawJson = rawJson.substring(1, rawJson.length - 1);
-      }
-
-      Map<String, dynamic> jsonData = jsonDecode(rawJson);
-      String updateTime = jsonData['update'] ?? "Невідомо";
-      int todayTimestamp = jsonData['today'];
-      int tomorrowTimestamp = todayTimestamp + 86400;
-      Map<String, dynamic> dataObj = jsonData['data'];
-
-      // Format dates for history
-      final todayDate =
-          DateTime.fromMillisecondsSinceEpoch(todayTimestamp * 1000);
-      final tomorrowDate =
-          DateTime.fromMillisecondsSinceEpoch(tomorrowTimestamp * 1000);
-      final dateFormatter = DateFormat('yyyy-MM-dd');
-      final todayDateStr = dateFormatter.format(todayDate);
-      final tomorrowDateStr = dateFormatter.format(tomorrowDate);
-
-      Map<String, FullSchedule> result = {};
-
-      for (String group in allGroups) {
-        final todaySchedule =
-            _parseDay(dataObj, todayTimestamp.toString(), group);
-        final tomorrowSchedule =
-            _parseDay(dataObj, tomorrowTimestamp.toString(), group);
-
-        result[group] = FullSchedule(
-          today: todaySchedule,
-          tomorrow: tomorrowSchedule,
-          lastUpdatedSource: updateTime,
+      final snapshot = DtekSnapshot.parse(rawJson, allGroups);
+      try {
+        await HistoryService().persistSnapshot(
+          schedules: snapshot.schedules,
+          todayDate: snapshot.todayDate,
+          tomorrowDate: snapshot.tomorrowDate,
+          dtekUpdatedAt: snapshot.update,
         );
-
-        // Save history for today
-        if (!todaySchedule.isEmpty) {
-          await HistoryService().persistVersion(
-            groupKey: group,
-            targetDate: todayDateStr,
-            scheduleCode: todaySchedule.toEncodedString(),
-            dtekUpdatedAt: updateTime,
-          );
-        }
-
-        // Save history for tomorrow
-        if (!tomorrowSchedule.isEmpty) {
-          await HistoryService().persistVersion(
-            groupKey: group,
-            targetDate: tomorrowDateStr,
-            scheduleCode: tomorrowSchedule.toEncodedString(),
-            dtekUpdatedAt: updateTime,
-          );
-        }
+      } catch (historyError) {
+        AppLogger.w(
+            'Failed to persist snapshot history (non-fatal): $historyError',
+            tag: 'Parser');
+        await HistoryService()
+            .logAction('Парсер історія: $historyError', level: 'WARN');
       }
-      return result;
-    } catch (e) {
-      AppLogger.e("Помилка парсингу JSON", tag: 'Parser', error: e);
+      return ParserFetchResult(snapshot.schedules,
+          '<script>DisconSchedule.fact = ${jsonEncode(snapshot.fact)};</script>');
+    } catch (error) {
+      AppLogger.e('Invalid DTEK snapshot', tag: 'Parser', error: error);
       await HistoryService()
-          .logAction("Парсер: Помилка парсингу JSON: $e", level: "ERROR");
-      return {};
-    }
-  }
-
-  DailySchedule _parseDay(
-      Map<String, dynamic> dataObj, String dateKey, String groupKey) {
-    if (!dataObj.containsKey(dateKey) ||
-        !dataObj[dateKey].containsKey(groupKey)) {
-      return DailySchedule.empty();
-    }
-    Map<String, dynamic> groupHours = dataObj[dateKey][groupKey];
-    List<LightStatus> statuses = List.filled(24, LightStatus.unknown);
-
-    groupHours.forEach((hourStr, value) {
-      int hour = int.tryParse(hourStr) ?? -1;
-      int index = hour - 1;
-      if (index >= 0 && index < 24) {
-        statuses[index] = _mapStatus(value.toString());
-      }
-    });
-    return DailySchedule(statuses);
-  }
-
-  LightStatus _mapStatus(String value) {
-    switch (value) {
-      case 'yes':
-        return LightStatus.on;
-      case 'no':
-        return LightStatus.off;
-      case 'first':
-        return LightStatus.semiOn;
-      case 'second':
-        return LightStatus.semiOff;
-      case 'maybe':
-        return LightStatus.maybe;
-      case 'mfirst':
-        return LightStatus.maybe;
-      case 'msecond':
-        return LightStatus.maybe;
-      default:
-        return LightStatus.unknown;
+          .logAction('Парсер: Некоректний графік: $error', level: 'ERROR');
+      return const ParserFetchResult({}, null);
     }
   }
 }

@@ -55,6 +55,15 @@ class ScheduleSyncService {
   static Stream<Map<String, FullSchedule>> get onSyncCompleted =>
       _syncBroadcast.stream;
 
+  static Map<String, FullSchedule>? _lastPublished;
+
+  static void _publish(Map<String, FullSchedule> schedules) {
+    // Coalesced parser callers receive the same map. Publish that fetch exactly once.
+    if (identical(_lastPublished, schedules)) return;
+    _lastPublished = schedules;
+    _syncBroadcast.add(schedules);
+  }
+
   bool _isFetching = false;
   DateTime? lastFetchTime;
 
@@ -97,6 +106,14 @@ class ScheduleSyncService {
     if (allData.isEmpty) throw Exception("Пустий список");
     lastFetchTime = DateTime.now();
     return allData;
+  }
+
+  Future<ParserFetchResult> fetchSnapshotAndPublish() async {
+    final result = await _parser.fetchSnapshot();
+    if (result.schedules.isEmpty) throw StateError('No schedules received');
+    lastFetchTime = DateTime.now();
+    _publish(result.schedules);
+    return result;
   }
 
   /// Розрахунок статистики відключень для кожної групи перед оновленням.
@@ -143,7 +160,7 @@ class ScheduleSyncService {
       if (allData.isEmpty) throw Exception("Пустий список");
 
       lastFetchTime = DateTime.now();
-      _syncBroadcast.add(allData);
+      _publish(allData);
       return ScheduleSyncResult.success(allData);
     } catch (e) {
       AppLogger.e("Error loading data", tag: 'Main', error: e);
@@ -203,7 +220,7 @@ class ScheduleSyncService {
       if (allData.isEmpty) throw Exception("Пустий список");
 
       lastFetchTime = DateTime.now();
-      _syncBroadcast.add(allData);
+      _publish(allData);
 
       await onFetchSuccess(allData);
     } catch (e) {

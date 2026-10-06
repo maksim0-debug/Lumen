@@ -1,3 +1,4 @@
+import 'schedule_clock.dart';
 import 'dart:io';
 import 'package:home_widget/home_widget.dart';
 import '../models/schedule_status.dart';
@@ -31,7 +32,7 @@ class WidgetService {
         }
         await HomeWidget.saveWidgetData<String>('last_update_time', lastUpdate);
 
-        final now = DateTime.now();
+        final now = ScheduleClock.now();
         final dateStr = "${now.year}-${now.month}-${now.day}";
         await HomeWidget.saveWidgetData<String>('last_update_date', dateStr);
 

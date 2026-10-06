@@ -1,3 +1,4 @@
+import '../../schedule_clock.dart';
 import 'dart:io';
 
 import '../../../models/schedule_status.dart';
@@ -32,7 +33,7 @@ class ScheduleController {
       final schedules = preloadedSchedules ?? await _getSchedules();
       final fullSchedule = schedules[group];
 
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
       final todayStr =
           "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
 
@@ -90,7 +91,7 @@ class ScheduleController {
       final schedules = preloadedSchedules ?? await _getSchedules();
       final fullSchedule = schedules[group];
 
-      final tomorrow = DateTime.now().add(const Duration(days: 1));
+      final tomorrow = ScheduleClock.day(ScheduleClock.now(), 1);
       final tomorrowStr =
           "${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}";
 
@@ -149,8 +150,8 @@ class ScheduleController {
       final schedules = await _getSchedules();
       final fullSchedule = schedules[normalized];
 
-      final now = DateTime.now();
-      final tomorrow = now.add(const Duration(days: 1));
+      final now = ScheduleClock.now();
+      final tomorrow = ScheduleClock.day(now, 1);
       final todayStr =
           "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
       final tomorrowStr =
@@ -226,7 +227,7 @@ class ScheduleController {
       final schedules = preloadedSchedules ?? await _getSchedules();
       final fullSchedule = schedules[group];
 
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
       final countdown = CountdownService.calculateCountdown(
         today: fullSchedule?.today,
         tomorrow: fullSchedule?.tomorrow,
@@ -247,7 +248,7 @@ class ScheduleController {
 
       final targetMinuteOfDay =
           (now.hour * 60 + now.minute) + countdown.minutesRemaining;
-      final targetTime = DateTime(now.year, now.month, now.day)
+      final targetTime = ScheduleClock.day(now)
           .add(Duration(minutes: targetMinuteOfDay));
 
       final data = {
@@ -276,7 +277,7 @@ class ScheduleController {
   Future<ApiResponse> getAllGroups(HttpRequest request) async {
     try {
       final schedules = await _getSchedules();
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
       final currentSlotIndex = (now.hour * 60 + now.minute) ~/ 30;
 
       final groupsData = <String, dynamic>{};

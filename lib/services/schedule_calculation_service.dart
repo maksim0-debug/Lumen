@@ -1,3 +1,4 @@
+import 'schedule_clock.dart';
 import 'package:flutter/material.dart';
 import '../models/data_source_mode.dart';
 import '../models/interval_info.dart';
@@ -34,7 +35,7 @@ class ScheduleCalculationService {
     // Real mode: precise minutes from intervals
     if (powerMonitorEnabled && dataSourceMode == DataSourceMode.real) {
       final realMinutes = computeRealOutageMinutes(
-          realOutageIntervals, displayDate ?? DateTime.now());
+          realOutageIntervals, displayDate ?? ScheduleClock.now());
       if (realMinutes == 0 && realOutageIntervals.isEmpty) return "";
       final percent = (realMinutes / 1440 * 100).round();
       final h = realMinutes ~/ 60;
@@ -131,11 +132,11 @@ class ScheduleCalculationService {
   static DailySchedule buildRealScheduleFromIntervals(
       List<PowerOutageInterval> intervals, DateTime date,
       {DailySchedule? baseSchedule, DateTime? nowOverride}) {
-    final now = nowOverride ?? DateTime.now();
+    final now = nowOverride ?? ScheduleClock.now();
     final isToday = DateUtils.isSameDay(date, now);
     final isFuture = !isToday &&
-        DateTime(date.year, date.month, date.day)
-            .isAfter(DateTime(now.year, now.month, now.day));
+        ScheduleClock.calendar(date.year, date.month, date.day)
+            .isAfter(ScheduleClock.calendar(now.year, now.month, now.day));
 
     // Use forecast as base if available; otherwise for future days default to unknown, for today/past default to on.
     List<LightStatus> hours = baseSchedule != null
@@ -177,12 +178,14 @@ class ScheduleCalculationService {
       if (offMinutes >= 55) {
         hours[h] = LightStatus.off;
       } else if (offMinutes >= 30) {
-        final hourStart = DateTime(date.year, date.month, date.day, h);
+        final hourStart =
+            ScheduleClock.calendar(date.year, date.month, date.day, h);
         final hourMid = hourStart.add(const Duration(minutes: 30));
         int firstHalfOff = 0;
         int secondHalfOff = 0;
         for (final interval in intervals) {
-          final intervalEnd = interval.end ?? (nowOverride ?? DateTime.now());
+          final intervalEnd =
+              interval.end ?? (nowOverride ?? ScheduleClock.now());
           final s1 =
               interval.start.isAfter(hourStart) ? interval.start : hourStart;
           final e1 = intervalEnd.isBefore(hourMid) ? intervalEnd : hourMid;
@@ -210,19 +213,19 @@ class ScheduleCalculationService {
       {bool isOffline = false,
       DateTime? nowOverride,
       DailySchedule? baseSchedule}) {
-    final now = nowOverride ?? DateTime.now();
+    final now = nowOverride ?? ScheduleClock.now();
     final isToday = DateUtils.isSameDay(date, now);
     final isFuture = !isToday &&
-        DateTime(date.year, date.month, date.day)
-            .isAfter(DateTime(now.year, now.month, now.day));
+        ScheduleClock.calendar(date.year, date.month, date.day)
+            .isAfter(ScheduleClock.calendar(now.year, now.month, now.day));
 
     // Майбутній день не містить історичних фактів — формуємо інтервали з прогнозу
     if (isFuture) {
       return baseSchedule != null ? generateIntervals(baseSchedule) : [];
     }
 
-    final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = DateTime(date.year, date.month, date.day + 1);
+    final dayStart = ScheduleClock.calendar(date.year, date.month, date.day);
+    final dayEnd = ScheduleClock.calendar(date.year, date.month, date.day + 1);
 
     List<IntervalInfo> result = [];
     DateTime cursor = dayStart;

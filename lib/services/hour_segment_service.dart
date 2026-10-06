@@ -1,3 +1,4 @@
+import 'schedule_clock.dart';
 import 'package:flutter/material.dart';
 import '../models/hour_segment.dart';
 import '../models/power_event.dart';
@@ -23,14 +24,15 @@ class HourSegmentService {
     Color? greyColor,
     Color? noDataColor,
   }) {
-    final now = nowOverride ?? DateTime.now();
+    final now = nowOverride ?? ScheduleClock.now();
     final green = greenColor ?? defaultGreen;
     final red = redColor ?? defaultRed;
     final grey = greyColor ?? defaultGrey;
 
     final isToday =
         date.year == now.year && date.month == now.month && date.day == now.day;
-    final hourStart = DateTime(date.year, date.month, date.day, hour);
+    final hourStart =
+        ScheduleClock.calendar(date.year, date.month, date.day, hour);
     final hourEnd = hourStart.add(const Duration(hours: 1));
 
     // Повністю в майбутньому (сьогоднішні майбутні години або дні в майбутньому)
@@ -214,9 +216,9 @@ class HourSegmentService {
     DateTime date, {
     DateTime? nowOverride,
   }) {
-    final dayStart = DateTime(date.year, date.month, date.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final now = nowOverride ?? DateTime.now();
+    final dayStart = ScheduleClock.calendar(date.year, date.month, date.day);
+    final dayEnd = ScheduleClock.calendar(date.year, date.month, date.day + 1);
+    final now = nowOverride ?? ScheduleClock.now();
     int totalSeconds = 0;
 
     for (final interval in intervals) {

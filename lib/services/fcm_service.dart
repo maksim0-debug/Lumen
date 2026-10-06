@@ -1,3 +1,4 @@
+import 'schedule_clock.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -9,6 +10,8 @@ import 'notification_service.dart';
 import 'parser_service.dart';
 import 'preferences_helper.dart';
 import 'widget_service.dart';
+import 'fcm_event_guard.dart';
+import 'dtek_snapshot.dart';
 import '../utils/app_formatters.dart';
 
 @pragma('vm:entry-point')
@@ -22,7 +25,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     );
 
     final prefs = await PreferencesHelper.getSafeInstance();
-    final now = DateTime.now();
+    final now = ScheduleClock.now();
     final todayStr = AppFormatters.formatDateKey(now);
     final nowMs = now.millisecondsSinceEpoch;
 
@@ -30,7 +33,13 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // щоб Workmanager не згенерував дублюючий пуш під час фонового парсингу
     final incomingGroup = message.data['group'] as String?;
     final dayType = message.data['dayType'] as String? ?? 'today';
-    if (incomingGroup != null && incomingGroup.isNotEmpty) {
+    final targetDate = message.data['targetDate'] as String?;
+    final currentTarget = targetDate == null ||
+        targetDate.isEmpty ||
+        targetDate == DtekSnapshot.notificationDate(dayType, now: now);
+    if (currentTarget &&
+        incomingGroup != null &&
+        ParserService.allGroups.contains(incomingGroup)) {
       await prefs.setInt("last_change_notif_time_$incomingGroup", nowMs);
       final rawHash = message.data['scheduleHash'] as String?;
       if (rawHash != null && rawHash.isNotEmpty) {
@@ -157,6 +166,22 @@ class FcmService {
 
       // Обробка пушів, коли додаток відкритий (Foreground)
       FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+        try {
+          final date = message.data['targetDate'] as String?;
+          if (date != null &&
+              date.isNotEmpty &&
+              date !=
+                  DtekSnapshot.notificationDate(
+                      message.data['dayType'] as String? ?? 'today')) {
+            return;
+          }
+          if (!await FcmEventGuard.claim(message.data['eventId'] as String?)) {
+            return;
+          }
+        } catch (error) {
+          AppLogger.w('Cannot check FCM event identity', tag: 'FCM');
+          // Identity storage failure must not suppress a valid update.
+        }
         AppLogger.i(
           "🔔 FCM повідомлення у передньому плані: ${message.notification?.title}",
           tag: 'FCM',
@@ -193,7 +218,7 @@ class FcmService {
             final body =
                 notification?.body ?? message.data['body'] ?? defaultBody;
 
-            NotificationService().showImmediate(
+            await NotificationService().showImmediate(
               title,
               body,
               groupName: groupName,

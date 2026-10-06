@@ -27,7 +27,7 @@ export function validateServiceAccount(sa: any): ServiceAccount {
   if (!sa || typeof sa !== 'object') {
     throw new Error('Service Account configuration is missing or not an object');
   }
-  if (!sa.project_id || !sa.client_email || !sa.private_key) {
+  if (![sa.project_id, sa.client_email, sa.private_key].every(v => typeof v === 'string' && v.trim())) {
     throw new Error('Service Account is missing required fields (project_id, client_email, or private_key)');
   }
   return {
@@ -37,8 +37,16 @@ export function validateServiceAccount(sa: any): ServiceAccount {
   };
 }
 
+export function getServiceAccount(value?: string): ServiceAccount | null {
+  if (!value) return null;
+  try { return validateServiceAccount(JSON.parse(value.replace(/^\uFEFF/, '').trim())); }
+  catch { return null; }
+}
+
 let cachedAccessToken: string | null = null;
 let tokenExpiresAt = 0;
+let tokenAccount = '';
+let tokenRequest: Promise<string> | null = null;
 
 /**
  * Converts Base64 to Base64URL format
@@ -131,14 +139,30 @@ async function generateGoogleJwt(serviceAccount: ServiceAccount): Promise<string
  * Obtains or returns cached OAuth2 Bearer token for Google APIs
  */
 export async function getGoogleAccessToken(serviceAccount: ServiceAccount): Promise<string> {
+  const account = `${serviceAccount.project_id}:${serviceAccount.client_email}:${serviceAccount.private_key}`;
+  if (tokenAccount !== account) {
+    tokenAccount = account;
+    cachedAccessToken = null;
+    tokenExpiresAt = 0;
+    tokenRequest = null;
+  }
   const now = Date.now();
   if (cachedAccessToken && now < tokenExpiresAt - 60000) {
     return cachedAccessToken;
   }
 
+  if (tokenRequest) return tokenRequest;
+  const currentRequest = requestAccessToken(serviceAccount, account);
+  tokenRequest = currentRequest;
+  try { return await currentRequest; }
+  finally { if (tokenRequest === currentRequest) tokenRequest = null; }
+}
+
+async function requestAccessToken(serviceAccount: ServiceAccount, account: string): Promise<string> {
   const jwt = await generateGoogleJwt(serviceAccount);
 
   const response = await fetch('https://oauth2.googleapis.com/token', {
+    signal: AbortSignal.timeout(8_000),
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -155,10 +179,15 @@ export async function getGoogleAccessToken(serviceAccount: ServiceAccount): Prom
   }
 
   const data = (await response.json()) as { access_token: string; expires_in: number };
-  cachedAccessToken = data.access_token;
-  tokenExpiresAt = now + data.expires_in * 1000;
+  if (typeof data.access_token !== 'string' || !data.access_token || !Number.isFinite(data.expires_in) || data.expires_in <= 0) {
+    throw new Error('Invalid OAuth2 token response');
+  }
+  if (tokenAccount === account) {
+    cachedAccessToken = data.access_token;
+    tokenExpiresAt = Date.now() + data.expires_in * 1000;
+  }
 
-  return cachedAccessToken;
+  return data.access_token;
 }
 
 export interface FcmMessageOptions {
@@ -170,6 +199,8 @@ export interface FcmMessageOptions {
   scheduleHash?: string;
   outageMinutes?: number;
   dayType?: 'today' | 'tomorrow';
+  eventId?: string;
+  targetDate?: string;
 }
 
 /**
@@ -198,20 +229,30 @@ export async function sendFcmTopicNotification(
           scheduleHash: options.scheduleHash ?? '',
           outageMinutes: options.outageMinutes !== undefined ? String(options.outageMinutes) : '',
           dayType: options.dayType ?? 'today',
+          eventId: options.eventId ?? '',
+          targetDate: options.targetDate ?? '',
         },
         android: {
           priority: 'HIGH',
+          ttl: '900s', // A delayed schedule alert quickly becomes misleading.
           notification: {
+            // Re-delivery after an uncertain acknowledgement replaces the same system notification.
+            ...(options.eventId ? { tag: options.eventId } : {}),
             channel_id: 'schedule_channel',
             notification_priority: 'PRIORITY_HIGH',
             default_sound: true,
             default_vibrate_timings: true,
           },
         },
+        apns: {
+          headers: { 'apns-expiration': String(Math.floor(Date.now() / 1000) + 900) },
+          payload: { aps: { sound: 'default' } },
+        },
       },
     };
 
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(8_000),
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -221,11 +262,15 @@ export async function sendFcmTopicNotification(
     });
 
     if (!response.ok) {
+      if (response.status === 401) { cachedAccessToken = null; tokenExpiresAt = 0; }
       const err = await response.text();
       return { success: false, error: `FCM API ${response.status}: ${err}` };
     }
 
     const resJson = (await response.json()) as { name?: string };
+    if (typeof resJson.name !== 'string' || !resJson.name) {
+      return { success: false, error: 'FCM returned no message acknowledgement' };
+    }
     return { success: true, messageId: resJson.name };
   } catch (err: any) {
     return { success: false, error: err?.message || String(err) };

@@ -8,11 +8,13 @@ import 'package:path_provider/path_provider.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'preferences_helper.dart';
+import 'schedule_clock.dart';
 
 class HistoryService {
   static final HistoryService _instance = HistoryService._internal();
   factory HistoryService() => _instance;
   HistoryService._internal();
+  HistoryService.forTesting(Database database) : _database = database;
 
   Database? _database;
 
@@ -246,6 +248,127 @@ class HistoryService {
     await db.delete('app_logs');
   }
 
+  /// A fetched snapshot is all-or-nothing; old responses cannot become latest history.
+  Future<void> persistSnapshot({
+    required Map<String, FullSchedule> schedules,
+    required String todayDate,
+    required String tomorrowDate,
+    required String dtekUpdatedAt,
+  }) async {
+    final db = await database;
+    final incoming = ScheduleClock.parseVersion(dtekUpdatedAt);
+    final keys = schedules.keys.toList()..sort();
+    final fingerprint = jsonEncode([
+      todayDate,
+      tomorrowDate,
+      for (final key in keys)
+        [
+          key,
+          schedules[key]!.today.toEncodedString(),
+          schedules[key]!.tomorrow.toEncodedString()
+        ]
+    ]);
+    await db.transaction((txn) async {
+      // Kept separately from editable/imported history so those writers cannot reset the source watermark.
+      await txn.execute('CREATE TABLE IF NOT EXISTS dtek_snapshot_state ('
+          'id INTEGER PRIMARY KEY CHECK (id = 1), today_date TEXT NOT NULL, '
+          'version INTEGER NOT NULL, fingerprint TEXT NOT NULL)');
+      await txn.execute('CREATE TABLE IF NOT EXISTS dtek_current_schedule ('
+          'group_key TEXT NOT NULL, target_date TEXT NOT NULL, history_id INTEGER NOT NULL, '
+          'PRIMARY KEY (group_key, target_date))');
+      final metadata = await txn.query('dtek_snapshot_state', where: 'id = 1');
+      if (metadata.isNotEmpty) {
+        final latest = metadata.single;
+        final latestDate = latest['today_date'] as String;
+        final latestVer = latest['version'] as int;
+        if (todayDate.compareTo(latestDate) < 0 ||
+            (todayDate == latestDate && incoming < latestVer)) {
+          throw const FormatException('Older DTEK snapshot rejected');
+        }
+        if (incoming == latestVer &&
+            todayDate == latestDate &&
+            fingerprint != latest['fingerprint']) {
+          throw const FormatException('Conflicting DTEK snapshot version');
+        }
+      }
+      for (final entry in schedules.entries) {
+        for (final day in [
+          (todayDate, entry.value.today),
+          (tomorrowDate, entry.value.tomorrow)
+        ]) {
+          final rows = await txn.query('schedule_history',
+              where: 'group_key = ? AND target_date = ?',
+              whereArgs: [entry.key, day.$1],
+              orderBy: 'id DESC');
+          // Bootstrap the watermark from source rows, excluding manual/time-only legacy records.
+          if (metadata.isEmpty ||
+              (metadata.single['today_date'] != todayDate &&
+                  day.$1 == todayDate)) {
+            for (final row in rows) {
+              int version;
+              try {
+                version = ScheduleClock.parseVersion(
+                    row['dtek_updated_at'] as String);
+              } on FormatException {
+                continue;
+              }
+              if (version > incoming) {
+                throw const FormatException('Older DTEK snapshot rejected');
+              }
+              if (version == incoming &&
+                  row['schedule_code'] != '9' * 24 &&
+                  row['schedule_code'] != day.$2.toEncodedString()) {
+                throw const FormatException(
+                    'Conflicting DTEK snapshot version');
+              }
+            }
+          }
+          // An empty tomorrow is persisted as a tombstone; archived publications remain available.
+          if (day.$2.isEmpty &&
+              (rows.isEmpty || rows.first['schedule_code'] == '9' * 24)) {
+            continue;
+          }
+          if (rows.isNotEmpty &&
+              rows.first['schedule_code'] == day.$2.toEncodedString() &&
+              rows.first['dtek_updated_at'] == dtekUpdatedAt) {
+            await txn.insert(
+                'dtek_current_schedule',
+                {
+                  'group_key': entry.key,
+                  'target_date': day.$1,
+                  'history_id': rows.first['id'],
+                },
+                conflictAlgorithm: ConflictAlgorithm.replace);
+            continue;
+          }
+          final historyId = await txn.insert('schedule_history', {
+            'group_key': entry.key,
+            'target_date': day.$1,
+            'schedule_code': day.$2.toEncodedString(),
+            'dtek_updated_at': dtekUpdatedAt,
+          });
+          await txn.insert(
+              'dtek_current_schedule',
+              {
+                'group_key': entry.key,
+                'target_date': day.$1,
+                'history_id': historyId,
+              },
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+      await txn.insert(
+          'dtek_snapshot_state',
+          {
+            'id': 1,
+            'today_date': todayDate,
+            'version': incoming,
+            'fingerprint': fingerprint,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
   Future<void> persistVersion({
     required String groupKey,
     required String targetDate,
@@ -277,24 +400,41 @@ class HistoryService {
     }
   }
 
+  /// Imported archive rows must not override a fetched current snapshot. Explicit manual edits may.
+  Future<Map<String, dynamic>?> _effectiveLatest(
+      DatabaseExecutor db, String group, String date) async {
+    final table = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dtek_current_schedule'");
+    if (table.isNotEmpty) {
+      final pointer = await db.query('dtek_current_schedule',
+          where: 'group_key = ? AND target_date = ?', whereArgs: [group, date]);
+      if (pointer.isNotEmpty) {
+        final sourceId = pointer.single['history_id'] as int;
+        final current = await db.query('schedule_history',
+            where:
+                "group_key = ? AND target_date = ? AND (id = ? OR (id > ? AND dtek_updated_at LIKE '%(Manual)'))",
+            whereArgs: [group, date, sourceId, sourceId],
+            orderBy: 'id DESC',
+            limit: 1);
+        if (current.isNotEmpty) return current.single;
+      }
+    }
+    final rows = await db.query('schedule_history',
+        where: 'group_key = ? AND target_date = ?',
+        whereArgs: [group, date],
+        orderBy: 'id DESC',
+        limit: 1);
+    return rows.isEmpty ? null : rows.single;
+  }
+
   Future<String?> getLatestUpdatedAt({
     required String groupKey,
     required String targetDate,
   }) async {
     final db = await database;
 
-    final List<Map<String, dynamic>> maps = await db.query(
-      'schedule_history',
-      columns: ['dtek_updated_at'],
-      where: 'group_key = ? AND target_date = ?',
-      whereArgs: [groupKey, targetDate],
-      orderBy: 'id DESC',
-      limit: 1,
-    );
-
-    if (maps.isNotEmpty) {
-      return maps.first['dtek_updated_at'] as String;
-    }
+    final latest = await _effectiveLatest(db, groupKey, targetDate);
+    if (latest != null) return latest['dtek_updated_at'] as String;
     return null;
   }
 
@@ -314,8 +454,15 @@ class HistoryService {
       orderBy: 'id ASC',
     );
 
+    final effectiveLatest = await _effectiveLatest(db, groupKey, dateStr);
+    final orderedMaps = List<Map<String, dynamic>>.of(maps);
+    if (effectiveLatest != null) {
+      orderedMaps.removeWhere((row) => row['id'] == effectiveLatest['id']);
+      orderedMaps.add(effectiveLatest);
+    }
+
     List<ScheduleVersion> versions = [];
-    for (var map in maps) {
+    for (var map in orderedMaps) {
       String timeStr = map['dtek_updated_at'] as String;
       DateTime savedAt;
       try {
@@ -697,8 +844,8 @@ class HistoryService {
   Future<Map<String, FullSchedule>> getLastKnownSchedules() async {
     final db = await database;
     final Map<String, FullSchedule> result = {};
-    final now = DateTime.now();
-    final tomorrow = now.add(const Duration(days: 1));
+    final now = ScheduleClock.now();
+    final tomorrow = ScheduleClock.day(now, 1);
 
     final todayStr =
         "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
@@ -723,36 +870,22 @@ class HistoryService {
 
     for (String group in allGroups) {
       // 1. Get Today's schedule
-      final List<Map<String, dynamic>> todayMaps = await db.query(
-        'schedule_history',
-        where: 'group_key = ? AND target_date = ?',
-        whereArgs: [group, todayStr],
-        orderBy: 'id DESC', // Get the latest version
-        limit: 1,
-      );
-
+      final todayRow = await _effectiveLatest(db, group, todayStr);
       DailySchedule todaySchedule = DailySchedule.empty();
       // Using a local var for lastUpdated to avoid conflict if I used it elsewhere
       String lastUpdatedText = "Немає (Offline/Cache)";
 
-      if (todayMaps.isNotEmpty) {
-        final map = todayMaps.first;
+      if (todayRow != null) {
+        final map = todayRow;
         todaySchedule = DailySchedule.fromEncodedString(map['schedule_code']);
         lastUpdatedText = map['dtek_updated_at'] ?? "Невідомо";
       }
 
       // 2. Get Tomorrow's schedule
-      final List<Map<String, dynamic>> tomorrowMaps = await db.query(
-        'schedule_history',
-        where: 'group_key = ? AND target_date = ?',
-        whereArgs: [group, tomorrowStr],
-        orderBy: 'id DESC', // Get the latest version
-        limit: 1,
-      );
-
+      final tomorrowRow = await _effectiveLatest(db, group, tomorrowStr);
       DailySchedule tomorrowSchedule = DailySchedule.empty();
-      if (tomorrowMaps.isNotEmpty) {
-        final map = tomorrowMaps.first;
+      if (tomorrowRow != null) {
+        final map = tomorrowRow;
         tomorrowSchedule =
             DailySchedule.fromEncodedString(map['schedule_code']);
       }

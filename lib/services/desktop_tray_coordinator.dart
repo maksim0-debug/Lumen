@@ -4,6 +4,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'api/local_api_service.dart';
+import 'desktop_sync_service.dart';
 
 class DesktopTrayCoordinator with WindowListener, TrayListener {
   Future<void> init() async {
@@ -15,6 +16,7 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
   }
 
   void dispose() {
+    DesktopSyncService().dispose();
     if (Platform.isWindows) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
@@ -49,6 +51,7 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
       windowManager.show();
       windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
+      DesktopSyncService().dispose();
       await LocalApiService().stop();
       windowManager.destroy();
     }

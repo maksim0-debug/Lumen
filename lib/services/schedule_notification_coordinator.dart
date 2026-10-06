@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -7,6 +8,7 @@ import '../services/notification_service.dart';
 import '../services/preferences_helper.dart';
 import '../services/widget_service.dart';
 import '../utils/app_formatters.dart';
+import 'schedule_clock.dart';
 
 class ScheduleNotificationCoordinator {
   final NotificationService _notifier;
@@ -23,7 +25,23 @@ class ScheduleNotificationCoordinator {
 
   String _formatDateKey(DateTime dt) => AppFormatters.formatDateKey(dt);
 
+  static Future<void> _updateTail = Future.value();
+
   Future<void> handleScheduleUpdate({
+    required Map<String, FullSchedule> allSchedules,
+    required String currentGroup,
+    Iterable<String>? notificationGroups,
+  }) {
+    final result = _updateTail.then((_) => _handleScheduleUpdate(
+        allSchedules: allSchedules,
+        currentGroup: currentGroup,
+        notificationGroups: notificationGroups));
+    _updateTail =
+        result.then<void>((_) {}, onError: (Object error, StackTrace stack) {});
+    return result;
+  }
+
+  Future<void> _handleScheduleUpdate({
     required Map<String, FullSchedule> allSchedules,
     required String currentGroup,
     Iterable<String>? notificationGroups,
@@ -31,7 +49,7 @@ class ScheduleNotificationCoordinator {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       final notifyChange = prefs.getBool('notify_schedule_change') ?? true;
-      final now = DateTime.now();
+      final now = ScheduleClock.now();
 
       final groupsToCheck = <String>{
         ...?notificationGroups,
@@ -73,7 +91,8 @@ class ScheduleNotificationCoordinator {
               msg = "Змінився час відключень на сьогодні ⚡";
             }
 
-            _notifier.showImmediate("Графік змінено!", msg, groupName: group);
+            await _notifier.showImmediate("Графік змінено!", msg,
+                groupName: group);
           }
         }
 
