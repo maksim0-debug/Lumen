@@ -220,8 +220,8 @@ class LocalApiService {
         }
       }
 
-      // 3. Normalize path: strip trailing slash for consistent routing
-      var path = request.uri.path;
+      // 3. Normalize path: collapse duplicate slashes and strip trailing slash for consistent routing
+      var path = request.uri.path.replaceAll(RegExp(r'/+'), '/');
       if (path.length > 1 && path.endsWith('/')) {
         path = path.substring(0, path.length - 1);
       }

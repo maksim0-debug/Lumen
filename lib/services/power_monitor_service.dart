@@ -1094,6 +1094,13 @@ class PowerMonitorService {
         '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}T'
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
 
+    String formatIsoTimeEnd(DateTime dt) {
+      if (dt.microsecond > 0 || dt.millisecond > 0) {
+        return dt.toIso8601String();
+      }
+      return '${formatIsoTime(dt)}.999999';
+    }
+
     if (startDate != null && endDate != null) {
       final startStr = formatIsoTime(startDate);
       // If endDate represents full day boundary (23:59:59), use strict next day boundary to capture all fractional seconds
@@ -1105,7 +1112,7 @@ class PowerMonitorService {
         where = "timestamp >= ? AND timestamp < ?";
         whereArgs = [startStr, endNextDayStr];
       } else {
-        final endStr = formatIsoTime(endDate);
+        final endStr = formatIsoTimeEnd(endDate);
         where = "timestamp >= ? AND timestamp <= ?";
         whereArgs = [startStr, endStr];
       }
@@ -1122,7 +1129,7 @@ class PowerMonitorService {
         where = "timestamp < ?";
         whereArgs = [endNextDayStr];
       } else {
-        final endStr = formatIsoTime(endDate);
+        final endStr = formatIsoTimeEnd(endDate);
         where = "timestamp <= ?";
         whereArgs = [endStr];
       }

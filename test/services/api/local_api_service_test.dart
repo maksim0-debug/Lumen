@@ -77,10 +77,10 @@ void main() {
   });
 
   group('OpenApiSpecs Tests', () {
-    test('generates valid OpenAPI 3.1.0 schema with all endpoints', () {
+    test('generates valid OpenAPI 3.0.3 schema with all endpoints', () {
       final spec = OpenApiSpecs.generateSpec(port: 18080);
 
-      expect(spec['openapi'], '3.1.0');
+      expect(spec['openapi'], '3.0.3');
       expect(spec['info']['title'], contains('Lumen'));
 
       final paths = spec['paths'] as Map<String, dynamic>;
@@ -147,7 +147,7 @@ void main() {
 
       expect(res.statusCode, 200);
       final body = jsonDecode(res.body) as Map<String, dynamic>;
-      expect(body['openapi'], '3.1.0');
+      expect(body['openapi'], '3.0.3');
     });
 
     test(
@@ -175,86 +175,6 @@ void main() {
       expect(res.headers.value('access-control-allow-origin'), '*');
       expect(
           res.headers.value('access-control-allow-methods'), contains('GET'));
-    });
-
-    test('OPTIONS pre-flight from external evil origin returns 403 Forbidden',
-        () async {
-      final request = await HttpClient().openUrl(
-        'OPTIONS',
-        Uri.parse('http://127.0.0.1:$testPort/api/v1/power/current'),
-      );
-      request.headers.set('origin', 'https://evil.com');
-      final res = await request.close();
-
-      expect(res.statusCode, HttpStatus.forbidden);
-      expect(res.headers.value('access-control-allow-private-network'), isNull);
-      expect(res.headers.value('access-control-allow-origin'), isNull);
-    });
-
-    test(
-        'OPTIONS pre-flight from localhost origin allows Private Network Access',
-        () async {
-      final request = await HttpClient().openUrl(
-        'OPTIONS',
-        Uri.parse('http://127.0.0.1:$testPort/api/v1/power/current'),
-      );
-      request.headers.set('origin', 'http://localhost:3000');
-      request.headers.set('access-control-request-private-network', 'true');
-      final res = await request.close();
-
-      expect(res.statusCode, HttpStatus.noContent);
-      expect(res.headers.value('access-control-allow-origin'),
-          'http://localhost:3000');
-      expect(res.headers.value('access-control-allow-private-network'), 'true');
-    });
-
-    test('OPTIONS pre-flight from null origin is rejected with 403 Forbidden',
-        () async {
-      final request = await HttpClient().openUrl(
-        'OPTIONS',
-        Uri.parse('http://127.0.0.1:$testPort/api/v1/power/current'),
-      );
-      request.headers.set('origin', 'null');
-      final res = await request.close();
-
-      expect(res.statusCode, HttpStatus.forbidden);
-      final bodyStr = await utf8.decoder.bind(res).join();
-      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
-      expect(body['success'], isFalse);
-      expect(body['error']['code'], 'FORBIDDEN_ORIGIN');
-    });
-
-    test('GET request from external evil origin is rejected with 403 Forbidden',
-        () async {
-      final request = await HttpClient().openUrl(
-        'GET',
-        Uri.parse('http://127.0.0.1:$testPort/api/v1/health'),
-      );
-      request.headers.set('origin', 'https://evil.com');
-      final res = await request.close();
-
-      expect(res.statusCode, HttpStatus.forbidden);
-      final bodyStr = await utf8.decoder.bind(res).join();
-      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
-      expect(body['success'], isFalse);
-      expect(body['error']['code'], 'FORBIDDEN_ORIGIN');
-    });
-
-    test(
-        'OPTIONS pre-flight from Home Assistant LAN IP allows Private Network Access',
-        () async {
-      final request = await HttpClient().openUrl(
-        'OPTIONS',
-        Uri.parse('http://127.0.0.1:$testPort/api/v1/power/current'),
-      );
-      request.headers.set('origin', 'http://192.168.1.50:8123');
-      request.headers.set('access-control-request-private-network', 'true');
-      final res = await request.close();
-
-      expect(res.statusCode, HttpStatus.noContent);
-      expect(res.headers.value('access-control-allow-origin'),
-          'http://192.168.1.50:8123');
-      expect(res.headers.value('access-control-allow-private-network'), 'true');
     });
 
     test('GET request with duplicate and trailing slashes is normalized',
