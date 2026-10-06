@@ -20,8 +20,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     WidgetsFlutterBinding.ensureInitialized();
     await Firebase.initializeApp();
     AppLogger.i(
-      "📩 FCM Бекграунд пуш отримано [${message.messageId}]: ${message.notification?.title ?? message.data['title']}",
+      "📩 FCM Бекграунд пуш [${message.messageId}] для групи ${message.data['group'] ?? 'не вказано'}: ${message.notification?.title ?? message.data['title']}",
       tag: 'FCM',
+      persistToHistory: true,
     );
 
     final prefs = await PreferencesHelper.getSafeInstance();
@@ -41,6 +42,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         incomingGroup != null &&
         ParserService.allGroups.contains(incomingGroup)) {
       await prefs.setInt("last_change_notif_time_$incomingGroup", nowMs);
+      await prefs.remove("fcm_pending_hash_${incomingGroup}_today");
+      await prefs.remove("fcm_pending_time_${incomingGroup}_today");
       final rawHash = message.data['scheduleHash'] as String?;
       if (rawHash != null && rawHash.isNotEmpty) {
         if (dayType == 'today') {
@@ -67,13 +70,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       final notificationService = NotificationService();
       await notificationService.init();
 
-      List<String> notificationGroups =
-          prefs.getStringList('notification_groups') ?? [];
-
-      if (notificationGroups.isEmpty) {
-        final selectedGroup = prefs.getString('selected_group') ?? "GPV2.1";
-        notificationGroups = [selectedGroup];
-      }
+      final List<String> notificationGroups =
+          PreferencesHelper.getActiveNotificationGroups(prefs);
 
       bool first = true;
 
@@ -94,6 +92,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
           await prefs.setString(keyHash, mySchedule.today.scheduleHash);
           await prefs.setString(keyDate, todayStr);
           await prefs.setInt(keyLastNotif, nowMs);
+          await prefs.remove("fcm_pending_hash_${group}_today");
+          await prefs.remove("fcm_pending_time_${group}_today");
         }
       }
       AppLogger.i("✅ Фонове оновлення віджета та нагадувань завершено",
@@ -141,7 +141,8 @@ class FcmService {
     if (_isInitialized) return;
 
     try {
-      AppLogger.i("Ініціалізація Firebase та FCM...", tag: 'FCM');
+      AppLogger.i("Ініціалізація Firebase та FCM...",
+          tag: 'FCM', persistToHistory: true);
       await Firebase.initializeApp();
 
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
@@ -162,6 +163,7 @@ class FcmService {
       AppLogger.i(
         "Статус дозволу сповіщень FCM: ${settings.authorizationStatus}",
         tag: 'FCM',
+        persistToHistory: true,
       );
 
       // Обробка пушів, коли додаток відкритий (Foreground)
@@ -183,8 +185,9 @@ class FcmService {
           // Identity storage failure must not suppress a valid update.
         }
         AppLogger.i(
-          "🔔 FCM повідомлення у передньому плані: ${message.notification?.title}",
+          "🔔 FCM повідомлення у передньому плані [${message.messageId}] для групи ${message.data['group'] ?? 'не вказано'}: ${message.notification?.title ?? message.data['title']}",
           tag: 'FCM',
+          persistToHistory: true,
         );
 
         // Перевіряємо, чи користувач увімкнув відповідне сповіщення
@@ -196,11 +199,8 @@ class FcmService {
               : (prefs.getBool('notify_schedule_change') ?? true);
 
           final groupName = message.data['group'] as String?;
-          final notificationGroups =
-              prefs.getStringList('notification_groups') ?? [];
-          final selectedGroup = prefs.getString('selected_group') ?? "GPV2.1";
           final activeGroups =
-              notificationGroups.isEmpty ? [selectedGroup] : notificationGroups;
+              PreferencesHelper.getActiveNotificationGroups(prefs);
 
           final isGroupTargeted =
               groupName == null || activeGroups.contains(groupName);
@@ -253,11 +253,18 @@ class FcmService {
       }
 
       _isInitialized = true;
-      AppLogger.i("✅ FCM успішно ініціалізовано", tag: 'FCM');
+      final prefs = await PreferencesHelper.getSafeInstance();
+      await prefs.setBool('fcm_initialized', true);
+      AppLogger.i("✅ FCM успішно ініціалізовано",
+          tag: 'FCM', persistToHistory: true);
 
-      // Синхронізуємо підписки на топіки для активних груп
-      await syncTopicSubscriptions();
+      // Синхронізуємо підписки на топіки для активних груп з повним підтвердженням
+      await syncTopicSubscriptions(forceResubscribe: true);
     } catch (e, stackTrace) {
+      try {
+        final prefs = await PreferencesHelper.getSafeInstance();
+        await prefs.setBool('fcm_initialized', false);
+      } catch (_) {}
       AppLogger.e(
         "Помилка ініціалізації FCM",
         tag: 'FCM',
@@ -267,10 +274,53 @@ class FcmService {
     }
   }
 
-  /// Синхронізує підписки на FCM-топіки відповідно до налаштованих груп та тумблерів сповіщень
-  Future<void> syncTopicSubscriptions() async {
+  /// Перевірити, чи успішно ініціалізовано FCM на пристрої
+  static Future<bool> isFcmInitialized() async {
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      return prefs.getBool('fcm_initialized') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _isSyncing = false;
+  bool _hasPendingSync = false;
+  bool _pendingForceResubscribe = false;
+
+  /// Синхронізує підписки на FCM-топіки відповідно до налаштованих груп та тумблерів сповіщень.
+  /// Забезпечує чергу та серіалізацію, щоб уникнути race conditions при швидкому перемиканні налаштувань.
+  /// [forceResubscribe] — якщо true, примусово підтверджує підписку на всі цільові топіки (наприклад, при старті);
+  /// якщо false, оновлює лише змінені топіки (дельту), заощаджуючи ресурси та трафік.
+  Future<void> syncTopicSubscriptions({bool forceResubscribe = false}) async {
     if (!isSupportedPlatform || !_isInitialized) return;
 
+    if (forceResubscribe) {
+      _pendingForceResubscribe = true;
+    }
+
+    if (_isSyncing) {
+      _hasPendingSync = true;
+      AppLogger.d("FCM: Синхронізація вже триває, черговий запит відкладено",
+          tag: 'FCM');
+      return;
+    }
+
+    _isSyncing = true;
+    try {
+      do {
+        _hasPendingSync = false;
+        final shouldForce = _pendingForceResubscribe;
+        _pendingForceResubscribe = false;
+        await _executeSyncTopicSubscriptions(forceResubscribe: shouldForce);
+      } while (_hasPendingSync);
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
+  Future<void> _executeSyncTopicSubscriptions(
+      {bool forceResubscribe = false}) async {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       final notifyScheduleChange =
@@ -282,13 +332,8 @@ class FcmService {
       final currentSubscribed =
           (prefs.getStringList('fcm_subscribed_topics') ?? []).toSet();
 
-      List<String> notificationGroups =
-          prefs.getStringList('notification_groups') ?? [];
-
-      if (notificationGroups.isEmpty) {
-        final selectedGroup = prefs.getString('selected_group') ?? "GPV2.1";
-        notificationGroups = [selectedGroup];
-      }
+      final notificationGroups =
+          PreferencesHelper.getActiveNotificationGroups(prefs);
 
       final targetTopics = <String>{};
       if (notifyScheduleChange) {
@@ -302,29 +347,41 @@ class FcmService {
         }
       }
 
+      AppLogger.d(
+        "FCM: Старт синхронізації топіків. Цільові групи (${notificationGroups.length}): ${notificationGroups.join(', ')}. Усього топіків: ${targetTopics.length} (force: $forceResubscribe)",
+        tag: 'FCM',
+      );
+
       final activeSubscribed = currentSubscribed.toSet();
 
-      // Відписуємося від груп або топіків, які більше не активні
+      // 1. Відписуємося від груп або топіків, які більше не активні
       final toUnsubscribe = currentSubscribed.difference(targetTopics);
       for (final topic in toUnsubscribe) {
         try {
           await messaging.unsubscribeFromTopic(topic);
           activeSubscribed.remove(topic);
-          AppLogger.i("Відписано від топіка FCM: $topic", tag: 'FCM');
+          AppLogger.d("FCM: Відписано від застарілого топіка: $topic",
+              tag: 'FCM');
         } catch (e) {
-          AppLogger.w("Не вдалося відписатися від $topic: $e", tag: 'FCM');
+          AppLogger.w("FCM: Не вдалося відписатися від $topic: $e", tag: 'FCM');
         }
       }
 
-      // Підписуємося на нові активні топіки
-      final toSubscribe = targetTopics.difference(currentSubscribed);
-      for (final topic in toSubscribe) {
+      // 2. Підписуємося на цільові топіки:
+      // Якщо forceResubscribe == true — підтверджуємо всі топіки для усунення «фантомного кешу».
+      // Якщо false — підписуємося лише на дельту нових топіків.
+      final topicsToSubscribe = forceResubscribe
+          ? targetTopics
+          : targetTopics.difference(currentSubscribed);
+
+      for (final topic in topicsToSubscribe) {
         try {
           await messaging.subscribeToTopic(topic);
           activeSubscribed.add(topic);
-          AppLogger.i("Підписано на топік FCM: $topic", tag: 'FCM');
+          AppLogger.d("FCM: Підтверджено підписку на топік: $topic",
+              tag: 'FCM');
         } catch (e) {
-          AppLogger.w("Не вдалося підписатися на $topic: $e", tag: 'FCM');
+          AppLogger.w("FCM: Не вдалося підписатися на $topic: $e", tag: 'FCM');
         }
       }
 
@@ -332,9 +389,14 @@ class FcmService {
         'fcm_subscribed_topics',
         activeSubscribed.toList(),
       );
-      AppLogger.d("Топіки FCM синхронізовано: $activeSubscribed", tag: 'FCM');
-    } catch (e) {
-      AppLogger.e("Помилка синхронізації топіків FCM", tag: 'FCM', error: e);
+      AppLogger.i(
+        "✅ FCM: Синхронізацію топіків завершено. Активні топіки (${activeSubscribed.length}): ${activeSubscribed.join(', ')}",
+        tag: 'FCM',
+        persistToHistory: true,
+      );
+    } catch (e, stackTrace) {
+      AppLogger.e("Помилка синхронізації топіків FCM",
+          tag: 'FCM', error: e, stackTrace: stackTrace);
     }
   }
 }

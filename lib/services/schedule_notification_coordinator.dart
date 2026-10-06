@@ -76,20 +76,10 @@ class ScheduleNotificationCoordinator {
             final newMinutes = schedule.today.totalOutageMinutes;
             final oldMinutes =
                 DailySchedule.fromEncodedString(oldHash).totalOutageMinutes;
-
-            final diff = newMinutes - oldMinutes;
-            final String msg;
-            if (diff != 0) {
-              final diffHours = (diff.abs() / 60);
-              final diffStr = diffHours == diffHours.toInt()
-                  ? diffHours.toInt().toString()
-                  : diffHours.toStringAsFixed(1);
-              msg = diff > 0
-                  ? "Світла стало МЕНШЕ на $diffStr год. 😔"
-                  : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
-            } else {
-              msg = "Змінився час відключень на сьогодні ⚡";
-            }
+            final msg = AppFormatters.formatScheduleChangeMessage(
+              oldMinutes: oldMinutes,
+              newMinutes: newMinutes,
+            );
 
             await _notifier.showImmediate("Графік змінено!", msg,
                 groupName: group);

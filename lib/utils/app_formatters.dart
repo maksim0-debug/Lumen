@@ -57,6 +57,25 @@ class AppFormatters {
     if (mod10 >= 2 && mod10 <= 4) return "версії";
     return "версій";
   }
+
+  /// Форматування тексту сповіщення про зміну графіку на основі різниці у хвилинах відключень.
+  static String formatScheduleChangeMessage({
+    required int oldMinutes,
+    required int newMinutes,
+  }) {
+    final diff = newMinutes - oldMinutes;
+    if (diff != 0) {
+      final diffHours = (diff.abs() / 60);
+      final diffStr = diffHours == diffHours.toInt()
+          ? diffHours.toInt().toString()
+          : diffHours.toStringAsFixed(1);
+      return diff > 0
+          ? "Світла стало МЕНШЕ на $diffStr год. 😔"
+          : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
+    } else {
+      return "Змінився час відключень на сьогодні ⚡";
+    }
+  }
 }
 
 // Top-level aliases for direct functional usage
@@ -72,3 +91,11 @@ String formatDate(DateTime dt) => AppFormatters.formatDate(dt);
 String formatGroupName(String groupKey) =>
     AppFormatters.formatGroupName(groupKey);
 String pluralVersions(int count) => AppFormatters.pluralVersions(count);
+String formatScheduleChangeMessage({
+  required int oldMinutes,
+  required int newMinutes,
+}) =>
+    AppFormatters.formatScheduleChangeMessage(
+      oldMinutes: oldMinutes,
+      newMinutes: newMinutes,
+    );

@@ -5,6 +5,14 @@ import 'package:path/path.dart' show join;
 import 'app_logger.dart';
 
 class PreferencesHelper {
+  /// Отримати список активних груп сповіщень з безпечним значенням за замовчуванням.
+  static List<String> getActiveNotificationGroups(SharedPreferences prefs) {
+    final groups = prefs.getStringList('notification_groups') ?? [];
+    if (groups.isNotEmpty) return groups;
+    final selected = prefs.getString('selected_group') ?? 'GPV2.1';
+    return [selected];
+  }
+
   /// Otrimaty ekzemplyar SharedPreferences bezpechno.
   /// Yakshcho fayl poshkodzhenyi (FormatException), vin bude vydalenyj,
   /// i povernetsya novyj chystyj ekzemplyar.

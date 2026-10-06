@@ -26,6 +26,10 @@ class NotificationService {
     AppLogger.d("Конструктор викликано", tag: 'NotificationService');
   }
 
+  /// Базовий ID для миттєвих сповіщень по групах (діапазон 9000000..9000011).
+  /// Повністю ізольований від запланованих сповіщень (діапазон 0..1199999).
+  static const int immediateGroupNotificationBaseId = 9000000;
+
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
@@ -226,8 +230,12 @@ class NotificationService {
     }
   }
 
-  Future<void> showImmediate(String title, String body,
-      {String? groupName}) async {
+  Future<void> showImmediate(
+    String title,
+    String body, {
+    String? groupName,
+    int? notificationId,
+  }) async {
     AppLogger.d("========== showImmediate ==========",
         tag: 'NotificationService');
     AppLogger.i("title: '$title', body: '$body', group: '$groupName'",
@@ -247,13 +255,16 @@ class NotificationService {
         AppLogger.w("Error getting SharedPreferences in showImmediate: $e",
             tag: 'NotificationService');
       }
-      final List<String> notificationGroups =
-          prefs?.getStringList('notification_groups') ?? [];
+      final List<String> notificationGroups = prefs != null
+          ? PreferencesHelper.getActiveNotificationGroups(prefs)
+          : [];
 
       String finalTitle = title;
       if (groupName != null && notificationGroups.length > 1) {
         String formattedGroup = AppFormatters.formatGroupName(groupName);
-        finalTitle = "$formattedGroup: $title";
+        if (!title.contains(formattedGroup) && !title.contains(groupName)) {
+          finalTitle = "$formattedGroup: $title";
+        }
       }
 
       AppLogger.d("Створення Platform-specific details...",
@@ -277,15 +288,24 @@ class NotificationService {
         windows: windowsDetails,
       );
 
-      final uniqueGroupFactor = (groupName?.hashCode ?? 0) % 1000;
-      final timeFactor = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final notificationId = timeFactor + uniqueGroupFactor;
+      final int effectiveNotificationId;
+      if (notificationId != null) {
+        effectiveNotificationId = notificationId;
+      } else if (groupName != null && groupName.isNotEmpty) {
+        // Детермінований ID для групи: гарантовано унікальний для кожної групи (9000000..9000011)
+        // та повністю ізольований від запланованих сповіщень (0..1199999). Оновлює попереднє сповіщення цієї групи.
+        effectiveNotificationId =
+            immediateGroupNotificationBaseId + getGroupIndex(groupName);
+      } else {
+        effectiveNotificationId =
+            (DateTime.now().millisecondsSinceEpoch ~/ 1000) & 0x7FFFFFFF;
+      }
 
-      AppLogger.d("Виклик show() з ID: $notificationId",
+      AppLogger.d("Виклик show() з ID: $effectiveNotificationId",
           tag: 'NotificationService');
 
       await _notificationsPlugin.show(
-        notificationId,
+        effectiveNotificationId,
         finalTitle,
         body,
         details,
@@ -320,8 +340,9 @@ class NotificationService {
     final bool notify5mOff = prefs?.getBool('notify_5m_before_off') ?? fallback;
     final bool notify1hOn = prefs?.getBool('notify_1h_before_on') ?? fallback;
     final bool notify30mOn = prefs?.getBool('notify_30m_before_on') ?? fallback;
-    final List<String> notificationGroups =
-        prefs?.getStringList('notification_groups') ?? [];
+    final List<String> notificationGroups = prefs != null
+        ? PreferencesHelper.getActiveNotificationGroups(prefs)
+        : [];
 
     AppLogger.d("========== ПЛАНУВАННЯ НА ДЕНЬ ($groupName) ==========",
         tag: 'NotificationService');
@@ -490,10 +511,13 @@ class NotificationService {
         tag: 'NotificationService');
   }
 
-  int _getGroupIndex(String groupName) {
+  /// Отримати числовий індекс групи (0..11) для детермінованих ID сповіщень.
+  static int getGroupIndex(String groupName) {
     int idx = ParserService.allGroups.indexOf(groupName);
     return idx >= 0 ? idx : 0;
   }
+
+  int _getGroupIndex(String groupName) => getGroupIndex(groupName);
 
   List<Map<String, int>> _calculateOutagePeriods(DailySchedule schedule,
       {DailySchedule? nextDaySchedule}) {

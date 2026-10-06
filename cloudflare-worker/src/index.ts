@@ -108,6 +108,7 @@ export default {
         topic, group, dayType: dayType as 'today' | 'tomorrow', changeType: 'test',
         title: url.searchParams.get('title')?.trim().slice(0, 200) || `Тестове сповіщення Lumen (${group.replace('GPV', 'Група ')})`,
         body: url.searchParams.get('body')?.trim().slice(0, 500) || 'FCM push-інфраструктура працює.',
+        eventId: `${group}:${dayType}:test:${Date.now()}`,
       });
       return Response.json({ group, dayType, topic, fcmResult }, { status: fcmResult.success ? 200 : 502 });
     } catch (error) { return errorResponse(error); }

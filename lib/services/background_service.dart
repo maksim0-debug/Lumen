@@ -7,6 +7,8 @@ import 'widget_service.dart';
 import 'notification_service.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
+import 'fcm_service.dart';
+import '../models/schedule_status.dart';
 import '../utils/app_formatters.dart';
 
 const String taskUpdateSchedule = "taskUpdateSchedule";
@@ -20,13 +22,8 @@ void callbackDispatcher() {
     try {
       if (task == taskUpdateSchedule) {
         final prefs = await PreferencesHelper.getSafeInstance();
-        List<String> notificationGroups =
-            prefs.getStringList('notification_groups') ?? [];
-
-        if (notificationGroups.isEmpty) {
-          final selectedGroup = prefs.getString('selected_group') ?? "GPV2.1";
-          notificationGroups = [selectedGroup];
-        }
+        final List<String> notificationGroups =
+            PreferencesHelper.getActiveNotificationGroups(prefs);
 
         AppLogger.i("Групи для сповіщень: $notificationGroups",
             tag: 'Background');
@@ -89,47 +86,68 @@ void callbackDispatcher() {
                 if (savedDate == todayStr &&
                     oldHash != null &&
                     oldHash != newHash) {
-                  if (canNotify) {
-                    int oldMinutes = 0;
-                    for (int i = 0; i < oldHash.length && i < 24; i++) {
-                      final char = oldHash[i];
-                      if (char == '1') {
-                        oldMinutes += 60;
-                      } else if (char == '2' || char == '3') {
-                        oldMinutes += 30;
+                  final fcmTopics =
+                      prefs.getStringList('fcm_subscribed_topics') ?? [];
+                  final todayTopic =
+                      FcmService.groupToTopic(group, dayType: 'today');
+                  final isFcmConfigured = fcmTopics.contains(todayTopic);
+                  final isFcmInitialized =
+                      prefs.getBool('fcm_initialized') ?? false;
+                  final isFcmActive = isFcmConfigured && isFcmInitialized;
+
+                  if (isFcmActive) {
+                    final keyPendingHash = "fcm_pending_hash_${group}_today";
+                    final keyPendingTime = "fcm_pending_time_${group}_today";
+                    final pendingHash = prefs.getString(keyPendingHash);
+                    final pendingTime = prefs.getInt(keyPendingTime) ?? 0;
+
+                    // Очікуємо доставку серверного FCM-пуша до 10 хвилин (cooldown/grace period)
+                    const fcmGracePeriodMs = 10 * 60 * 1000;
+                    final hasGracePeriodExpired = (pendingHash == newHash) &&
+                        ((nowMs - pendingTime) > fcmGracePeriodMs);
+
+                    if (!hasGracePeriodExpired) {
+                      if (pendingHash != newHash) {
+                        await prefs.setString(keyPendingHash, newHash);
+                        await prefs.setInt(keyPendingTime, nowMs);
                       }
-                    }
-
-                    final diff = newMinutes - oldMinutes;
-                    final String msg;
-                    if (diff != 0) {
-                      final diffHours = (diff.abs() / 60);
-                      final diffStr = diffHours == diffHours.toInt()
-                          ? diffHours.toInt().toString()
-                          : diffHours.toStringAsFixed(1);
-                      msg = diff > 0
-                          ? "Світла стало МЕНШЕ на $diffStr год. 😔"
-                          : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";
-                    } else {
-                      msg = "Змінився час відключень на сьогодні ⚡";
-                    }
-
-                    AppLogger.i("📢 Виявлено зміну графіку для $group: $msg",
-                        tag: 'Background');
-
-                    try {
-                      await notificationService.showImmediate(
-                          "Графік змінено!", msg,
-                          groupName: group);
-                      await HistoryService()
-                          .logAction("Сповіщення про зміну надіслано: $msg");
-                    } catch (e) {
+                      AppLogger.i(
+                          "ℹ️ Зміна графіку для $group очікує первинну доставку через FCM ($todayTopic). Локальне сповіщення відкладено для уникнення дублікатів.",
+                          tag: 'Background');
                       await HistoryService().logAction(
-                          "Помилка надсилання сповіщення: $e",
-                          level: "ERROR");
-                    }
+                          "Зміна графіку для $group очікує доставки через FCM ($todayTopic)");
+                      // Не перезаписуємо prev_hash завчасно, щоб зберегти надійний fallback
+                      shouldUpdateMetadata = false;
+                    } else if (canNotify) {
+                      AppLogger.w(
+                          "⚠️ FCM не доставив сповіщення для $group за 10 хв. Спрацьовує резервне локальне сповіщення Workmanager!",
+                          tag: 'Background');
+                      await HistoryService().logAction(
+                          "Резервне сповіщення Workmanager для $group (FCM timeout)",
+                          level: 'WARN');
 
+                      await _sendScheduleChangeNotification(
+                        notificationService: notificationService,
+                        group: group,
+                        oldHash: oldHash,
+                        newMinutes: newMinutes,
+                      );
+                      await prefs.setInt(keyLastNotif, nowMs);
+                      await prefs.remove(keyPendingHash);
+                      await prefs.remove(keyPendingTime);
+                      shouldUpdateMetadata = true;
+                    } else {
+                      shouldUpdateMetadata = false;
+                    }
+                  } else if (canNotify) {
+                    await _sendScheduleChangeNotification(
+                      notificationService: notificationService,
+                      group: group,
+                      oldHash: oldHash,
+                      newMinutes: newMinutes,
+                    );
                     await prefs.setInt(keyLastNotif, nowMs);
+                    shouldUpdateMetadata = true;
                   } else {
                     AppLogger.i(
                         "⏳ Зміни є ($group), але охолодження. Чекаємо...",
@@ -173,6 +191,34 @@ void callbackDispatcher() {
 
     return true;
   });
+}
+
+Future<void> _sendScheduleChangeNotification({
+  required NotificationService notificationService,
+  required String group,
+  required String oldHash,
+  required int newMinutes,
+}) async {
+  final oldMinutes =
+      DailySchedule.fromEncodedString(oldHash).totalOutageMinutes;
+  final msg = AppFormatters.formatScheduleChangeMessage(
+    oldMinutes: oldMinutes,
+    newMinutes: newMinutes,
+  );
+
+  AppLogger.i("📢 Виявлено зміну графіку для $group: $msg", tag: 'Background');
+
+  try {
+    await notificationService.showImmediate(
+      "Графік змінено!",
+      msg,
+      groupName: group,
+    );
+    await HistoryService().logAction("Сповіщення про зміну надіслано: $msg");
+  } catch (e) {
+    await HistoryService()
+        .logAction("Помилка надсилання сповіщення: $e", level: "ERROR");
+  }
 }
 
 class BackgroundManager {
