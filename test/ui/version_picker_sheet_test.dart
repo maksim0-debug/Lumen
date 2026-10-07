@@ -45,6 +45,40 @@ void main() {
     VersionPickerSheet.resetOpenState();
   });
 
+  group('VersionPickerSheet keyboard hint visibility', () {
+    const expectations = {
+      TargetPlatform.android: false,
+      TargetPlatform.iOS: false,
+      TargetPlatform.fuchsia: false,
+      TargetPlatform.windows: true,
+      TargetPlatform.macOS: true,
+      TargetPlatform.linux: true,
+    };
+
+    for (final entry in expectations.entries) {
+      testWidgets('Keyboard hint visibility on ${entry.key.name}',
+          (tester) async {
+        await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+            theme: ThemeData(platform: entry.key),
+            home: Scaffold(
+              body: VersionPickerSheet(
+                versions: sampleVersions,
+                selectedVersionIndex: 0,
+                onVersionSelected: (_) {},
+              ),
+            ),
+          ),
+        ));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Оберіть версію'), findsOneWidget);
+        expect(find.text('↑ / ↓ • Enter • Esc'),
+            entry.value ? findsOneWidget : findsNothing);
+      });
+    }
+  });
+
   group('VersionPickerSheet Keyboard Toggle and Close Tests', () {
     testWidgets('Pressing key V closes the version picker sheet',
         (tester) async {

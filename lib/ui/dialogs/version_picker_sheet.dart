@@ -220,6 +220,10 @@ class _VersionPickerSheetState extends ConsumerState<VersionPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final platform = Theme.of(context).platform;
+    final showKeyboardHint = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.macOS ||
+        platform == TargetPlatform.linux;
     final accentColor = isDark ? Colors.orange : Colors.deepPurple;
     final screenHeight = MediaQuery.sizeOf(context).height;
     final preference = ref.watch(scheduleVersionPreferencesProvider);
@@ -283,14 +287,15 @@ class _VersionPickerSheetState extends ConsumerState<VersionPickerSheet> {
                             style: TextStyle(
                                 fontSize: 18, fontWeight: FontWeight.bold),
                           )),
-                          Text(
-                            "↑ / ↓ • Enter • Esc",
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white38 : Colors.black38,
-                              fontFamily: 'monospace',
+                          if (showKeyboardHint)
+                            Text(
+                              "↑ / ↓ • Enter • Esc",
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white38 : Colors.black38,
+                                fontFamily: 'monospace',
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),
