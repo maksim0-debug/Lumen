@@ -71,14 +71,75 @@ class DailyOutage {
 
 class SwitchLag {
   final double avgOnLagMinutes; // позитивне = пізніше графіка
-  final double avgOffLagMinutes; // позитивне = раніше графіка
+  final double avgOffLagMinutes; // Positive means later than scheduled.
   final int sampleCount;
+  final int onSampleCount;
+  final int offSampleCount;
 
-  SwitchLag({
+  const SwitchLag({
     required this.avgOnLagMinutes,
     required this.avgOffLagMinutes,
     required this.sampleCount,
+    this.onSampleCount = 0,
+    this.offSampleCount = 0,
   });
+}
+
+enum ScheduleDeviationPeriod {
+  today,
+  yesterday,
+  week,
+  month;
+
+  int get dayCount => switch (this) {
+        week => 7,
+        month => 30,
+        _ => 1,
+      };
+}
+
+enum LightBalanceExclusion {
+  missingSchedule,
+  uncertainSchedule,
+  incompleteActual
+}
+
+/// Totals cover exactly the same eligible days on both sides of the comparison.
+class LightBalanceStats {
+  final ScheduleDeviationPeriod period;
+  final DateTime start;
+  final DateTime end;
+  final int plannedOnSeconds;
+  final int actualOnSeconds;
+  final int validDays;
+  final Map<LightBalanceExclusion, int> exclusions;
+
+  LightBalanceStats({
+    required this.period,
+    required this.start,
+    required this.end,
+    required this.plannedOnSeconds,
+    required this.actualOnSeconds,
+    required this.validDays,
+    required Map<LightBalanceExclusion, int> exclusions,
+  }) : exclusions = Map.unmodifiable(exclusions);
+
+  bool get hasData => validDays > 0;
+  int get excludedDays =>
+      exclusions.values.fold(0, (sum, count) => sum + count);
+  int get deltaSeconds => actualOnSeconds - plannedOnSeconds;
+  double? get averageDeltaMinutes =>
+      hasData ? deltaSeconds / 60 / validDays : null;
+  double? get relativePercentage => hasData && plannedOnSeconds > 0
+      ? deltaSeconds / plannedOnSeconds * 100
+      : null;
+}
+
+class ScheduleDeviationStats {
+  final LightBalanceStats balance;
+  final SwitchLag lag;
+
+  const ScheduleDeviationStats({required this.balance, required this.lag});
 }
 
 class ProductivityStats {

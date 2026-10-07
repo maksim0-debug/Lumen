@@ -15,6 +15,7 @@ import 'dialogs/shortcut_help_dialog.dart';
 import 'shortcuts/app_intents.dart';
 import 'shortcuts/keyboard_shortcut_wrapper.dart';
 import 'shortcuts/shortcut_registry.dart';
+import 'widgets/schedule_deviation_section.dart';
 
 /// Екран аналітики відключень електроенергії.
 class AnalyticsScreen extends StatefulWidget {
@@ -47,8 +48,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   double _accuracyToday = -1;
   double _accuracy7d = -1;
   TimelineComparisonData? _timeline;
-  SwitchLag? _switchLag;
-  int _selectedLagDays = 2; // 2 = Вчора
+  ScheduleDeviationPeriod _deviationPeriod = ScheduleDeviationPeriod.yesterday;
 
   // Records
   OutageRecords? _records;
@@ -137,9 +137,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     });
 
     try {
-      int lagStartOffset = _selectedLagDays == 2 ? 1 : 0;
-      int lagEndOffset = _selectedLagDays == 2 ? 1 : _selectedLagDays - 1;
-
       // Load all data in parallel where possible
       final results = await Future.wait([
         _analytics.getOutageStatsForToday(
@@ -153,19 +150,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         _analytics.getAccuracyScore(DateTime.now(), _currentGroup), // 4
         _analytics.getAccuracyScoreForPeriod(7, _currentGroup), // 5
         _analytics.getTimelineComparison(DateTime.now(), _currentGroup), // 6
-        _analytics.getSwitchLag(
-            lagStartOffset, lagEndOffset, _currentGroup), // 7
-        _analytics.getRecords(mode: _currentMode, groupKey: _currentGroup), // 8
+        _analytics.getRecords(mode: _currentMode, groupKey: _currentGroup), // 7
         _analytics.getHeatmapData(_selectedHeatmapDays,
-            mode: _currentMode, groupKey: _currentGroup), // 9
+            mode: _currentMode, groupKey: _currentGroup), // 8
         _analytics.getDailyOutageHours(_selectedTrendDays,
-            mode: _currentMode, groupKey: _currentGroup), // 10
+            mode: _currentMode, groupKey: _currentGroup), // 9
         _analytics.getProductivityImpact(7,
-            mode: _currentMode, groupKey: _currentGroup), // 11
+            mode: _currentMode, groupKey: _currentGroup), // 10
         _analytics.getDailyOutageHours(_selectedAccuracyTrendDays,
-            mode: DataSourceMode.real, groupKey: _currentGroup), // 12
+            mode: DataSourceMode.real, groupKey: _currentGroup), // 11
         _analytics.getDailyOutageHours(_selectedAccuracyTrendDays,
-            mode: DataSourceMode.predicted, groupKey: _currentGroup), // 13
+            mode: DataSourceMode.predicted, groupKey: _currentGroup), // 12
       ]);
 
       if (mounted && requestId == _loadRequestId) {
@@ -177,13 +172,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           _accuracyToday = results[4] as double;
           _accuracy7d = results[5] as double;
           _timeline = results[6] as TimelineComparisonData;
-          _switchLag = results[7] as SwitchLag;
-          _records = results[8] as OutageRecords;
-          _heatmapData = results[9] as List<List<double>>;
-          _dailyTrend = results[10] as List<DailyOutage>;
-          _productivity7d = results[11] as ProductivityStats;
-          _accuracyTrendReal = results[12] as List<DailyOutage>;
-          _accuracyTrendPredicted = results[13] as List<DailyOutage>;
+          _records = results[7] as OutageRecords;
+          _heatmapData = results[8] as List<List<double>>;
+          _dailyTrend = results[9] as List<DailyOutage>;
+          _productivity7d = results[10] as ProductivityStats;
+          _accuracyTrendReal = results[11] as List<DailyOutage>;
+          _accuracyTrendPredicted = results[12] as List<DailyOutage>;
           _isLoading = false;
         });
       }
@@ -518,26 +512,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     }
   }
 
-  Future<void> _updateLagChart(int days) async {
-    setState(() {
-      _selectedLagDays = days;
-    });
-    final expectedGroup = _currentGroup;
-    try {
-      int startDayOffset = days == 2 ? 1 : 0;
-      int endDayOffset = days == 2 ? 1 : days - 1;
-      final lagData = await _analytics.getSwitchLag(
-          startDayOffset, endDayOffset, expectedGroup);
-      if (mounted && _currentGroup == expectedGroup) {
-        setState(() {
-          _switchLag = lagData;
-        });
-      }
-    } catch (e) {
-      AppLogger.e('Error updating lag chart', tag: 'AnalyticsScreen', error: e);
-    }
-  }
-
   // ============================================================
   // TAB 1: DASHBOARD
   // ============================================================
@@ -857,56 +831,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           _buildNoDataWidget(),
         const SizedBox(height: 24),
 
-        // Switch lag
-        _buildSectionTitle('⏱ Лаг включення/виключення', isDark),
-        const SizedBox(height: 12),
-        CupertinoSlidingSegmentedControl<int>(
-          groupValue: _selectedLagDays,
-          thumbColor: accent,
-          backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
-          children: {
-            1: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text('Сьогодні',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color:
-                          _selectedLagDays == 1 ? Colors.white : Colors.grey)),
-            ),
-            2: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text('Вчора',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color:
-                          _selectedLagDays == 2 ? Colors.white : Colors.grey)),
-            ),
-            7: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text('Тиждень',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color:
-                          _selectedLagDays == 7 ? Colors.white : Colors.grey)),
-            ),
-            30: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text('Місяць',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color:
-                          _selectedLagDays == 30 ? Colors.white : Colors.grey)),
-            ),
-          },
-          onValueChanged: (value) {
-            if (value != null) _updateLagChart(value);
-          },
+        ScheduleDeviationSection(
+          groupKey: _currentGroup,
+          revision: _loadRequestId,
+          load: _analytics.getScheduleDeviation,
+          initialPeriod: _deviationPeriod,
+          onPeriodChanged: (period) => _deviationPeriod = period,
         ),
-        const SizedBox(height: 12),
-        if (_switchLag != null && _switchLag!.sampleCount > 0)
-          _buildSwitchLagInfo(isDark)
-        else
-          _buildNoDataWidget(text: 'Недостатньо даних для розрахунку лагу'),
 
         const SizedBox(height: 40),
       ],
@@ -1270,68 +1201,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         const SizedBox(width: 4),
         Text(label,
             style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
-      ],
-    );
-  }
-
-  Widget _buildSwitchLagInfo(bool isDark) {
-    final lag = _switchLag!;
-    final onLag = lag.avgOnLagMinutes;
-    final offLag = lag.avgOffLagMinutes;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E1E1E) : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(16),
-        border:
-            Border.all(color: isDark ? Colors.white10 : Colors.grey.shade300),
-      ),
-      child: Column(
-        children: [
-          _lagRow(
-            Icons.power,
-            'Включення',
-            onLag > 0
-                ? 'На ${onLag.abs().toStringAsFixed(0)} хв пізніше'
-                : 'На ${onLag.abs().toStringAsFixed(0)} хв раніше',
-            onLag > 0 ? Colors.red.shade300 : Colors.green.shade300,
-            isDark,
-          ),
-          const SizedBox(height: 8),
-          _lagRow(
-            Icons.power_off,
-            'Виключення',
-            offLag > 0
-                ? 'На ${offLag.abs().toStringAsFixed(0)} хв пізніше'
-                : 'На ${offLag.abs().toStringAsFixed(0)} хв раніше',
-            offLag > 0 ? Colors.green.shade300 : Colors.red.shade300,
-            isDark,
-          ),
-          const SizedBox(height: 8),
-          Text('На основі ${lag.sampleCount} спостережень',
-              style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
-        ],
-      ),
-    );
-  }
-
-  Widget _lagRow(
-      IconData icon, String title, String detail, Color color, bool isDark) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: color),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title,
-                style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: isDark ? Colors.white : Colors.black87)),
-            Text(detail, style: TextStyle(fontSize: 12, color: color)),
-          ],
-        ),
       ],
     );
   }

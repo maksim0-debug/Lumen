@@ -6,14 +6,60 @@ import 'power_monitor_service.dart';
 import 'history_service.dart';
 import 'parser_service.dart';
 import '../models/data_source_mode.dart';
+import 'light_balance_calculator.dart';
+import 'schedule_clock.dart';
+import '../utils/app_formatters.dart';
 
 export '../models/data_source_mode.dart';
 
 /// Сервіс агрегації аналітичних даних про відключення.
 /// Всі дані беруться з локальної БД (power_events + schedule_history).
 class AnalyticsService {
-  final PowerMonitorService _powerMonitor = PowerMonitorService();
-  final HistoryService _historyService = HistoryService();
+  final PowerMonitorService _powerMonitor;
+  final HistoryService _historyService;
+  final DateTime Function() _now;
+
+  AnalyticsService(
+      {PowerMonitorService? powerMonitor,
+      HistoryService? historyService,
+      DateTime Function()? now})
+      : _powerMonitor = powerMonitor ?? PowerMonitorService(),
+        _historyService = historyService ?? HistoryService(),
+        _now = now ?? ScheduleClock.now;
+
+  Future<ScheduleDeviationStats> getScheduleDeviation(
+      ScheduleDeviationPeriod period, String groupKey) async {
+    final now = _now();
+    // Capture evidence before reading events so a later sync cannot claim
+    // coverage of transitions absent from this calculation's event snapshot.
+    DateTime? through = _powerMonitor.lastSuccessfulSync;
+    final lastSeen = _powerMonitor.snapshot.lastSeen;
+    if (lastSeen != null && (through == null || lastSeen.isAfter(through))) {
+      through = lastSeen;
+    }
+    final start = LightBalanceCalculator.periodStart(period, now);
+    final dates = List.generate(
+        period.dayCount + 1, (index) => ScheduleClock.day(start, index - 1));
+    final results = await Future.wait<Object>([
+      _powerMonitor.getLocalEvents(),
+      ...dates
+          .map((date) => _historyService.getVersionsForDate(date, groupKey)),
+    ]);
+    final schedules = <String, DailySchedule>{};
+    for (int i = 0; i < dates.length; i++) {
+      final versions = results[i + 1] as List<ScheduleVersion>;
+      if (versions.isNotEmpty) {
+        schedules[AppFormatters.formatDateKey(dates[i])] =
+            versions.last.toSchedule();
+      }
+    }
+    return LightBalanceCalculator.calculate(
+        period: period,
+        now: now,
+        schedules: schedules,
+        events: results.first as List<PowerEvent>,
+        observedThrough: through);
+  }
 
   // ===========================================================
   // ENUMS & HELPERS
@@ -647,6 +693,8 @@ class AnalyticsService {
           ? offLags.reduce((a, b) => a + b) / offLags.length
           : 0,
       sampleCount: onLags.length + offLags.length,
+      onSampleCount: onLags.length,
+      offSampleCount: offLags.length,
     );
   }
 
