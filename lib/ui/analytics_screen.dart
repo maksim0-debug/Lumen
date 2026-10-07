@@ -202,6 +202,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accentColor = isDark ? Colors.orange : Colors.deepPurple;
 
+    final tabs = TabBar(
+      controller: _tabController,
+      isScrollable: true,
+      indicatorColor: accentColor,
+      labelColor: accentColor,
+      unselectedLabelColor: Colors.grey,
+      tabs: const [
+        Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+        Tab(icon: Icon(Icons.fact_check), text: 'Точність'),
+        Tab(icon: Icon(Icons.emoji_events), text: 'Рекорди'),
+        Tab(icon: Icon(Icons.show_chart), text: 'Графіки'),
+        Tab(icon: Icon(Icons.compare_arrows), text: 'Порівняння'),
+      ],
+    );
+
     return KeyboardShortcutWrapper(
       shortcuts: AppKeyboardShortcuts.analyticsShortcuts,
       actions: {
@@ -277,59 +292,65 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Column(
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('Аналітика',
-                      style:
-                          TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(width: 8),
-                  PopupMenuButton<String>(
-                    tooltip: 'Вибрати чергу',
-                    initialValue: _currentGroup,
-                    onSelected: (newGroup) {
-                      if (newGroup != _currentGroup) {
-                        setState(() {
-                          _currentGroup = newGroup;
-                        });
-                        _loadAllData();
-                      }
-                    },
-                    itemBuilder: (context) {
-                      return ParserService.allGroups.map((group) {
-                        return PopupMenuItem<String>(
-                          value: group,
-                          child: Text(
-                            AppFormatters.formatGroupName(group),
-                            style: TextStyle(
-                              fontWeight: group == _currentGroup
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                              color:
-                                  group == _currentGroup ? accentColor : null,
-                            ),
+              const Flexible(
+                child: Text('Аналітика',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                flex: 2,
+                child: PopupMenuButton<String>(
+                  tooltip: 'Вибрати чергу',
+                  initialValue: _currentGroup,
+                  onSelected: (newGroup) {
+                    if (newGroup != _currentGroup) {
+                      setState(() {
+                        _currentGroup = newGroup;
+                      });
+                      _loadAllData();
+                    }
+                  },
+                  itemBuilder: (context) {
+                    return ParserService.allGroups.map((group) {
+                      return PopupMenuItem<String>(
+                        value: group,
+                        child: Text(
+                          AppFormatters.formatGroupName(group),
+                          style: TextStyle(
+                            fontWeight: group == _currentGroup
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: group == _currentGroup ? accentColor : null,
                           ),
-                        );
-                      }).toList();
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: accentColor.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                            color: accentColor.withValues(alpha: 0.4)),
-                      ),
+                        ),
+                      );
+                    }).toList();
+                  },
+                  child: Container(
+                    height: 36,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: accentColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border:
+                          Border.all(color: accentColor.withValues(alpha: 0.4)),
+                    ),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
                             AppFormatters.formatGroupName(_currentGroup),
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 13,
                               fontWeight: FontWeight.bold,
                               color: accentColor,
                             ),
@@ -341,45 +362,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                       ),
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              CupertinoSlidingSegmentedControl<DataSourceMode>(
-                groupValue: _currentMode,
-                thumbColor: accentColor,
-                backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
-                children: {
-                  DataSourceMode.real: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('Фактичні дані',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: _currentMode == DataSourceMode.real
-                                ? Colors.white
-                                : Colors.grey)),
-                  ),
-                  DataSourceMode.predicted: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('За графіком',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: _currentMode == DataSourceMode.predicted
-                                ? Colors.white
-                                : Colors.grey)),
-                  ),
-                },
-                onValueChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _currentMode = value;
-                      _saveMode(value);
-                      _loadAllData();
-                    });
-                  }
-                },
+                ),
               ),
             ],
           ),
+          titleSpacing: 8,
           centerTitle: true,
           actions: [
             if (Theme.of(context).platform == TargetPlatform.windows ||
@@ -404,19 +391,55 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
               onPressed: _openAchievements,
             ),
           ],
-          bottom: TabBar(
-            controller: _tabController,
-            isScrollable: true,
-            indicatorColor: accentColor,
-            labelColor: accentColor,
-            unselectedLabelColor: Colors.grey,
-            tabs: const [
-              Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
-              Tab(icon: Icon(Icons.fact_check), text: 'Точність'),
-              Tab(icon: Icon(Icons.emoji_events), text: 'Рекорди'),
-              Tab(icon: Icon(Icons.show_chart), text: 'Графіки'),
-              Tab(icon: Icon(Icons.compare_arrows), text: 'Порівняння'),
-            ],
+          bottom: PreferredSize(
+            preferredSize: Size.fromHeight(tabs.preferredSize.height + 48),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 48,
+                  child: Center(
+                    child: CupertinoSlidingSegmentedControl<DataSourceMode>(
+                      groupValue: _currentMode,
+                      thumbColor: accentColor,
+                      backgroundColor:
+                          isDark ? Colors.white10 : Colors.grey.shade200,
+                      children: {
+                        DataSourceMode.real: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('Фактичні дані',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: _currentMode == DataSourceMode.real
+                                      ? Colors.white
+                                      : Colors.grey)),
+                        ),
+                        DataSourceMode.predicted: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('За графіком',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color:
+                                      _currentMode == DataSourceMode.predicted
+                                          ? Colors.white
+                                          : Colors.grey)),
+                        ),
+                      },
+                      onValueChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _currentMode = value;
+                            _saveMode(value);
+                            _loadAllData();
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                tabs,
+              ],
+            ),
           ),
         ),
         body: _isLoading
