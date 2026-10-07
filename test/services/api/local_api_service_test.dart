@@ -82,6 +82,7 @@ void main() {
 
       expect(spec['openapi'], '3.0.3');
       expect(spec['info']['title'], contains('Lumen'));
+      expect(spec['info']['version'], '1.1.0');
 
       final paths = spec['paths'] as Map<String, dynamic>;
       expect(paths.containsKey('/status'), isTrue);
