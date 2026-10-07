@@ -55,7 +55,27 @@ add_subdirectory("runner")
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
-include(flutter/generated_plugins.cmake)
+# Exclude firebase_core on Windows to avoid downloading ~10 GB of unused Google Firebase C++ SDK.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/flutter/generated_plugins.cmake")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/flutter/generated_plugins.cmake")
+  set(FILTERED_PLUGINS_CMAKE "${CMAKE_BINARY_DIR}/filtered_plugins.cmake")
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/flutter/generated_plugins.cmake" GENERATED_PLUGINS_CONTENT)
+  string(REGEX REPLACE "([ \t\r\n]+)firebase_core([ \t\r\n]+)" "\\2" FILTERED_PLUGINS_CONTENT "${GENERATED_PLUGINS_CONTENT}")
+  file(WRITE "${FILTERED_PLUGINS_CMAKE}" "${FILTERED_PLUGINS_CONTENT}")
+  include("${FILTERED_PLUGINS_CMAKE}")
+endif()
+
+# Provide a lightweight stub for firebase_core_plugin to satisfy generated_plugin_registrant.cc
+# without downloading the ~10 GB Firebase C++ SDK.
+add_library(firebase_core_plugin STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/stubs/firebase_core_stub.cpp"
+)
+apply_standard_settings(firebase_core_plugin)
+target_include_directories(firebase_core_plugin PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/stubs/include"
+)
+target_link_libraries(firebase_core_plugin PUBLIC flutter flutter_wrapper_plugin)
+target_link_libraries(${BINARY_NAME} PRIVATE firebase_core_plugin)
 
 
 # === Installation ===
