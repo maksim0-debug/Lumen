@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lumen/models/schedule_status.dart';
 import 'package:lumen/ui/dialogs/version_picker_sheet.dart';
 import 'package:lumen/ui/shortcuts/app_intents.dart';
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   final sampleVersions = [
     ScheduleVersion(
       hash: '0' * 24,
@@ -22,7 +25,7 @@ void main() {
   Widget buildTestApp({
     required VoidCallback onOpen,
   }) {
-    return MaterialApp(
+    return ProviderScope(child: MaterialApp(
       home: Scaffold(
         body: Center(
           child: Builder(
@@ -35,7 +38,7 @@ void main() {
           ),
         ),
       ),
-    );
+    ));
   }
 
   tearDown(() {
@@ -167,7 +170,8 @@ void main() {
         (tester) async {
       late BuildContext actionContext;
       await tester.pumpWidget(
-        MaterialApp(
+        ProviderScope(
+            child: MaterialApp(
           home: Scaffold(
             body: Actions(
               actions: {
@@ -204,7 +208,7 @@ void main() {
               ),
             ),
           ),
-        ),
+        )),
       );
 
       // Open picker

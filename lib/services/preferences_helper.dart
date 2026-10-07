@@ -5,6 +5,34 @@ import 'package:path/path.dart' show join;
 import 'app_logger.dart';
 
 class PreferencesHelper {
+  static const hideUnchangedScheduleVersionsKey =
+      'hide_unchanged_schedule_versions';
+
+  static Future<bool> readHideUnchangedScheduleVersions() async {
+    final prefs = await getSafeInstance();
+    return prefs.getBool(hideUnchangedScheduleVersionsKey) ?? true;
+  }
+
+  static Future<void> writeHideUnchangedScheduleVersions(bool value) async {
+    final prefs = await getSafeInstance();
+    try {
+      if (!await prefs.setBool(hideUnchangedScheduleVersionsKey, value)) {
+        throw StateError('Cannot persist schedule version preference');
+      }
+    } catch (error) {
+      // Legacy SharedPreferences updates its cache before the platform write.
+      try {
+        await prefs.reload();
+      } catch (reloadError) {
+        AppLogger.w('Cannot reload preferences after failed write',
+            tag: 'ScheduleVersions',
+            error: reloadError,
+            persistToHistory: false);
+      }
+      rethrow;
+    }
+  }
+
   /// Отримати список активних груп сповіщень з безпечним значенням за замовчуванням.
   static List<String> getActiveNotificationGroups(SharedPreferences prefs) {
     final groups = prefs.getStringList('notification_groups') ?? [];

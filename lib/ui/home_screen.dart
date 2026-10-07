@@ -28,6 +28,7 @@ import 'shortcuts/app_intents.dart';
 import 'shortcuts/keyboard_shortcut_wrapper.dart';
 import 'shortcuts/shortcut_registry.dart';
 import 'state/home_notifier.dart';
+import 'state/schedule_version_preferences.dart';
 import 'widgets/home/countdown_card.dart';
 import 'widgets/home/darkness_stage_banner.dart';
 import 'widgets/home/data_source_toggle.dart';
@@ -119,8 +120,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       versions: state.historyVersions,
       selectedVersionIndex: state.selectedVersionIndex,
       onVersionSelected: (index) {
-        ref.read(homeNotifierProvider.notifier).selectVersion(index);
+        ref.read(homeNotifierProvider.notifier).selectPublication(
+              state.historyVersions[index],
+              group: state.currentGroup,
+              date: state.displayDate,
+            );
       },
+      contentBuilder: (_) => Consumer(builder: (context, ref, child) {
+        final current = ref.watch(homeNotifierProvider);
+        final date = current.displayDate;
+        return VersionPickerSheet(
+          key: ValueKey(
+              '${current.currentGroup}:${AppFormatters.formatDateKey(date)}'),
+          versions: current.historyVersions,
+          selectedVersionIndex: current.selectedVersionIndex,
+          contextLabel: '${AppFormatters.formatGroupName(current.currentGroup)}'
+              ' · ${AppFormatters.formatDate(date)}',
+          onVersionSelected: (index) =>
+              ref.read(homeNotifierProvider.notifier).selectPublication(
+                    current.historyVersions[index],
+                    group: current.currentGroup,
+                    date: date,
+                  ),
+        );
+      }),
     );
   }
 
@@ -537,7 +560,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         CycleVersionIntent: CallbackAction<CycleVersionIntent>(
           onInvoke: (intent) {
             final current = ref.read(homeNotifierProvider);
-            if (current.historyVersions.length > 1) {
+            if (!ref.read(scheduleVersionPreferencesProvider).isLoaded) {
+              return null;
+            }
+            final visibleCount =
+                current.versionProjection.visibleIndices.length;
+            if (visibleCount > 1) {
               notifier.cycleVersion(intent.direction);
               final updated = ref.read(homeNotifierProvider);
               final ver = updated.selectedVersionIndex >= 0 &&
@@ -557,14 +585,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 );
               }
-            } else if (current.historyVersions.length == 1) {
+            } else if (visibleCount == 1) {
               if (context.mounted) {
                 ScaffoldMessenger.of(context).hideCurrentSnackBar();
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content:
-                        Text('Доступна лише одна версія графіка за цей день'),
-                    duration: Duration(seconds: 1),
+                  SnackBar(
+                    content: Text(current.historyVersions.length > 1
+                        ? 'Доступна одна версія після приховування повторів'
+                        : 'Доступна лише одна версія графіка за цей день'),
+                    duration: const Duration(seconds: 1),
                     behavior: SnackBarBehavior.floating,
                   ),
                 );

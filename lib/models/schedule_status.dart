@@ -148,15 +148,37 @@ class FullSchedule {
 }
 
 class ScheduleVersion {
+  /// Local database identity; deliberately excluded from portable JSON.
+  final int? recordId;
+  final String? sourceUpdatedAt;
+  final bool isManual;
+  final bool hasReliableTimestamp;
   final String hash;
   final DateTime savedAt;
   final int outageMinutes;
 
   ScheduleVersion({
+    this.recordId,
+    this.sourceUpdatedAt,
+    this.isManual = false,
+    this.hasReliableTimestamp = true,
     required this.hash,
     required this.savedAt,
     required this.outageMinutes,
   });
+
+  bool isSamePublication(ScheduleVersion other) {
+    if (recordId != null && other.recordId != null) {
+      return recordId == other.recordId &&
+          hash == other.hash &&
+          isManual == other.isManual &&
+          sourceUpdatedAt == other.sourceUpdatedAt;
+    }
+    return identical(this, other) ||
+        (hash == other.hash &&
+            savedAt == other.savedAt &&
+            isManual == other.isManual);
+  }
 
   DailySchedule toSchedule() => DailySchedule.fromEncodedString(hash);
 

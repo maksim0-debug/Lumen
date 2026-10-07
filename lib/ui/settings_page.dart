@@ -24,6 +24,7 @@ import 'shortcuts/app_intents.dart';
 import 'shortcuts/keyboard_shortcut_wrapper.dart';
 import 'shortcuts/shortcut_registry.dart';
 import '../services/history_service.dart';
+import 'widgets/schedule_version_filter_tile.dart';
 
 class SettingsPage extends StatefulWidget {
   final VoidCallback? onThemeChanged;
@@ -292,6 +293,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     if (widget.onThemeChanged != null) widget.onThemeChanged!();
                   }),
                   _buildScaleSelector(),
+                  const ScheduleVersionFilterTile(),
                   if (Platform.isWindows) ...[
                     _buildSwitchTile(
                         "Автозапуск при старті Windows",

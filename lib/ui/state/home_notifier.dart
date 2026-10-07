@@ -22,8 +22,10 @@ import '../../services/schedule_calculation_service.dart';
 import '../../services/schedule_notification_coordinator.dart';
 import '../../services/schedule_sync_service.dart';
 import '../../services/schedule_clock.dart';
+import '../../services/schedule_version_filter.dart';
 import '../../utils/app_formatters.dart';
 import 'home_state.dart';
+import 'schedule_version_preferences.dart';
 
 export 'home_state.dart';
 
@@ -33,6 +35,7 @@ class HomeNotifier extends Notifier<HomeState> {
   final ScheduleSyncService? _customScheduleSyncService;
   final PowerMonitorService? _customPowerMonitor;
   final AchievementService? _customAchievementService;
+  final HistoryService? _customHistoryService;
 
   HomeNotifier({
     NotificationService? notifier,
@@ -40,18 +43,23 @@ class HomeNotifier extends Notifier<HomeState> {
     ScheduleSyncService? scheduleSyncService,
     PowerMonitorService? powerMonitor,
     AchievementService? achievementService,
+    HistoryService? historyService,
   })  : _customNotifier = notifier,
         _customScheduleNotificationCoordinator =
             scheduleNotificationCoordinator,
         _customScheduleSyncService = scheduleSyncService,
         _customPowerMonitor = powerMonitor,
-        _customAchievementService = achievementService;
+        _customAchievementService = achievementService,
+        _customHistoryService = historyService;
 
   late final NotificationService _notifier;
   late final ScheduleNotificationCoordinator _scheduleNotificationCoordinator;
   late final ScheduleSyncService _scheduleSyncService;
   late final PowerMonitorService _powerMonitor;
   late final AchievementService _achievementService;
+  late final HistoryService _historyService;
+  String? _versionsGroup;
+  DateTime? _versionsDate;
 
   int _realOutageLoadRequestId = 0;
   int _historyLoadRequestId = 0;
@@ -67,6 +75,17 @@ class HomeNotifier extends Notifier<HomeState> {
     _scheduleSyncService = _customScheduleSyncService ?? ScheduleSyncService();
     _powerMonitor = _customPowerMonitor ?? PowerMonitorService();
     _achievementService = _customAchievementService ?? AchievementService();
+    _historyService = _customHistoryService ?? HistoryService();
+
+    ref.listen(scheduleVersionPreferencesProvider, (previous, next) {
+      if (state.hideUnchangedScheduleVersions == next.hideUnchanged) return;
+      state = state.copyWith(hideUnchangedScheduleVersions: next.hideUnchanged);
+      final index =
+          state.versionProjection.representativeFor(state.selectedVersionIndex);
+      if (index >= 0 && index != state.selectedVersionIndex) {
+        selectVersion(index);
+      }
+    });
 
     _fcmSubscription = FcmService.onMessageStream.listen((message) {
       if (!ref.mounted) return;
@@ -93,7 +112,10 @@ class HomeNotifier extends Notifier<HomeState> {
       _scheduleSubscription?.cancel();
     });
 
-    return const HomeState();
+    return HomeState(
+      hideUnchangedScheduleVersions:
+          ref.read(scheduleVersionPreferencesProvider).hideUnchanged,
+    );
   }
 
   PowerMonitorService get powerMonitor => _powerMonitor;
@@ -429,6 +451,7 @@ class HomeNotifier extends Notifier<HomeState> {
   // --- 4. SELECT VERSION ---
   void selectVersion(int index) {
     if (index < 0 || index >= state.historyVersions.length) return;
+    index = state.versionProjection.representativeFor(index);
     final selectedVer = state.historyVersions[index];
     state = state.copyWith(
       selectedVersionIndex: index,
@@ -440,16 +463,31 @@ class HomeNotifier extends Notifier<HomeState> {
     recalculateDisplayData();
   }
 
+  /// A modal callback must never resolve an old index against a newer list.
+  void selectPublication(ScheduleVersion version,
+      {required String group, required DateTime date}) {
+    if (state.currentGroup != group ||
+        !DateUtils.isSameDay(state.displayDate, date)) {
+      return;
+    }
+    final index = state.historyVersions.indexWhere(version.isSamePublication);
+    if (index >= 0) selectVersion(index);
+  }
+
   /// Cycle through available schedule versions (+1 newer/next, -1 older/previous).
   void cycleVersion(int direction) {
-    if (state.historyVersions.length <= 1 || direction == 0) return;
+    final projection = state.versionProjection;
+    final visible = projection.visibleIndices;
+    if (visible.length <= 1 || direction == 0) return;
     final currentIndex = state.selectedVersionIndex >= 0
         ? state.selectedVersionIndex
         : state.historyVersions.length - 1;
-    final count = state.historyVersions.length;
-    final newIndex = (currentIndex + direction) % count;
-    final targetIndex = newIndex < 0 ? newIndex + count : newIndex;
-    selectVersion(targetIndex);
+    final position =
+        visible.indexOf(projection.representativeFor(currentIndex));
+    final target =
+        ((position < 0 ? visible.length - 1 : position) + direction) %
+            visible.length;
+    selectVersion(visible[target]);
   }
 
   // --- SELECT DATE ---
@@ -713,19 +751,25 @@ class HomeNotifier extends Notifier<HomeState> {
 
   // --- REFRESH VERSIONS ---
   Future<void> refreshVersionsForCurrentMode() async {
+    final requestId = ++_historyLoadRequestId;
     final targetDate = state.displayDate;
     final groupAtCall = state.currentGroup;
-    final versions = await HistoryService()
-        .getVersionsForDate(targetDate, state.currentGroup);
+    final modeAtCall = state.viewMode;
+    final versions = await _historyService.getVersionsForDate(
+        targetDate, state.currentGroup);
     if (!ref.mounted) return;
+    if (requestId != _historyLoadRequestId || state.viewMode != modeAtCall) {
+      return;
+    }
     if (state.currentGroup != groupAtCall) return;
     if (!DateUtils.isSameDay(targetDate, state.displayDate)) return;
 
     if (versions.isNotEmpty) {
+      final selected = _selectionForVersions(versions, groupAtCall, targetDate);
       state = state.copyWith(
         historyVersions: versions,
-        selectedVersionIndex: versions.length - 1,
-        historySchedule: versions.last.toSchedule(),
+        selectedVersionIndex: selected,
+        historySchedule: versions[selected].toSchedule(),
       );
     } else {
       state = state.copyWith(
@@ -734,7 +778,27 @@ class HomeNotifier extends Notifier<HomeState> {
         clearHistorySchedule: true,
       );
     }
+    _versionsGroup = groupAtCall;
+    _versionsDate = targetDate;
     recalculateDisplayData();
+  }
+
+  int _selectionForVersions(
+      List<ScheduleVersion> versions, String group, DateTime date) {
+    var index = versions.length - 1;
+    final previousIndex = state.selectedVersionIndex;
+    // Following the latest publication stays live. An older selection stays put.
+    if (_versionsGroup == group &&
+        DateUtils.isSameDay(_versionsDate, date) &&
+        previousIndex >= 0 &&
+        previousIndex < state.historyVersions.length - 1) {
+      final previous = state.historyVersions[previousIndex];
+      final found = versions.indexWhere(previous.isSamePublication);
+      if (found >= 0) index = found;
+    }
+    return ScheduleVersionFilter.project(versions,
+            hideUnchanged: state.hideUnchangedScheduleVersions)
+        .representativeFor(index);
   }
 
   // --- UPDATE STATUS DATE ---
@@ -750,11 +814,19 @@ class HomeNotifier extends Notifier<HomeState> {
     }
 
     final dateStr = AppFormatters.formatDateKey(targetDate);
-    final updateTime = await HistoryService().getLatestUpdatedAt(
+    final groupAtCall = state.currentGroup;
+    final modeAtCall = state.viewMode;
+    final updateTime = await _historyService.getLatestUpdatedAt(
       groupKey: state.currentGroup,
       targetDate: dateStr,
     );
     if (!ref.mounted) return;
+
+    if (state.currentGroup != groupAtCall ||
+        state.viewMode != modeAtCall ||
+        !DateUtils.isSameDay(targetDate, state.displayDate)) {
+      return;
+    }
 
     String msg = "Оновлено ДТЕК: Невідомо";
     Color color = Colors.grey;
@@ -796,16 +868,20 @@ class HomeNotifier extends Notifier<HomeState> {
     final groupAtCall = state.currentGroup;
     final dateAtCall = date;
 
+    final sameContext = _versionsGroup == groupAtCall &&
+        DateUtils.isSameDay(_versionsDate, date);
+
     state = state.copyWith(
       isLoading: true,
       statusMessage: "Завантаження архіву...",
-      historyVersions: const [],
-      selectedVersionIndex: -1,
+      historyVersions: sameContext ? state.historyVersions : const [],
+      selectedVersionIndex: sameContext ? state.selectedVersionIndex : -1,
+      clearHistorySchedule: !sameContext,
     );
 
     try {
       final versions =
-          await HistoryService().getVersionsForDate(date, state.currentGroup);
+          await _historyService.getVersionsForDate(date, state.currentGroup);
       if (!ref.mounted) return;
       if (requestId != _historyLoadRequestId) return;
       if (state.currentGroup != groupAtCall) return;
@@ -822,15 +898,18 @@ class HomeNotifier extends Notifier<HomeState> {
         );
       } else {
         final versionCount = versions.length;
+        final selected = _selectionForVersions(versions, groupAtCall, date);
         state = state.copyWith(
           historyVersions: versions,
           isLoading: false,
-          selectedVersionIndex: versions.length - 1,
-          historySchedule: versions.last.toSchedule(),
+          selectedVersionIndex: selected,
+          historySchedule: versions[selected].toSchedule(),
           statusMessage:
               "Архів за $dateStr ($versionCount ${AppFormatters.pluralVersions(versionCount)})",
         );
       }
+      _versionsGroup = groupAtCall;
+      _versionsDate = date;
       recalculateDisplayData();
     } catch (e) {
       if (!ref.mounted) return;

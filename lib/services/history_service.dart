@@ -465,6 +465,7 @@ class HistoryService {
     for (var map in orderedMaps) {
       String timeStr = map['dtek_updated_at'] as String;
       DateTime savedAt;
+      var hasReliableTimestamp = true;
       try {
         // Try to find full date-time first (DD.MM.YYYY HH:mm)
         // Matches: 27.01.2026 19:54 or 27.01.26 19:54
@@ -480,6 +481,11 @@ class HistoryService {
           int h = int.parse(dateMatch.group(4)!);
           int m = int.parse(dateMatch.group(5)!);
           savedAt = DateTime(year, month, day, h, m);
+          hasReliableTimestamp = savedAt.year == year &&
+              savedAt.month == month &&
+              savedAt.day == day &&
+              savedAt.hour == h &&
+              savedAt.minute == m;
         } else {
           // Fallback to just time (HH:mm)
           final RegExp exp = RegExp(r'(\d{1,2}):(\d{2})');
@@ -488,17 +494,24 @@ class HistoryService {
             int h = int.parse(match.group(1)!);
             int m = int.parse(match.group(2)!);
             savedAt = DateTime(date.year, date.month, date.day, h, m);
+            hasReliableTimestamp = h >= 0 && h < 24 && m >= 0 && m < 60;
           } else {
+            hasReliableTimestamp = false;
             savedAt = DateTime.now();
           }
         }
       } catch (e) {
+        hasReliableTimestamp = false;
         savedAt = DateTime.now();
       }
 
       final schedule = DailySchedule.fromEncodedString(map['schedule_code']);
 
       versions.add(ScheduleVersion(
+          recordId: map['id'] as int?,
+          sourceUpdatedAt: timeStr,
+          isManual: timeStr.endsWith('(Manual)'),
+          hasReliableTimestamp: hasReliableTimestamp,
           hash: map['schedule_code'],
           savedAt: savedAt,
           outageMinutes: schedule.totalOutageMinutes));

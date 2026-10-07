@@ -7,6 +7,7 @@ import '../../models/interval_info.dart';
 import '../../models/power_event.dart';
 import '../../models/schedule_status.dart';
 import '../../models/schedule_view_mode.dart';
+import '../../services/schedule_version_filter.dart';
 
 @immutable
 class HomeState {
@@ -21,6 +22,7 @@ class HomeState {
   final DailySchedule? historySchedule;
   final List<ScheduleVersion> historyVersions;
   final int selectedVersionIndex;
+  final bool hideUnchangedScheduleVersions;
   final Map<String, int> lastUpdateOldStats;
   final bool wasUpdated;
   final bool isCachedData;
@@ -46,6 +48,7 @@ class HomeState {
     this.historySchedule,
     this.historyVersions = const [],
     this.selectedVersionIndex = -1,
+    this.hideUnchangedScheduleVersions = true,
     this.lastUpdateOldStats = const {},
     this.wasUpdated = false,
     this.isCachedData = false,
@@ -63,6 +66,10 @@ class HomeState {
   bool get isHistoryMode =>
       viewMode == ScheduleViewMode.history ||
       viewMode == ScheduleViewMode.yesterday;
+
+  ScheduleVersionProjection get versionProjection =>
+      ScheduleVersionFilter.project(historyVersions,
+          hideUnchanged: hideUnchangedScheduleVersions);
 
   DateTime get displayDate {
     final now = ScheduleClock.now();
@@ -135,6 +142,7 @@ class HomeState {
     bool clearHistorySchedule = false,
     List<ScheduleVersion>? historyVersions,
     int? selectedVersionIndex,
+    bool? hideUnchangedScheduleVersions,
     Map<String, int>? lastUpdateOldStats,
     bool? wasUpdated,
     bool? isCachedData,
@@ -164,6 +172,8 @@ class HomeState {
           : (historySchedule ?? this.historySchedule),
       historyVersions: historyVersions ?? this.historyVersions,
       selectedVersionIndex: selectedVersionIndex ?? this.selectedVersionIndex,
+      hideUnchangedScheduleVersions:
+          hideUnchangedScheduleVersions ?? this.hideUnchangedScheduleVersions,
       lastUpdateOldStats: lastUpdateOldStats ?? this.lastUpdateOldStats,
       wasUpdated: wasUpdated ?? this.wasUpdated,
       isCachedData: isCachedData ?? this.isCachedData,
