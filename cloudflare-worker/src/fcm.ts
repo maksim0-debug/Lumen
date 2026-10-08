@@ -201,6 +201,9 @@ export interface FcmMessageOptions {
   dayType?: 'today' | 'tomorrow';
   eventId?: string;
   targetDate?: string;
+  isEmergency?: boolean;
+  observedAt?: number;
+  expiresAt?: number;
 }
 
 /**
@@ -209,18 +212,28 @@ export interface FcmMessageOptions {
 export async function sendFcmTopicNotification(
   serviceAccount: ServiceAccount,
   options: FcmMessageOptions
-): Promise<{ success: boolean; messageId?: string; error?: string }> {
+): Promise<{ success: boolean; messageId?: string; error?: string; retryable?: boolean }> {
   try {
+    const emergency = options.changeType === 'emergency_alert';
+    if (emergency && (typeof options.isEmergency !== 'boolean' ||
+        !Number.isSafeInteger(options.observedAt) || !Number.isSafeInteger(options.expiresAt) ||
+        options.observedAt! <= 0 || options.observedAt! > Date.now() + 60_000 ||
+        options.expiresAt! <= options.observedAt! || options.expiresAt! - options.observedAt! > 900_000)) {
+      return { success: false, error: 'Invalid emergency event', retryable: false };
+    }
+    const ttl = emergency && options.expiresAt !== undefined
+      ? Math.floor((options.expiresAt - Date.now()) / 1000) : 900;
+    if (ttl <= 0) return { success: false, error: 'Emergency event expired', retryable: false };
     const accessToken = await getGoogleAccessToken(serviceAccount);
     const url = `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`;
 
     const payload = {
       message: {
         topic: options.topic,
-        notification: {
+        ...(!emergency ? { notification: {
           title: options.title,
           body: options.body,
-        },
+        } } : {}),
         data: {
           group: options.group,
           type: options.changeType ?? 'schedule_update',
@@ -231,22 +244,28 @@ export async function sendFcmTopicNotification(
           dayType: options.dayType ?? 'today',
           eventId: options.eventId ?? '',
           targetDate: options.targetDate ?? '',
+          ...(emergency ? {
+            title: options.title, body: options.body,
+            isEmergency: String(options.isEmergency),
+            observedAt: String(options.observedAt), expiresAt: String(options.expiresAt),
+          } : {}),
         },
         android: {
           priority: 'HIGH',
-          ttl: '900s', // A delayed schedule alert quickly becomes misleading.
-          notification: {
+          ttl: `${ttl}s`,
+          ...(emergency ? { collapse_key: 'emergency_status' } : { notification: {
             // Re-delivery after an uncertain acknowledgement replaces the same system notification.
             ...(options.eventId ? { tag: options.eventId } : {}),
             channel_id: 'schedule_channel',
             notification_priority: 'PRIORITY_HIGH',
             default_sound: true,
             default_vibrate_timings: true,
-          },
+          } }),
         },
         apns: {
-          headers: { 'apns-expiration': String(Math.floor(Date.now() / 1000) + 900) },
-          payload: { aps: { sound: 'default' } },
+          headers: { 'apns-expiration': String(Math.floor(Date.now() / 1000) + ttl),
+            ...(emergency ? { 'apns-push-type': 'background', 'apns-priority': '5' } : {}) },
+          payload: { aps: emergency ? { 'content-available': 1 } : { sound: 'default' } },
         },
       },
     };
@@ -264,7 +283,8 @@ export async function sendFcmTopicNotification(
     if (!response.ok) {
       if (response.status === 401) { cachedAccessToken = null; tokenExpiresAt = 0; }
       const err = await response.text();
-      return { success: false, error: `FCM API ${response.status}: ${err}` };
+      return { success: false, error: `FCM API ${response.status}: ${err}`,
+        retryable: response.status === 401 || response.status === 429 || response.status >= 500 };
     }
 
     const resJson = (await response.json()) as { name?: string };

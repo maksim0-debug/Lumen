@@ -35,6 +35,8 @@ class HomeState {
   final List<IntervalInfo> cachedIntervals;
   final bool isRealSourceConfigured;
   final bool hasRealCoverage;
+  final bool isEmergencyActive;
+  final bool isEmergencyStatusStale;
 
   const HomeState({
     this.allSchedules = const {},
@@ -61,6 +63,8 @@ class HomeState {
     this.cachedIntervals = const [],
     this.isRealSourceConfigured = false,
     this.hasRealCoverage = false,
+    this.isEmergencyActive = false,
+    this.isEmergencyStatusStale = false,
   });
 
   bool get isHistoryMode =>
@@ -157,6 +161,8 @@ class HomeState {
     List<IntervalInfo>? cachedIntervals,
     bool? isRealSourceConfigured,
     bool? hasRealCoverage,
+    bool? isEmergencyActive,
+    bool? isEmergencyStatusStale,
   }) {
     return HomeState(
       allSchedules: allSchedules ?? this.allSchedules,
@@ -191,6 +197,9 @@ class HomeState {
       isRealSourceConfigured:
           isRealSourceConfigured ?? this.isRealSourceConfigured,
       hasRealCoverage: hasRealCoverage ?? this.hasRealCoverage,
+      isEmergencyActive: isEmergencyActive ?? this.isEmergencyActive,
+      isEmergencyStatusStale:
+          isEmergencyStatusStale ?? this.isEmergencyStatusStale,
     );
   }
 }

@@ -2,10 +2,112 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lumen/models/data_source_mode.dart';
 import 'package:lumen/ui/widgets/home/data_source_toggle.dart';
+import 'package:lumen/ui/widgets/home/emergency_alert_banner.dart';
 import 'package:lumen/ui/widgets/home/power_status_badge.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  Future<void> pumpNotice(WidgetTester tester,
+      {double width = 900,
+      double textScale = 1,
+      bool monitorEnabled = true,
+      bool stale = false,
+      String powerStatus = 'online',
+      ValueChanged<DataSourceMode>? onModeChanged}) async {
+    tester.view.physicalSize = Size(width, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(MaterialApp(
+      home: MediaQuery(
+        data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
+        child: Scaffold(
+          body: Column(children: [
+            DataSourceToggle(
+              powerMonitorEnabled: monitorEnabled,
+              currentMode: DataSourceMode.predicted,
+              onModeChanged: onModeChanged ?? (_) {},
+              powerStatus: powerStatus,
+              leadingNotice:
+                  EmergencyAlertBanner(isActive: true, isStale: stale),
+            ),
+          ]),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+  }
+
+  for (final status in ['online', 'offline', 'unknown']) {
+    testWidgets('notice sits left of centered controls with $status power',
+        (tester) async {
+      DataSourceMode? selectedMode;
+      await pumpNotice(tester,
+          powerStatus: status, onModeChanged: (mode) => selectedMode = mode);
+      final notice = tester.getRect(find.byType(EmergencyAlertBanner));
+      final forecast =
+          tester.getRect(find.widgetWithText(ChoiceChip, '📋 Прогноз'));
+      final real = tester.getRect(find.widgetWithText(ChoiceChip, '⚡ Реальне'));
+      final badge = tester.getRect(find.byType(PowerStatusBadge));
+      expect((forecast.left + real.right) / 2, closeTo(450, 0.01));
+      expect(notice.left, 16);
+      expect(notice.right, lessThan(forecast.left));
+      expect(notice.center.dy, closeTo(real.center.dy, 0.01));
+      expect(badge.left, greaterThan(real.right));
+      expect(badge.right, lessThanOrEqualTo(884));
+      expect(
+          tester.getSize(find.byType(DataSourceToggle)).height, lessThan(350));
+      expect(tester.takeException(), null);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, '⚡ Реальне'));
+      expect(selectedMode, DataSourceMode.real);
+      selectedMode = null;
+      await tester.fling(find.widgetWithText(ChoiceChip, '📋 Прогноз'),
+          const Offset(-80, 0), 800);
+      expect(selectedMode, DataSourceMode.real);
+      await tester.tap(find.byType(PowerStatusBadge));
+      await tester.pump();
+      expect(find.byType(SnackBar), findsOneWidget);
+    });
+  }
+
+  for (final scenario in [
+    (width: 360.0, textScale: 1.0),
+    (width: 320.0, textScale: 2.0),
+    (width: 900.0, textScale: 2.0),
+  ]) {
+    testWidgets('notice stacks without clipping at $scenario', (tester) async {
+      await pumpNotice(tester,
+          width: scenario.width, textScale: scenario.textScale, stale: true);
+      final notice = tester.getRect(find.byType(EmergencyAlertBanner));
+      for (final finder in [
+        find.widgetWithText(ChoiceChip, '📋 Прогноз'),
+        find.widgetWithText(ChoiceChip, '⚡ Реальне'),
+        find.byType(PowerStatusBadge),
+      ]) {
+        final rect = tester.getRect(finder);
+        expect(rect.top, greaterThanOrEqualTo(notice.bottom));
+        expect(rect.left, greaterThanOrEqualTo(16));
+        expect(rect.right, lessThanOrEqualTo(scenario.width - 16));
+      }
+      expect(notice.width, lessThanOrEqualTo(280));
+      expect(find.text('Не вдалося отримати актуальні дані'), findsOneWidget);
+      expect(tester.takeException(), null);
+    });
+  }
+
+  testWidgets('notice remains visible with monitoring disabled',
+      (tester) async {
+    await pumpNotice(tester, monitorEnabled: false);
+    expect(find.text('Зараз діють екстрені відключення'), findsOneWidget);
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byType(PowerStatusBadge), findsNothing);
+    expect(tester.getRect(find.byType(EmergencyAlertBanner)).left, 16);
+    expect(tester.takeException(), null);
+  });
 
   testWidgets(
       'DataSourceToggle: Forecast and Real buttons stay strictly centered regardless of powerStatus',

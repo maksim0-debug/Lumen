@@ -118,7 +118,10 @@ class DesktopSyncService {
     final generation = _generation;
     try {
       final result = await _fetch().timeout(const Duration(seconds: 90));
-      if (generation != _generation || result.schedules.isEmpty) return;
+      if (generation != _generation ||
+          (result.schedules.isEmpty && result.emergency == null)) {
+        return;
+      }
       final config = await _loadConfig().timeout(const Duration(seconds: 10));
       if (generation != _generation || config == null || result.html == null) {
         return;
@@ -162,8 +165,9 @@ class DesktopSyncService {
         if (report is! Map<String, dynamic> ||
             report['errors'] is! List ||
             report['checkedGroups'] is! int ||
-            (report['checkedGroups'] as int) <= 0 ||
-            report['status'] != 'success' ||
+            ((report['checkedGroups'] as int) <= 0 &&
+                report['emergencyProcessed'] != true) ||
+            !['success', 'emergency_only'].contains(report['status']) ||
             (report['errors'] as List).isNotEmpty ||
             response.statusCode != 200) {
           throw HttpException(

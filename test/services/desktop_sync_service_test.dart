@@ -5,9 +5,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lumen/services/desktop_sync_service.dart';
 import 'package:lumen/services/app_logger.dart';
 import 'package:lumen/services/parser_service.dart';
+import 'package:lumen/models/emergency_status.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+      'desktop forwards status-only observations when no schedule is available',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final received = <String>[];
+    final subscription = server.listen((request) async {
+      received.add(await utf8.decoder.bind(request).join());
+      request.response.write(jsonEncode({
+        'status': 'emergency_only',
+        'checkedGroups': 0,
+        'emergencyProcessed': true,
+        'errors': []
+      }));
+      await request.response.close();
+    });
+    final client = DesktopSyncService.forTesting(
+      fetch: () async => ParserFetchResult({}, 'status-only-canonical-payload',
+          emergency: EmergencyObservation(
+              true, DateTime.now().millisecondsSinceEpoch)),
+      loadConfig: () async => DesktopAdminConfig(
+          adminKey: 'test-key', workerUrl: 'http://127.0.0.1:${server.port}'),
+    );
+    try {
+      await client.syncNow();
+      expect(received, ['status-only-canonical-payload']);
+    } finally {
+      client.dispose();
+      await server.close(force: true);
+      await subscription.cancel();
+    }
+  });
   setUp(() => HttpOverrides.global = null);
   DesktopSyncService service({Duration timeout = const Duration(seconds: 1)}) =>
       DesktopSyncService.forTesting(
@@ -74,6 +106,13 @@ void main() {
           'status': 'success',
           'errors': ['FCM failed']
         }));
+      } else if (request.uri.path.startsWith('/emergency')) {
+        request.response.write(jsonEncode({
+          'status': 'emergency_only',
+          'errors': [],
+          'checkedGroups': 0,
+          'emergencyProcessed': true
+        }));
       } else {
         request.response.write(jsonEncode(
             {'status': 'success', 'errors': [], 'checkedGroups': 12}));
@@ -94,7 +133,12 @@ void main() {
               adminKey: 'secret',
               workerUrl: 'http://127.0.0.1:${server.port}/ok'),
           'schedule');
-      expect(visits, 4);
+      await client.pushToWorker(
+          DesktopAdminConfig(
+              adminKey: 'secret',
+              workerUrl: 'http://127.0.0.1:${server.port}/emergency'),
+          'observation');
+      expect(visits, 5);
     } finally {
       client.dispose();
       await server.close(force: true);

@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/data_source_mode.dart';
+import '../../models/emergency_status.dart';
+import '../../services/emergency_status_service.dart';
+import '../../services/emergency_notification_service.dart';
 import '../../models/hour_segment.dart';
 import '../../models/power_event.dart';
 import '../../models/schedule_status.dart';
@@ -36,6 +40,7 @@ class HomeNotifier extends Notifier<HomeState> {
   final PowerMonitorService? _customPowerMonitor;
   final AchievementService? _customAchievementService;
   final HistoryService? _customHistoryService;
+  final EmergencyStatusService? _customEmergencyStatusService;
 
   HomeNotifier({
     NotificationService? notifier,
@@ -44,13 +49,15 @@ class HomeNotifier extends Notifier<HomeState> {
     PowerMonitorService? powerMonitor,
     AchievementService? achievementService,
     HistoryService? historyService,
+    EmergencyStatusService? emergencyStatusService,
   })  : _customNotifier = notifier,
         _customScheduleNotificationCoordinator =
             scheduleNotificationCoordinator,
         _customScheduleSyncService = scheduleSyncService,
         _customPowerMonitor = powerMonitor,
         _customAchievementService = achievementService,
-        _customHistoryService = historyService;
+        _customHistoryService = historyService,
+        _customEmergencyStatusService = emergencyStatusService;
 
   late final NotificationService _notifier;
   late final ScheduleNotificationCoordinator _scheduleNotificationCoordinator;
@@ -58,6 +65,7 @@ class HomeNotifier extends Notifier<HomeState> {
   late final PowerMonitorService _powerMonitor;
   late final AchievementService _achievementService;
   late final HistoryService _historyService;
+  late final EmergencyStatusService _emergencyService;
   String? _versionsGroup;
   DateTime? _versionsDate;
 
@@ -66,6 +74,8 @@ class HomeNotifier extends Notifier<HomeState> {
 
   StreamSubscription? _fcmSubscription;
   StreamSubscription<Map<String, FullSchedule>>? _scheduleSubscription;
+  StreamSubscription<EmergencyStatus>? _emergencySubscription;
+  EmergencyStatus _emergencyStatus = const EmergencyStatus();
 
   @override
   HomeState build() {
@@ -76,6 +86,8 @@ class HomeNotifier extends Notifier<HomeState> {
     _powerMonitor = _customPowerMonitor ?? PowerMonitorService();
     _achievementService = _customAchievementService ?? AchievementService();
     _historyService = _customHistoryService ?? HistoryService();
+    _emergencyService =
+        _customEmergencyStatusService ?? EmergencyStatusService();
 
     ref.listen(scheduleVersionPreferencesProvider, (previous, next) {
       if (state.hideUnchangedScheduleVersions == next.hideUnchanged) return;
@@ -87,8 +99,20 @@ class HomeNotifier extends Notifier<HomeState> {
       }
     });
 
-    _fcmSubscription = FcmService.onMessageStream.listen((message) {
+    _fcmSubscription = FcmService.onMessageStream.listen((message) async {
       if (!ref.mounted) return;
+      if (EmergencyPush.isEmergency(message.data)) {
+        await refreshEmergencyStatus();
+        if (ref.mounted &&
+            EmergencyPush.parse(
+                    message.data, DateTime.now().millisecondsSinceEpoch) ==
+                null) {
+          // Older workers did not attach a timestamp. Refresh rather than
+          // treating a missing boolean as a cancellation.
+          unawaited(loadData(silent: true, force: true));
+        }
+        return;
+      }
       AppLogger.i(
           "🔄 FCM оновлення отримано у foreground. Оновлюємо розклад...",
           tag: 'HomeNotifier');
@@ -96,6 +120,9 @@ class HomeNotifier extends Notifier<HomeState> {
         loadData(force: true);
       }
     });
+
+    _emergencySubscription =
+        _emergencyService.changes.listen(_applyEmergencyStatus);
 
     _scheduleSubscription =
         ScheduleSyncService.onSyncCompleted.listen((schedules) {
@@ -110,6 +137,7 @@ class HomeNotifier extends Notifier<HomeState> {
       _powerMonitor.onStatusChanged = null;
       _fcmSubscription?.cancel();
       _scheduleSubscription?.cancel();
+      _emergencySubscription?.cancel();
     });
 
     return HomeState(
@@ -121,6 +149,25 @@ class HomeNotifier extends Notifier<HomeState> {
   PowerMonitorService get powerMonitor => _powerMonitor;
   NotificationService get notifier => _notifier;
   AchievementService get achievementService => _achievementService;
+
+  Future<void> refreshEmergencyStatus() async {
+    final status = await _emergencyService.read();
+    if (ref.mounted) _applyEmergencyStatus(status);
+  }
+
+  void _applyEmergencyStatus(EmergencyStatus status) {
+    if (!ref.mounted || status.seenAt < _emergencyStatus.seenAt) return;
+    _emergencyStatus = status;
+    state = state.copyWith(
+      isEmergencyActive: status.active == true,
+      isEmergencyStatusStale:
+          !status.isFreshAt(DateTime.now().millisecondsSinceEpoch),
+    );
+    if (Platform.isWindows && status.active != null) {
+      unawaited(EmergencyNotificationService(statusService: _emergencyService)
+          .notifyStatus(status));
+    }
+  }
 
   // --- RECALCULATE DISPLAY DATA ---
   void recalculateDisplayData() {
@@ -588,6 +635,8 @@ class HomeNotifier extends Notifier<HomeState> {
 
   // --- LOAD PREFERENCES & DATA ---
   Future<void> loadPreferencesAndData() async {
+    await refreshEmergencyStatus();
+    if (!ref.mounted) return;
     SharedPreferences? prefs;
     try {
       prefs = await PreferencesHelper.getSafeInstance();
@@ -729,7 +778,10 @@ class HomeNotifier extends Notifier<HomeState> {
 
   // --- LOAD CACHED DATA ---
   Future<void> loadCachedData() async {
+    await refreshEmergencyStatus();
+    if (!ref.mounted) return;
     final cached = await _scheduleSyncService.loadCachedData();
+    if (!ref.mounted) return;
     if (cached.isNotEmpty) {
       final current = cached[state.currentGroup];
       final msg = current != null

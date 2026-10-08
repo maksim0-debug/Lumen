@@ -12,6 +12,8 @@ import 'preferences_helper.dart';
 import 'widget_service.dart';
 import 'fcm_event_guard.dart';
 import 'dtek_snapshot.dart';
+import '../models/emergency_status.dart';
+import 'emergency_notification_service.dart';
 import '../utils/app_formatters.dart';
 
 @pragma('vm:entry-point')
@@ -19,6 +21,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
     await Firebase.initializeApp();
+    if (EmergencyPush.isEmergency(message.data)) {
+      await EmergencyNotificationService().handlePush(message.data);
+      return;
+    }
     AppLogger.i(
       "📩 FCM Бекграунд пуш [${message.messageId}] для групи ${message.data['group'] ?? 'не вказано'}: ${message.notification?.title ?? message.data['title']}",
       tag: 'FCM',
@@ -115,6 +121,8 @@ class FcmService {
   static final StreamController<RemoteMessage> _messageStreamController =
       StreamController<RemoteMessage>.broadcast();
 
+  static const String emergencyTopic = "emergency_alerts";
+
   /// Потік отриманих FCM-повідомлень для реактивного оновлення UI
   static Stream<RemoteMessage> get onMessageStream =>
       _messageStreamController.stream;
@@ -168,6 +176,11 @@ class FcmService {
 
       // Обробка пушів, коли додаток відкритий (Foreground)
       FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+        if (EmergencyPush.isEmergency(message.data)) {
+          await EmergencyNotificationService().handlePush(message.data);
+          _messageStreamController.add(message);
+          return;
+        }
         try {
           final date = message.data['targetDate'] as String?;
           if (date != null &&
@@ -193,12 +206,12 @@ class FcmService {
         // Перевіряємо, чи користувач увімкнув відповідне сповіщення
         try {
           final prefs = await PreferencesHelper.getSafeInstance();
+          final groupName = message.data['group'] as String?;
           final dayType = message.data['dayType'] as String? ?? 'today';
           final notifyAllowed = dayType == 'tomorrow'
               ? (prefs.getBool('notify_tomorrow_schedule') ?? true)
               : (prefs.getBool('notify_schedule_change') ?? true);
 
-          final groupName = message.data['group'] as String?;
           final activeGroups =
               PreferencesHelper.getActiveNotificationGroups(prefs);
 
@@ -234,7 +247,12 @@ class FcmService {
       });
 
       // Обробка відкриття додатку через клік по пушу
-      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      FirebaseMessaging.onMessageOpenedApp
+          .listen((RemoteMessage message) async {
+        if (EmergencyPush.isEmergency(message.data)) {
+          await EmergencyNotificationService()
+              .handlePush(message.data, notify: false);
+        }
         AppLogger.i(
           "📲 Додаток відкрито через клік по пушу: ${message.data}",
           tag: 'FCM',
@@ -245,6 +263,10 @@ class FcmService {
       // Обробка холодного старту через клік по пушу
       final initialMessage = await messaging.getInitialMessage();
       if (initialMessage != null) {
+        if (EmergencyPush.isEmergency(initialMessage.data)) {
+          await EmergencyNotificationService()
+              .handlePush(initialMessage.data, notify: false);
+        }
         AppLogger.i(
           "📲 Додаток запущено з нуля через клік по пушу: ${initialMessage.data}",
           tag: 'FCM',
@@ -327,6 +349,8 @@ class FcmService {
           prefs.getBool('notify_schedule_change') ?? true;
       final notifyTomorrowSchedule =
           prefs.getBool('notify_tomorrow_schedule') ?? true;
+      final notifyEmergencyOutages =
+          prefs.getBool('notify_emergency_outages') ?? true;
 
       final messaging = FirebaseMessaging.instance;
       final currentSubscribed =
@@ -345,6 +369,9 @@ class FcmService {
         for (final group in notificationGroups) {
           targetTopics.add(groupToTopic(group, dayType: 'tomorrow'));
         }
+      }
+      if (notifyEmergencyOutages) {
+        targetTopics.add(emergencyTopic);
       }
 
       AppLogger.d(

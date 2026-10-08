@@ -39,6 +39,125 @@ function setup(legacy = {}) {
     send: async (fact, source = 'desktop_bridge', dryRun = false) => (await monitor.fetch(new Request('https://internal/check', {
       method: 'POST', body: JSON.stringify({ html: html(fact), source, dryRun }) }))).json() };
 }
+
+async function sendEmergency(s, active, { capturedAt = now, fact = fixture(), dryRun = false } = {}) {
+  const notice = `<script id="lumen-emergency" type="application/json">${JSON.stringify({
+    schemaVersion: 1, active, observedAt: capturedAt })}</script>`;
+  return (await s.monitor.fetch(new Request('https://internal/check', { method: 'POST',
+    body: JSON.stringify({ html: (fact ? html(fact) : '') + notice, source: 'test', dryRun }) }))).json();
+}
+
+test('emergency baseline alerts once, unchanged schedules do not block independent transitions', async () => {
+  const s = setup();
+  const first = await sendEmergency(s, true);
+  assert.equal(first.emergencyProcessed, true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].changeType, 'emergency_alert');
+  assert.equal(sent[0].isEmergency, true);
+  assert.equal(sent[0].targetDate, undefined);
+  const baseline = structuredClone(s.record().snapshot);
+  now += 1000;
+  await sendEmergency(s, true);
+  assert.equal(sent.length, 1);
+  now += 1000;
+  await sendEmergency(s, false);
+  assert.equal(s.record().emergency.active, true);
+  now += 30000;
+  await sendEmergency(s, false);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].isEmergency, false);
+  assert.deepEqual(s.record().snapshot, baseline);
+  await sendEmergency(s, true, { capturedAt: now - 1 });
+  assert.equal(s.record().emergency.active, false);
+  assert.equal(sent.length, 2);
+});
+
+test('script-only Python/legacy snapshots never imply cancellation', async () => {
+  const s = setup(); await sendEmergency(s, true);
+  now += 60000;
+  await s.send(fixture(), 'python_bridge');
+  now += 60000;
+  await s.send(fixture(), 'python_bridge');
+  assert.equal(s.record().emergency.active, true);
+  assert.equal(sent.length, 1);
+});
+
+test('malformed/stale schedule does not block emergency state or delivery; dry run remains pure', async () => {
+  const s = setup(); await s.send(fixture());
+  const snapshot = structuredClone(s.record().snapshot);
+  assert.equal((await sendEmergency(s, true, { fact: null, dryRun: true })).status, 'dry_run_success');
+  assert.equal(s.record().emergency, undefined);
+  assert.equal(sent.length, 0);
+  const result = await sendEmergency(s, true, { fact: null });
+  assert.equal(result.status, 'emergency_only');
+  assert.equal(result.scheduleStatus, 'no_data_extracted');
+  assert.equal(result.emergencyProcessed, true);
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(s.record().snapshot, snapshot);
+  now += 1000;
+  const stale = await sendEmergency(s, false, { fact: fixture('06.10.2026 09:00') });
+  assert.equal(stale.status, 'emergency_only');
+  assert.equal(stale.scheduleStatus, 'stale_snapshot');
+  assert.equal(s.record().emergency.active, true);
+});
+
+test('retry survives restart and midnight, but expires at original observation deadline', async () => {
+  now = Date.parse('2026-10-06T20:59:50Z');
+  const s = setup(); outcome = { success: false, error: 'Unavailable' };
+  await sendEmergency(s, true, { fact: null });
+  const original = s.record().pendingEmergency.options;
+  assert.equal(original.expiresAt, now + 900000);
+  assert.ok(s.alarm());
+  now += 31000;
+  outcome = { success: true };
+  await new ScheduleMonitor({ storage: s.storage }, s.env).alarm();
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].expiresAt, original.expiresAt);
+  assert.equal(s.record().pendingEmergency, undefined);
+  now += 1000;
+  outcome = { success: false, error: 'Unavailable' };
+  await sendEmergency(s, false, { fact: null });
+  now += 30000;
+  await sendEmergency(s, false, { fact: null });
+  assert.ok(s.record().pendingEmergency);
+  const count = sent.length;
+  now += 900001;
+  await new ScheduleMonitor({ storage: s.storage }, s.env).alarm();
+  assert.equal(sent.length, count);
+  assert.equal(s.record().pendingEmergency, undefined);
+  assert.equal(s.alarm(), undefined);
+});
+
+test('permanent FCM rejection drops emergency outbox and reports delivery failure', async () => {
+  const s = setup(); outcome = { success: false, retryable: false, error: 'FCM API 400' };
+  const result = await sendEmergency(s, true);
+  assert.equal(result.status, 'delivery_failed');
+  assert.equal(s.record().pendingEmergency, undefined);
+  assert.equal(s.alarm(), undefined);
+});
+
+test('permanent schedule FCM rejection does not retain an unrepairable retry loop', async () => {
+  const s = setup(); await s.send(fixture());
+  outcome = { success: false, retryable: false, error: 'FCM API 400' };
+  assert.equal((await s.send(fixture('06.10.2026 11:00', 'no'))).status, 'delivery_failed');
+  assert.ok(Object.values(s.record().groups).every(group => group.pending === undefined));
+  assert.equal(s.alarm(), undefined);
+  sent = []; outcome = { success: true };
+  await s.send(fixture('06.10.2026 12:00', 'first'));
+  assert.equal(sent.length, 12);
+  assert.ok(sent.every(message => message.body.startsWith('Оновлений графік')));
+  assert.ok(Object.values(s.record().groups).every(group => group.deliveryFailed === undefined));
+});
+
+test('initial inactive baseline is quiet; expired capture and duplicate delivery do not send', async () => {
+  const s = setup(); await sendEmergency(s, false);
+  assert.equal(sent.length, 0);
+  now += 1000;
+  await sendEmergency(s, true, { capturedAt: now - 900001 });
+  assert.equal(s.record().emergency.active, false);
+  await Promise.all(Array.from({ length: 5 }, () => sendEmergency(s, true)));
+  assert.equal(sent.length, 1);
+});
 test('baseline then A→B→newer A sends both real changes; old sources cannot revert it', async () => {
   const s = setup(); assert.equal((await s.send(fixture())).status, 'success'); assert.equal(sent.length, 0);
   await s.send(fixture('06.10.2026 11:00', 'no'), 'python_bridge');
@@ -149,6 +268,43 @@ test('HTTP boundary validates authentication, methods, groups and report status'
   assert.equal((await call('/check-html', html(fixture('06.10.2026 11:00', 'no')))).status, 503);
   assert.equal((await call('/check-html', html(fixture('06.10.2026 11:00', 'yes')))).status, 409);
   assert.equal((await call('/check-html', 'x'.repeat(MAX_HTML_BYTES + 1))).status, 413);
+});
+
+test('cron accepts emergency-only success but warns on report errors and delivery failures', async () => {
+  const worker = require('../src/index.ts').default;
+  const originalFetch = global.fetch;
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  const warnings = [];
+  let status = 'emergency_only';
+  let errors = [];
+  global.fetch = async () => new Response('<div id="modal-attention">Введені екстрені відключення</div>');
+  console.warn = (...args) => warnings.push(args.join(' '));
+  console.log = () => {};
+  const env = { SCHEDULE_MONITOR: {
+    idFromName: name => name,
+    get: () => ({ fetch: async () => Response.json({ status, errors }) }),
+  } };
+  try {
+    for (const expected of ['success', 'dry_run_success', 'emergency_only', 'stale_snapshot', 'bot_challenge_detected']) {
+      status = expected;
+      errors = ['stale_snapshot', 'bot_challenge_detected'].includes(expected) ? ['Expected upstream response'] : [];
+      await worker.scheduled({}, env, {});
+    }
+    assert.deepEqual(warnings, []);
+    errors = ['Emergency delivery failed'];
+    status = 'emergency_only';
+    await worker.scheduled({}, env, {});
+    assert.equal(warnings.length, 1);
+    errors = [];
+    status = 'delivery_pending';
+    await worker.scheduled({}, env, {});
+    assert.equal(warnings.length, 2);
+  } finally {
+    global.fetch = originalFetch;
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
 });
 
 test('old full snapshot cannot fill a missing tomorrow after a newer today-only snapshot', async () => {

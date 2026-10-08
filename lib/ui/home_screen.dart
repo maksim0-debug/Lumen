@@ -32,6 +32,7 @@ import 'state/schedule_version_preferences.dart';
 import 'widgets/home/countdown_card.dart';
 import 'widgets/home/darkness_stage_banner.dart';
 import 'widgets/home/data_source_toggle.dart';
+import 'widgets/home/emergency_alert_banner.dart';
 import 'widgets/home/predicted_mode_grid_cell.dart';
 import 'widgets/home/real_mode_grid_cell.dart';
 import 'widgets/home/schedule_intervals_list.dart';
@@ -89,6 +90,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (current.minute != _lastRenderedMinute) {
         _lastRenderedMinute = current.minute;
         ref.read(homeNotifierProvider.notifier).recalculateDisplayData();
+        unawaited(
+            ref.read(homeNotifierProvider.notifier).refreshEmergencyStatus());
       }
       _schedulePeriodicUpdates();
     });
@@ -262,6 +265,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         currentMode: state.dataSourceMode,
         onModeChanged: notifier.switchMode,
         powerStatus: state.powerStatus,
+        leadingNotice: state.isEmergencyActive
+            ? EmergencyAlertBanner(
+                isActive: true, isStale: state.isEmergencyStatusStale)
+            : null,
       );
 
   Widget _buildPlaceholder(BuildContext context, String message) {

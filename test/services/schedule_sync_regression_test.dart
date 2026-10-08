@@ -27,7 +27,9 @@ class RecordingNotifications implements NotificationService {
   int notifications = 0;
   @override
   Future<void> showImmediate(String title, String body,
-      {String? groupName, int? notificationId}) async {
+      {String? groupName,
+      int? notificationId,
+      bool rethrowOnError = false}) async {
     notifications++;
     await Future<void>.delayed(const Duration(milliseconds: 20));
   }

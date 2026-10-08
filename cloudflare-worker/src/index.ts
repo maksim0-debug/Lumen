@@ -5,6 +5,8 @@ export { ALL_GROUPS } from './schedule';
 export { ScheduleMonitor } from './monitor';
 export type { MonitoringReport } from './monitor';
 
+const SUCCESS_REPORT_STATUSES = ['success', 'dry_run_success', 'emergency_only'];
+
 export interface Env {
   SCHEDULE_KV: KVNamespace;
   SCHEDULE_MONITOR: DurableObjectNamespace;
@@ -28,11 +30,11 @@ async function isAuthorized(request: Request, env: Env): Promise<boolean> {
   return mismatch === 0;
 }
 
-export async function processScheduleHtml(html: string, env: Env, source = 'cron_fetch', dryRun = false): Promise<MonitoringReport> {
+export async function processScheduleHtml(html: string, env: Env, source = 'cron_fetch', dryRun = false, observedAt?: number): Promise<MonitoringReport> {
   if (!env.SCHEDULE_MONITOR) throw new Error('SCHEDULE_MONITOR Durable Object binding is not configured');
   const object = env.SCHEDULE_MONITOR.get(env.SCHEDULE_MONITOR.idFromName('dtek-krem'));
   const response = await object.fetch('https://monitor.internal/process', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ html, source, dryRun }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ html, source, dryRun, observedAt }),
   });
   if (!response.ok) throw new Error(`Schedule coordinator failed: HTTP ${response.status}`);
   return response.json() as Promise<MonitoringReport>;
@@ -45,18 +47,23 @@ function errorResponse(error: unknown): Response {
 }
 
 function reportResponse(report: MonitoringReport): Response {
-  const success = report.status === 'success' || report.status === 'dry_run_success';
+  const success = SUCCESS_REPORT_STATUSES.includes(report.status) && report.errors.length === 0;
   const status = success ? 200 : ['stale_snapshot', 'conflicting_version'].includes(report.status) ? 409
-    : ['delivery_pending', 'storage_error'].includes(report.status) ? 503 : 422;
+    : ['delivery_pending', 'delivery_failed', 'storage_error'].includes(report.status) ? 503 : 422;
   return Response.json(report, { status });
 }
 
 async function runMonitoringCheck(env: Env): Promise<MonitoringReport> {
+  const startedAt = Date.now();
   const response = await fetch(DTEK_URL, { signal: AbortSignal.timeout(20_000),
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'uk-UA,uk;q=0.9', 'Cache-Control': 'no-cache' } });
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'uk-UA,uk;q=0.9', 'Cache-Control': 'no-cache, no-store' } });
   if (!response.ok) throw new Error(`DTEK HTTP ${response.status}`);
   const html = await readLimitedBody(response.body);
-  return processScheduleHtml(html, env);
+  const date = Date.parse(response.headers.get('Date') ?? '');
+  const age = Number(response.headers.get('Age') ?? 0);
+  const observedAt = Math.min(startedAt - (Number.isFinite(age) && age >= 0 ? age * 1000 : 0),
+    Number.isFinite(date) ? date : startedAt);
+  return processScheduleHtml(html, env, 'cron_fetch', false, observedAt);
 }
 
 export default {
@@ -65,7 +72,9 @@ export default {
       const report = await runMonitoringCheck(env);
       console.log('Cron execution result:', JSON.stringify(report));
       // bot_challenge_detected is expected when direct Cloudflare datacenter IP is challenged by DTEK WAF.
-      if (!['success', 'stale_snapshot', 'bot_challenge_detected'].includes(report.status)) {
+      const success = SUCCESS_REPORT_STATUSES.includes(report.status) && report.errors.length === 0;
+      const expectedFailure = ['stale_snapshot', 'bot_challenge_detected'].includes(report.status);
+      if (!success && !expectedFailure) {
         console.warn(`Cron monitoring non-success status: ${report.status}`);
       }
     } catch (error) {

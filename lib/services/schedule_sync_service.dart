@@ -110,7 +110,10 @@ class ScheduleSyncService {
 
   Future<ParserFetchResult> fetchSnapshotAndPublish() async {
     final result = await _parser.fetchSnapshot();
-    if (result.schedules.isEmpty) throw StateError('No schedules received');
+    if (result.schedules.isEmpty) {
+      if (result.emergency != null) return result;
+      throw StateError('No schedules received');
+    }
     lastFetchTime = DateTime.now();
     _publish(result.schedules);
     return result;
@@ -217,12 +220,19 @@ class ScheduleSyncService {
       onBeforeFetch();
 
       final allData = await _parser.fetchAllSchedules();
-      if (allData.isEmpty) throw Exception("Пустий список");
+      if (allData.isEmpty) {
+        await _historyService.logAction(
+            "Парсер: Помилка — список графіків порожній (не вдалося завантажити)",
+            level: "ERROR");
+        throw Exception("Пустий список");
+      }
 
       lastFetchTime = DateTime.now();
       _publish(allData);
 
       await onFetchSuccess(allData);
+      await _historyService.logAction(
+          "Парсер: Синхронізація успішна — застосовано графіки для ${allData.length} груп");
     } catch (e) {
       if (!isHistoryMode) {
         onFetchError(e);

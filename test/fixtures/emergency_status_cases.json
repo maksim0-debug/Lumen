@@ -1,0 +1,157 @@
+[
+  {
+    "name": "active notice",
+    "html": "<div id=\"modal-attention\">За наказом НЕК Укренерго введені екстрені відключення.</div>",
+    "active": true
+  },
+  {
+    "name": "cancelled notice",
+    "html": "<div id=\"modal-attention\">Екстрені відключення скасовано. Графіки діють.</div>",
+    "active": false
+  },
+  {
+    "name": "cancelled prefix",
+    "html": "<div class='m-attention'>Скасовано екстрені відключення.</div>",
+    "active": false
+  },
+  {
+    "name": "single quotes and tags",
+    "html": "<div id='modal-attention'>ВВЕДЕНІ&nbsp;<strong>ЕКСТРЕНІ</strong> ВІДКЛЮЧЕННЯ</div>",
+    "active": true
+  },
+  {
+    "name": "latin i",
+    "html": "<div class='modal-attention'>введенi екстренi вiдключення</div>",
+    "active": true
+  },
+  {
+    "name": "noun first",
+    "html": "<div id='modal-attention'>Екстрені відключення введено</div>",
+    "active": true
+  },
+  {
+    "name": "noun first plural introduced",
+    "html": "<div id='modal-attention'>У Києві екстрені відключення введені за розпорядженням Укренерго.</div>",
+    "active": true
+  },
+  {
+    "name": "noun first plural implemented",
+    "html": "<div id='modal-attention'>Екстрені відключення запроваджені.</div>",
+    "active": true
+  },
+  {
+    "name": "noun first introduced remains negated",
+    "html": "<div id='modal-attention'>Екстрені відключення не введені.</div>",
+    "active": null
+  },
+  {
+    "name": "noun first implemented remains conditional",
+    "html": "<div id='modal-attention'>Якщо екстрені відключення запроваджені, перевірте повідомлення.</div>",
+    "active": null
+  },
+  {
+    "name": "conditional notice",
+    "html": "<div id='modal-attention'>Якщо введені екстрені відключення, графіки не діють.</div>",
+    "active": null
+  },
+  {
+    "name": "negated notice",
+    "html": "<div id='modal-attention'>Не введені екстрені відключення.</div>",
+    "active": null
+  },
+  {
+    "name": "FAQ only",
+    "html": "<div class='faq'>Введені екстрені відключення? Дізнайтеся, що робити.</div>",
+    "active": null
+  },
+  {
+    "name": "unrelated modal and FAQ",
+    "html": "<div id='modal-attention'>Технічні роботи.</div><p>Якщо введені екстрені відключення, графіки не діють.</p>",
+    "active": null
+  },
+  {
+    "name": "script inside modal",
+    "html": "<div id='modal-attention'><script>const text='введені екстрені відключення';</script></div>",
+    "active": null
+  },
+  {
+    "name": "template inside modal",
+    "html": "<div id='modal-attention'><template>Введені екстрені відключення</template></div>",
+    "active": null
+  },
+  {
+    "name": "comment inside modal",
+    "html": "<div id='modal-attention'><!-- Введені екстрені відключення --></div>",
+    "active": null
+  },
+  {
+    "name": "conflicting notices",
+    "html": "<div id='modal-attention'>Введені екстрені відключення.</div><div class='m-attention'>Екстрені відключення скасовано.</div>",
+    "active": null
+  },
+  {
+    "name": "complete schedule page without notice",
+    "html": "<!doctype html><html><head></head><body><script>DisconSchedule.fact = null;</script></body></html>",
+    "active": false
+  },
+  {
+    "name": "script-only bridge is unknown",
+    "html": "<script>DisconSchedule.fact = {};</script>",
+    "active": null
+  },
+  {
+    "name": "truncated schedule page is unknown",
+    "html": "<html><body><script>DisconSchedule.fact = {};</script>",
+    "active": null
+  },
+  {
+    "name": "login page is unknown",
+    "html": "<html><body>Login</body></html>",
+    "active": null
+  },
+  {
+    "name": "WAF with notice is unknown",
+    "html": "<html><body>_Incapsula_Resource<div id='modal-attention'>Введені екстрені відключення</div></body></html>",
+    "active": null
+  },
+  {
+    "name": "empty page is unknown",
+    "html": "",
+    "active": null
+  },
+  {
+    "name": "negative prefix",
+    "html": "<div id='modal-attention'>Не діють екстрені відключення.</div>",
+    "active": false
+  },
+  {
+    "name": "negative suffix",
+    "html": "<div id='modal-attention'>Екстрені відключення не застосовуються.</div>",
+    "active": false
+  },
+  {
+    "name": "notice inside template",
+    "html": "<template><div id='modal-attention'>Введені екстрені відключення</div></template>",
+    "active": null
+  },
+  {
+    "name": "notice inside body noscript",
+    "html": "<html><body><noscript><div id='modal-attention'>Введені екстрені відключення</div></noscript></body></html>",
+    "active": null
+  },
+  {
+    "name": "complete page with noscript notice only",
+    "html": "<html><body><noscript><div id='modal-attention'>Введені екстрені відключення</div></noscript><script>DisconSchedule.fact=null;</script></body></html>",
+    "active": false
+  },
+  {
+    "name": "complete page with ignored embedded notices",
+    "html": "<html><body><style>.notice { content: '<div id=modal-attention>Введені екстрені відключення</div>'; }</style><script>const notice = '<div id=modal-attention>Введені екстрені відключення</div>'; DisconSchedule.fact=null;</script><template><noscript><div id=modal-attention>Введені екстрені відключення</div></noscript></template></body></html>",
+    "active": false
+  },
+  {
+    "name": "complete page with template notice only",
+    "html": "<html><body><template><div id='modal-attention'>Введені екстрені відключення</div></template><script>DisconSchedule.fact=null;</script></body></html>",
+    "active": false
+  }
+]

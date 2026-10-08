@@ -4,6 +4,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import '../models/emergency_status.dart';
+import 'emergency_status_parser.dart';
+import 'emergency_status_service.dart';
 import 'dtek_snapshot.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
@@ -12,7 +15,31 @@ import 'history_service.dart';
 class ParserFetchResult {
   final Map<String, FullSchedule> schedules;
   final String? html;
-  const ParserFetchResult(this.schedules, this.html);
+  final EmergencyObservation? emergency;
+  bool? get isEmergency => emergency?.active;
+  const ParserFetchResult(this.schedules, this.html, {this.emergency});
+
+  /// Preserve a status-only response when a schedule fallback succeeds.
+  ParserFetchResult retainEmergencyFrom(ParserFetchResult? earlier) {
+    final observation = earlier?.emergency;
+    if (observation == null ||
+        (emergency != null &&
+            emergency!.observedAt >= observation.observedAt)) {
+      return this;
+    }
+    // Both payloads are canonical exports. Replace their metadata rather than
+    // attaching two contradictory observations after a cached HTTP retry.
+    final payload = (html ?? '').replaceAll(
+        RegExp(
+            r'<script id="lumen-emergency" type="application/json">.*?</script>',
+            dotAll: true),
+        '');
+    return ParserFetchResult(
+        schedules,
+        '$payload<script id="lumen-emergency" type="application/json">'
+        '${jsonEncode(observation.toTransport())}</script>',
+        emergency: observation);
+  }
 }
 
 class ParserService {
@@ -78,6 +105,9 @@ class ParserService {
     await HistoryService()
         .logAction("Парсер: Старт fetchAllSchedules (v4 direct)");
     final httpResult = await _fetchWithHttpClient();
+    ParserFetchResult? lastEmergencyResult =
+        httpResult?.emergency != null ? httpResult : null;
+    final webObservedAt = DateTime.now().millisecondsSinceEpoch;
     if (httpResult != null && httpResult.schedules.isNotEmpty) {
       await HistoryService()
           .logAction("Парсер: HTTP метод спрацював, повернення результату");
@@ -121,7 +151,7 @@ class ParserService {
         isInspectable: kDebugMode,
         javaScriptEnabled: true,
         incognito: false,
-        cacheEnabled: true,
+        cacheEnabled: false,
         domStorageEnabled: true,
         databaseEnabled: true,
         userAgent:
@@ -142,7 +172,7 @@ class ParserService {
           AppLogger.w("⛔ WebView HTTP помилка: $statusCode для $reqUrl",
               tag: 'Parser');
           await HistoryService().logAction(
-              "Парсер WebView помилка: HTTP $statusCode ($reqUrl)",
+              "Парсер WebView: Сервер відповів HTTP $statusCode ($reqUrl)",
               level: "ERROR");
         }
       },
@@ -162,6 +192,8 @@ class ParserService {
         AppLogger.d(
             "📊 Сторінка графіків завантажена ($currentUrl, покоління #$currentGen). Шукаємо дані...",
             tag: 'Parser');
+        await HistoryService().logAction(
+            "Парсер WebView: Сторінку завантажено ($currentUrl), перевіряємо HTML та дані груп...");
 
         for (int i = 0; i < 24; i++) {
           if (isDisposed ||
@@ -173,36 +205,43 @@ class ParserService {
           try {
             final jsResult = await controller.evaluateJavascript(
                 source:
-                    "typeof DisconSchedule !== 'undefined' && DisconSchedule.fact ? JSON.stringify(DisconSchedule.fact) : 'null'");
+                    "JSON.stringify({fact: typeof DisconSchedule !== 'undefined' ? DisconSchedule.fact : null, html: document.documentElement.outerHTML})");
+            final capture = decodeRuntimeCapture(jsResult);
+            String jsonString = capture.json;
+            final pageHtml = capture.html;
 
-            String jsonString = "";
-
-            if (jsResult != null &&
-                jsResult != "null" &&
-                jsResult.toString().length > 100) {
+            if (jsonString.isNotEmpty &&
+                jsonString != 'null' &&
+                jsonString.length > 100) {
               AppLogger.i("✅ Дані знайдено через JS змінну!", tag: 'Parser');
-              jsonString = jsResult.toString();
+              await HistoryService().logAction(
+                  "Парсер WebView: Отримано дані груп з JS DisconSchedule (HTML: ${pageHtml != null ? '${pageHtml.length} байт' : 'відсутній'})");
             } else {
-              final html = await controller.evaluateJavascript(
-                  source: "document.documentElement.outerHTML");
-              if (html != null) {
-                jsonString = extractJsonFromHtml(html.toString());
-                if (jsonString.isNotEmpty) {
+              if (pageHtml != null) {
+                jsonString = extractJsonFromHtml(pageHtml);
+                if (jsonString.isNotEmpty ||
+                    EmergencyStatusParser.parse(pageHtml) != null) {
                   AppLogger.i("✅ Дані знайдено через пошук у HTML!",
                       tag: 'Parser');
+                  await HistoryService().logAction(
+                      "Парсер WebView: Отримано HTML (${pageHtml.length} байт), знайдено JSON груп");
                 }
               }
             }
 
-            if (jsonString.isNotEmpty && jsonString.length > 100) {
-              var schedules = await _parseAndSaveAllGroups(jsonString);
+            if ((jsonString.isNotEmpty && jsonString.length > 100) ||
+                pageHtml != null) {
+              var schedules = await _parseAndSaveAllGroups(jsonString,
+                  originalHtml: pageHtml, observedAt: webObservedAt);
+              if (schedules.emergency != null) lastEmergencyResult = schedules;
               if (isDisposed ||
                   completer.isCompleted ||
                   currentGen != loadStopGeneration) {
                 return;
               }
               if (schedules.schedules.isNotEmpty) {
-                completeOnce(schedules);
+                completeOnce(
+                    schedules.retainEmergencyFrom(lastEmergencyResult));
                 await safeDispose();
                 return;
               }
@@ -210,8 +249,8 @@ class ParserService {
               AppLogger.d("Спроба ${i + 1}/24: Дані поки не знайдено...",
                   tag: 'Parser');
               if ((i + 1) % 6 == 0) {
-                await HistoryService()
-                    .logAction("Парсер: спроба ${i + 1}/24 - дані не знайдено");
+                await HistoryService().logAction(
+                    "Парсер WebView: Спроба ${i + 1}/24 — дані груп поки не знайдено в HTML");
               }
 
               // Debug-логування на першій спробі
@@ -231,7 +270,7 @@ class ParserService {
                       AppLogger.w("⚠️ Виявлено захист Imperva/Cloudflare!",
                           tag: 'Parser-DEBUG');
                       await HistoryService().logAction(
-                          "WebView потрапив на екран захисту Imperva/Cloudflare",
+                          "Парсер WebView: Відкрито екран антибот-захисту WAF замість сторінки ДТЕК",
                           level: "WARN");
                     }
                   }
@@ -240,17 +279,20 @@ class ParserService {
             }
           } catch (e) {
             AppLogger.e("Помилка ітерації", tag: 'Parser', error: e);
-            await HistoryService()
-                .logAction("Парсер помилка ітерації: $e", level: "ERROR");
+            await HistoryService().logAction(
+                "Парсер WebView помилка ітерації: $e",
+                level: "ERROR");
           }
           await Future.delayed(const Duration(milliseconds: 500));
         }
 
         if (!completer.isCompleted && currentGen == loadStopGeneration) {
           AppLogger.w("❌ Тайм-аут", tag: 'Parser');
-          completeOnce(const ParserFetchResult({}, null));
-          await HistoryService()
-              .logAction("Парсер: Тайм-аут очікування даних", level: "ERROR");
+          completeOnce(
+              lastEmergencyResult ?? const ParserFetchResult({}, null));
+          await HistoryService().logAction(
+              "Парсер: Тайм-аут WebView — не вдалося отримати дані груп або HTML",
+              level: "ERROR");
           await safeDispose();
         }
       },
@@ -260,9 +302,9 @@ class ParserService {
     fallbackTimeoutTimer = Timer(const Duration(seconds: 25), () async {
       if (!completer.isCompleted) {
         AppLogger.e("❌ Глобальний тайм-аут WebView (25 сек)", tag: 'Parser');
-        completeOnce(const ParserFetchResult({}, null));
+        completeOnce(lastEmergencyResult ?? const ParserFetchResult({}, null));
         await HistoryService().logAction(
-            "Парсер: Глобальний тайм-аут WebView 25 сек",
+            "Парсер: Глобальний тайм-аут WebView 25 сек — сторінку або дані не отримано",
             level: "ERROR");
         await safeDispose();
       }
@@ -272,11 +314,11 @@ class ParserService {
       await webView?.run().timeout(const Duration(seconds: 25));
     } catch (e) {
       AppLogger.e("❌ Помилка запуску WebView", tag: 'Parser', error: e);
-      completeOnce(const ParserFetchResult({}, null));
+      completeOnce(lastEmergencyResult ?? const ParserFetchResult({}, null));
       await HistoryService()
           .logAction("Парсер: Помилка запуску WebView: $e", level: "ERROR");
       await safeDispose();
-      return const ParserFetchResult({}, null);
+      return lastEmergencyResult ?? const ParserFetchResult({}, null);
     }
 
     return completer.future;
@@ -289,7 +331,7 @@ class ParserService {
     request.headers
         .set('Accept-Language', 'uk,ru-RU;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6');
     request.headers.set('Accept-Encoding', 'gzip, deflate');
-    request.headers.set('Cache-Control', 'max-age=0');
+    request.headers.set('Cache-Control', 'no-cache, no-store');
     request.headers.set('Connection', 'keep-alive');
     request.headers.set('Sec-Fetch-Dest', 'document');
     request.headers.set('Sec-Fetch-Mode', 'navigate');
@@ -336,7 +378,7 @@ class ParserService {
       AppLogger.i(
           "Парсер: Виявлено WAF-челендж, перемикаємось на Headless WebView...",
           tag: 'Parser');
-      return null;
+      return firstAttempt.result;
     }
 
     // Швидкий ретрай через 700мс для мережевих розривів або 5xx помилок сервера
@@ -347,14 +389,16 @@ class ParserService {
     final retryAttempt = await _singleDirectHttpRequest(attempt: 2);
     if (retryAttempt.result != null &&
         retryAttempt.result!.schedules.isNotEmpty) {
-      return retryAttempt.result;
+      return retryAttempt.result!.retainEmergencyFrom(firstAttempt.result);
     }
 
-    return null;
+    return retryAttempt.result?.retainEmergencyFrom(firstAttempt.result) ??
+        firstAttempt.result;
   }
 
   Future<({ParserFetchResult? result, bool wasChallenge})>
       _singleDirectHttpRequest({required int attempt}) async {
+    final observedAt = DateTime.now().millisecondsSinceEpoch;
     final client = HttpClient();
     client.userAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -385,31 +429,30 @@ class ParserService {
           bytes.addAll(chunk);
         }
         final html = utf8.decode(bytes);
-        await HistoryService()
-            .logAction("Парсер HTTP: Отримано ${html.length} байт HTML");
+        await HistoryService().logAction(
+            "Парсер HTTP: HTML успішно отримано (${html.length} байт)");
 
         if (isBotChallengeHtml(html)) {
           AppLogger.w(
               "⚠️ Парсер HTTP: Отримано антибот-челендж (${html.length} байт)",
               tag: 'Parser');
           await HistoryService().logAction(
-              "Парсер HTTP: Антибот-челендж (${html.length} байт)",
+              "Парсер HTTP: Отримано антибот-челендж WAF (${html.length} байт), дані груп недоступні",
               level: "WARN");
           return (result: null, wasChallenge: true);
         }
 
         final jsonString = extractJsonFromHtml(html);
-        if (jsonString.isNotEmpty) {
+        if (jsonString.isNotEmpty ||
+            EmergencyStatusParser.parse(html) != null) {
           AppLogger.i("✅ Дані знайдено через прямий HTTP!", tag: 'Parser');
-          if (jsonString.length > 50) {
-            await HistoryService().logAction(
-                "Парсер HTTP: JSON знайдено (${jsonString.length} симв.)");
-          }
+          await HistoryService().logAction(
+              "Парсер HTTP: Знайдено JSON графіків (${jsonString.length} симв.)");
 
           try {
-            final result = await _parseAndSaveAllGroups(jsonString);
-            await HistoryService().logAction(
-                "Парсер HTTP: Успішно розібрано ${result.schedules.length} груп");
+            final result = await _parseAndSaveAllGroups(jsonString,
+                originalHtml: html,
+                observedAt: _responseObservationTime(response, observedAt));
             return (result: result, wasChallenge: false);
           } catch (e) {
             await HistoryService().logAction(
@@ -420,15 +463,16 @@ class ParserService {
         } else {
           AppLogger.w("HTTP: HTML отримано, але JSON не знайдено",
               tag: 'Parser');
-          await HistoryService()
-              .logAction("Парсер HTTP: JSON не знайдено в HTML", level: "WARN");
+          await HistoryService().logAction(
+              "Парсер HTTP: HTML отримано, але JSON графіків не знайдено",
+              level: "WARN");
         }
       } else {
         // Звільняємо сокет операційної системи, якщо код не 200
         await response.drain<void>();
         AppLogger.w("HTTP: Status code ${response.statusCode}", tag: 'Parser');
         await HistoryService().logAction(
-            "Парсер HTTP: Не-200 відповідь: ${response.statusCode}",
+            "Парсер HTTP: Не вдалося отримати HTML, код ${response.statusCode}",
             level: "WARN");
       }
     } catch (e) {
@@ -442,33 +486,119 @@ class ParserService {
     return (result: null, wasChallenge: false);
   }
 
+  int _responseObservationTime(HttpClientResponse response, int startedAt) {
+    final parsedAge = int.tryParse(response.headers.value('age') ?? '0') ?? 0;
+    final age = parsedAge < 0 ? 0 : parsedAge;
+    final date = response.headers.date?.millisecondsSinceEpoch;
+    return [startedAt - age * 1000, if (date != null) date]
+        .reduce((a, b) => a < b ? a : b);
+  }
+
   /// Публічний екстрактор для тестування та внутрішнього використання
   String extractJsonFromHtml(String html) => DtekSnapshot.extractJson(html);
 
-  Future<ParserFetchResult> _parseAndSaveAllGroups(String rawJson) async {
-    try {
-      final snapshot = DtekSnapshot.parse(rawJson, allGroups);
-      try {
-        await HistoryService().persistSnapshot(
-          schedules: snapshot.schedules,
-          todayDate: snapshot.todayDate,
-          tomorrowDate: snapshot.tomorrowDate,
-          dtekUpdatedAt: snapshot.update,
-        );
-      } catch (historyError) {
-        AppLogger.w(
-            'Failed to persist snapshot history (non-fatal): $historyError',
-            tag: 'Parser');
-        await HistoryService()
-            .logAction('Парсер історія: $historyError', level: 'WARN');
-      }
-      return ParserFetchResult(snapshot.schedules,
-          '<script>DisconSchedule.fact = ${jsonEncode(snapshot.fact)};</script>');
-    } catch (error) {
-      AppLogger.e('Invalid DTEK snapshot', tag: 'Parser', error: error);
-      await HistoryService()
-          .logAction('Парсер: Некоректний графік: $error', level: 'ERROR');
-      return const ParserFetchResult({}, null);
+  @visibleForTesting
+  static ({String json, String? html}) decodeRuntimeCapture(dynamic value) {
+    dynamic decoded = value;
+    for (var i = 0; i < 2 && decoded is String; i++) {
+      decoded = jsonDecode(decoded);
     }
+    if (decoded is! Map ||
+        (decoded['html'] != null && decoded['html'] is! String)) {
+      throw const FormatException('Invalid runtime page capture');
+    }
+    return (
+      json: jsonEncode(decoded['fact']),
+      html: decoded['html'] as String?
+    );
+  }
+
+  static ({bool? isEmergency, String details}) analyzeEmergencyStatus(
+      String html) {
+    final active = EmergencyStatusParser.parse(html);
+    return (
+      isEmergency: active,
+      details: active == null
+          ? 'Operational status could not be verified'
+          : active
+              ? 'Active emergency notice'
+              : 'Emergency notice absent or cancelled'
+    );
+  }
+
+  static bool extractEmergencyStatus(String html) =>
+      EmergencyStatusParser.parse(html) == true;
+
+  Future<ParserFetchResult> _parseAndSaveAllGroups(String rawJson,
+          {String? originalHtml, int? observedAt}) =>
+      parseFetchedPage(rawJson,
+          originalHtml: originalHtml, observedAt: observedAt);
+
+  @visibleForTesting
+  Future<ParserFetchResult> parseFetchedPage(String rawJson,
+      {String? originalHtml,
+      int? observedAt,
+      EmergencyStatusService? emergencyService,
+      Future<void> Function(DtekSnapshot)? persistSchedules}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final active =
+        originalHtml == null ? null : EmergencyStatusParser.parse(originalHtml);
+    final observation =
+        active == null ? null : EmergencyObservation(active, observedAt ?? now);
+    final emergency =
+        observation != null && observation.isValidAt(now) ? observation : null;
+    if (emergency != null) {
+      try {
+        await (emergencyService ?? EmergencyStatusService()).observe(emergency);
+      } catch (error) {
+        AppLogger.w('Cannot persist emergency observation',
+            tag: 'Parser', error: error);
+      }
+    }
+    DtekSnapshot? snapshot;
+    try {
+      snapshot = DtekSnapshot.parse(rawJson, allGroups);
+    } catch (error) {
+      AppLogger.w('No valid schedule in fetched page',
+          tag: 'Parser', error: error);
+    }
+    if (snapshot != null) {
+      try {
+        if (persistSchedules != null) {
+          await persistSchedules(snapshot);
+        } else {
+          await HistoryService().persistSnapshot(
+              schedules: snapshot.schedules,
+              todayDate: snapshot.todayDate,
+              tomorrowDate: snapshot.tomorrowDate,
+              dtekUpdatedAt: snapshot.update);
+        }
+      } on FormatException catch (error) {
+        // A source watermark rejection is a data-integrity decision, not a
+        // storage outage. Do not publish an older/conflicting graph to the UI.
+        snapshot = null;
+        AppLogger.w(
+            'Rejected schedule snapshot; retaining emergency observation',
+            tag: 'Parser',
+            error: error);
+      } catch (error) {
+        AppLogger.w('Cannot persist schedule history',
+            tag: 'Parser', error: error);
+      }
+    }
+    // Export the validated runtime object, never stale inline script text.
+    // Emergency metadata is independent of schedule validity and version.
+    final canonical = StringBuffer();
+    if (snapshot != null) {
+      final fact = jsonEncode(snapshot.fact).replaceAll('<', r'\u003c');
+      canonical.write('<script>DisconSchedule.fact = $fact;</script>');
+    }
+    if (emergency != null) {
+      canonical.write('<script id="lumen-emergency" type="application/json">'
+          '${jsonEncode(emergency.toTransport())}</script>');
+    }
+    return ParserFetchResult(snapshot?.schedules ?? {},
+        canonical.isEmpty ? null : canonical.toString(),
+        emergency: emergency);
   }
 }

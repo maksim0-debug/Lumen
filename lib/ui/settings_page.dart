@@ -45,6 +45,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _notify30mBeforeOn = true;
   bool _notifyScheduleChange = true;
   bool _notifyTomorrowSchedule = true;
+  bool _notifyEmergencyOutages = true;
   bool _isDarkMode = true;
   bool _animationsEnabled = true;
   bool _launchAtStartup = false;
@@ -117,6 +118,8 @@ class _SettingsPageState extends State<SettingsPage> {
               prefs.getBool('notify_schedule_change') ?? true;
           _notifyTomorrowSchedule =
               prefs.getBool('notify_tomorrow_schedule') ?? true;
+          _notifyEmergencyOutages =
+              prefs.getBool('notify_emergency_outages') ?? true;
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
           _animationsEnabled = DarknessThemeService().areAnimationsEnabled;
           _enableLogging = prefs.getBool('enable_logging') ?? true;
@@ -505,6 +508,16 @@ class _SettingsPageState extends State<SettingsPage> {
           (val) {
             setState(() => _notifyTomorrowSchedule = val);
             _saveSetting('notify_tomorrow_schedule', val);
+            unawaited(FcmService().syncTopicSubscriptions());
+          },
+        ),
+        _buildSwitchTile(
+          "Екстрені відключення",
+          "Сповіщення при введенні або скасуванні екстрених відключень",
+          _notifyEmergencyOutages,
+          (val) {
+            setState(() => _notifyEmergencyOutages = val);
+            _saveSetting('notify_emergency_outages', val);
             unawaited(FcmService().syncTopicSubscriptions());
           },
         ),

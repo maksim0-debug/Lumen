@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+from html.parser import HTMLParser
 from datetime import datetime, timedelta, timezone
 import json
 import http.client
@@ -69,7 +70,74 @@ GROUPS = tuple(f"GPV{major}.{minor}" for major in range(1, 7) for minor in (1, 2
 STATUSES = {"yes", "no", "first", "second", "maybe", "mfirst", "msecond"}
 
 
-def canonical_snapshot(value, *, now: Optional[datetime] = None) -> str:
+class _NoticeParser(HTMLParser):
+    """Collect operational notice text, excluding executable/hidden templates."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.notices = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        ignored = tag in {'script', 'style', 'template', 'noscript'} or any(item[1] for item in self.stack)
+        notice = (attributes.get('id') == 'modal-attention' or
+                  bool({'m-attention', 'modal-attention'} & set((attributes.get('class') or '').split())))
+        index = None
+        if notice and not ignored:
+            index = len(self.notices)
+            self.notices.append([])
+        if tag not in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}:
+            self.stack.append((tag, ignored, index))
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                break
+
+    def handle_data(self, data):
+        if any(item[1] for item in self.stack):
+            return
+        for _, _, index in self.stack:
+            if index is not None:
+                self.notices[index].append(data)
+
+
+def emergency_status(html: str) -> Optional[bool]:
+    if not html or re.search(r'_Incapsula_Resource|cf-browser-verification|Just a moment\.\.\.', html):
+        return None
+    parser = _NoticeParser()
+    parser.feed(html)
+    states = set()
+    for notice in parser.notices:
+        text = re.sub(r'\s+', ' ', ' '.join(notice).lower().replace('i', 'і')).strip()
+        for sentence in re.split(r'[.!?;]', text):
+            if re.search(r'якщо|у разі|можуть|можлив|будуть|не введен|не запроваджен', sentence):
+                continue
+            if re.search(r'екстрені відключення\s+(?:скасовано|скасовані|припинено|не діють|не застосовуються)|(?:скасовано|скасовані|припинено|не діють|не застосовуються)\s+екстрені відключення', sentence):
+                states.add(False)
+            elif re.search(r'(?:введені|введено|запроваджені|запроваджено|застосовуються|діють)\s+екстрені відключення|екстрені відключення\s+(?:введені|введено|запроваджені|запроваджено|діють|застосовуються)', sentence):
+                states.add(True)
+    if len(states) == 1:
+        return states.pop()
+    if states or parser.notices:
+        return None
+    complete = all(re.search(pattern, html, re.I) for pattern in
+                   (r'<html(?:\s|>)', r'<body(?:\s|>)', r'</body\s*>', r'</html\s*>'))
+    return False if complete and re.search(r'DisconSchedule\.fact\s*=', html) else None
+
+
+def emergency_transport(active: Optional[bool], observed_at: int) -> str:
+    if active is None:
+        return ''
+    if type(active) is not bool or type(observed_at) is not int or observed_at <= 0:
+        raise ValueError('Invalid emergency observation')
+    value = {'schemaVersion': 1, 'active': active, 'observedAt': observed_at}
+    return '<script id="lumen-emergency" type="application/json">' + json.dumps(value, separators=(',', ':')) + '</script>'
+
+
+def canonical_snapshot(value, *, now: Optional[datetime] = None,
+                       emergency: Optional[bool] = None, observed_at: Optional[int] = None) -> str:
     """Export runtime data, not a script tag that may merely assign null."""
     if isinstance(value, str):
         value = json.loads(value)
@@ -132,7 +200,9 @@ def canonical_snapshot(value, *, now: Optional[datetime] = None) -> str:
                     for h in range(1, 25)
                 ):
                     raise ValueError(f"Incomplete tomorrow schedule for {group}")
-    html = "<script>DisconSchedule.fact = " + json.dumps(value, ensure_ascii=False, separators=(",", ":")) + ";</script>"
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace('<', r'\u003c')
+    html = "<script>DisconSchedule.fact = " + encoded + ";</script>"
+    html += emergency_transport(emergency, observed_at if observed_at is not None else int(current.timestamp() * 1000))
     if len(html.encode("utf-8")) > MAX_HTML_BYTES:
         raise ValueError("Snapshot exceeds 2 MiB")
     return html
@@ -146,7 +216,8 @@ def fetch_dtek_html(chrome_path: Optional[str] = None, timeout_seconds: int = 90
     deadline = time.monotonic() + timeout_seconds
     with sync_playwright() as playwright:
         kwargs = {"headless": False, "viewport": {"width": 1280, "height": 800},
-                  "locale": "uk-UA", "timezone_id": "Europe/Kyiv"}
+                  "locale": "uk-UA", "timezone_id": "Europe/Kyiv",
+                  "extra_http_headers": {"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"}}
         if chrome_path:
             kwargs["executable_path"] = chrome_path
         context = None
@@ -154,6 +225,7 @@ def fetch_dtek_html(chrome_path: Optional[str] = None, timeout_seconds: int = 90
             context = playwright.chromium.launch_persistent_context(profile_dir, **kwargs)
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(5000)
+            observed_at = int(time.time() * 1000)
             try:
                 page.goto(DTEK_URL, timeout=max(1, min(45000, int((deadline-time.monotonic())*1000))), wait_until="domcontentloaded")
             except Exception:
@@ -161,8 +233,14 @@ def fetch_dtek_html(chrome_path: Optional[str] = None, timeout_seconds: int = 90
             print("[*] Очікуємо графік. За потреби пройдіть капчу у вікні браузера.")
             while time.monotonic() < deadline and not page.is_closed():
                 try:
-                    value = page.evaluate("() => typeof DisconSchedule === 'undefined' ? null : DisconSchedule.fact")
-                    html = canonical_snapshot(value)
+                    capture = page.evaluate("() => ({fact: typeof DisconSchedule === 'undefined' ? null : DisconSchedule.fact, html: document.documentElement.outerHTML})")
+                    active = emergency_status(capture['html'])
+                    try:
+                        html = canonical_snapshot(capture['fact'], emergency=active, observed_at=observed_at)
+                    except (ValueError, TypeError):
+                        html = emergency_transport(active, observed_at)
+                        if not html:
+                            raise ValueError('Neither a schedule nor an emergency observation is ready')
                     print(f"[+] Отримано повний графік: {len(html.encode('utf-8'))} байт.")
                     return html
                 except Exception:
@@ -241,8 +319,8 @@ def send_html_to_worker(html: str, worker_url: str, admin_key: str, dry_run: boo
                 raise TimeoutError('Worker response deadline exceeded')
             report = json.loads(chunks.decode("utf-8"))
             expected = "dry_run_success" if dry_run else "success"
-            success = isinstance(report, dict) and report.get("status") == expected and report.get("errors") == [] and (
-                type(report.get("checkedGroups")) is int and report["checkedGroups"] > 0
+            success = isinstance(report, dict) and report.get("status") in ({expected} if dry_run else {expected, 'emergency_only'}) and report.get("errors") == [] and (
+                type(report.get("checkedGroups")) is int and (report["checkedGroups"] > 0 or report.get('emergencyProcessed') is True)
             )
             print("[+] Worker обробив графік." if success else "[-] Worker не завершив обробку графіка.")
             return success

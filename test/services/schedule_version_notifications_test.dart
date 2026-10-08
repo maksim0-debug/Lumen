@@ -12,7 +12,9 @@ class RecordingNotifications extends Fake implements NotificationService {
 
   @override
   Future<void> showImmediate(String title, String body,
-      {String? groupName, int? notificationId}) async {
+      {String? groupName,
+      int? notificationId,
+      bool rethrowOnError = false}) async {
     messages.add((title: title, body: body, group: groupName));
   }
 

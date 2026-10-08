@@ -29,6 +29,8 @@ class NotificationService {
   /// Базовий ID для миттєвих сповіщень по групах (діапазон 9000000..9000011).
   /// Повністю ізольований від запланованих сповіщень (діапазон 0..1199999).
   static const int immediateGroupNotificationBaseId = 9000000;
+  static const int emergencyNotificationId =
+      immediateGroupNotificationBaseId + 12;
 
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -235,6 +237,7 @@ class NotificationService {
     String body, {
     String? groupName,
     int? notificationId,
+    bool rethrowOnError = false,
   }) async {
     AppLogger.d("========== showImmediate ==========",
         tag: 'NotificationService');
@@ -245,6 +248,10 @@ class NotificationService {
       AppLogger.d("Не ініціалізовано, викликаємо init()...",
           tag: 'NotificationService');
       await init();
+    }
+
+    if (rethrowOnError && !_isInitialized) {
+      throw StateError('Notification service could not initialize');
     }
 
     try {
@@ -315,6 +322,7 @@ class NotificationService {
     } catch (e, stackTrace) {
       AppLogger.e("ПОМИЛКА show()",
           tag: 'NotificationService', error: e, stackTrace: stackTrace);
+      if (rethrowOnError) rethrow;
     }
   }
 

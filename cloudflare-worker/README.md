@@ -30,7 +30,7 @@ Worker перевіряє графіки ДТЕК кожні п'ять хвил�
 - `POST /check-html?dryRun=true` — валідація та план змін без запису стану, alarm чи FCM.
 - `GET|POST /test-push?group=GPV2.1&dayType=today` — тестова доставка; невідомі групи й типи дня відхиляються.
 
-Звіт містить status, checkedGroups, changesDetected, notificationsPlanned, notificationsSent та errors. Лише success/dry_run_success повертають HTTP 200; застарілий snapshot або конфлікт — 409; невдала доставка чи storage — 503; некоректний графік — 422; перевищення розміру — 413; тайм-аут завантаження — 408. Клієнт має перевіряти і HTTP, і JSON-звіт.
+Звіт містить status, checkedGroups, changesDetected, notificationsPlanned, notificationsSent та errors. `success`, `dry_run_success` і `emergency_only` без errors повертають HTTP 200; застарілий snapshot або конфлікт — 409; невдала доставка чи storage — 503; некоректний графік — 422; перевищення розміру — 413; тайм-аут завантаження — 408. Клієнт має перевіряти і HTTP, і JSON-звіт.
 
 ## Desktop і Python bridge
 
@@ -43,6 +43,24 @@ Worker перевіряє графіки ДТЕК кожні п'ять хвил�
 
 Версія перевіряється для повного snapshot до змін будь-якої групи. Відсутність графіка на завтра також є версіонованим станом: вона скасовує його недоставлені сповіщення. При переході через опівніч сьогодні порівнюється з уже відомою публікацією цієї дати на завтра. Рівна версія з іншим вмістом відхиляється атомарно.
 
-Dart, Worker і Python приймають лише точну київську опівніч завтра або явний DST fallback `today + 86400`. Кілька ключів однієї завтрашньої дати відхиляються. Неоднозначний час оновлення в повторній осінній годині без UTC offset відхиляється всіма трьома валідаторами: він не дозволяє достовірно впорядкувати відповіді різних джерел. Оновлення відновлюються після однозначної версії джерела; локальні дані зберігаються.
+Dart, Worker and Python accept the exact next Kyiv midnight or the explicit DST fallback `today + 86400`. Multiple keys for the same tomorrow date are rejected. For the repeated autumn hour, all three validators consistently choose the later instant. Since DTEK supplies no UTC offset, changes within that repeated hour cannot be unambiguously ordered by the source timestamp alone.
 
 Застосунок зберігає watermark ДТЕК окремо від ручної та імпортованої історії. Для знятої публікації в історії зберігається порожня остання версія; попередні публікації залишаються в архіві. Дати, countdown і віджети використовують київський часовий пояс незалежно від налаштувань пристрою.
+
+## Emergency status protocol
+
+Emergency observations are independent of schedule versions and history writes. Only an operational notice in `#modal-attention`, `.m-attention` or `.modal-attention` is interpreted. FAQ text, executable scripts, templates, ambiguous notices, incomplete pages and bot challenges are not cancellation evidence. A complete recognizable schedule page without a notice is an inactive observation. A cancellation requires two newer observations at least 30 seconds apart and no more than 20 minutes apart; a fresh active notice clears the candidate immediately.
+
+Bridges export validated runtime schedule JSON plus optional metadata, never the original HTML page:
+
+```html
+<script id="lumen-emergency" type="application/json">{"schemaVersion":1,"active":true,"observedAt":1791450000000}</script>
+```
+
+`observedAt` is the capture time in Unix milliseconds, not the schedule update time. Observations older than 15 minutes or more than one minute in the future are rejected. HTTP fetchers also consider `Date`/`Age` headers. Legacy script-only uploads leave emergency state unchanged. A valid status can be accepted when the schedule is missing, stale or invalid: `emergency_only`, `emergencyProcessed: true`, `scheduleStatus` and `warnings` identify this partial result. An initial active notice sends one alert; an initial inactive baseline stays quiet.
+
+Emergency FCM messages use `type=emergency_alert`, `isEmergency`, `observedAt`, `expiresAt` and `eventId`. They are data-only so the client can validate ordering, expiry and the local notification preference before showing them. Android uses high priority, a shared collapse key and a separate local notification ID. Expiry remains 15 minutes from the original observation across retries, including midnight. Permanent FCM errors stop retries; transient errors use the durable outbox. SQLite on the client stores status and notification claims across isolates; a short delivery lease avoids holding database transactions across OS calls. The banner labels active data older than 30 minutes as requiring an update. Schedule forecasts and reminders remain enabled during emergencies.
+
+DTEK does not provide an independent signed version for its notice. Capture ordering and cancellation confirmation reduce stale-source risk but cannot prove that arbitrary upstream HTML reflects the latest real-world status. FCM acceptance also does not prove device delivery; validate foreground/background delivery on a real Android device after deploying the matching client and Worker.
+
+Parser regression cases are small synthetic strings in `test/fixtures/emergency_status_cases.json`, shared by Dart, Worker and Python. The local `.agents/shutdowns2.txt` capture is ignored by Git and is not a test dependency.

@@ -6,11 +6,29 @@ import json
 import threading
 import time
 import unittest
+from pathlib import Path
 
-from push_dtek_schedule import GROUPS, canonical_snapshot, send_html_to_worker, worker_endpoint
+from push_dtek_schedule import GROUPS, canonical_snapshot, emergency_status, emergency_transport, send_html_to_worker, worker_endpoint
 
 
 class BridgeTests(unittest.TestCase):
+    def test_shared_synthetic_emergency_cases(self):
+        cases = json.loads((Path(__file__).parent.parent / 'test/fixtures/emergency_status_cases.json').read_text(encoding='utf-8'))
+        for case in cases:
+            with self.subTest(case['name']):
+                self.assertIs(emergency_status(case['html']), case['active'])
+
+    def test_canonical_emergency_metadata_does_not_export_the_source_page(self):
+        now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+        html = canonical_snapshot(self.fixture(), now=now, emergency=True, observed_at=int(now.timestamp() * 1000))
+        self.assertIn('lumen-emergency', html)
+        self.assertIn('"active":true', html)
+        self.assertNotIn('<html', html)
+        self.assertEqual(emergency_transport(None, 1), '')
+        for active, observed_at in [('false', 1), (True, 0), (True, True)]:
+            with self.assertRaises(ValueError):
+                emergency_transport(active, observed_at)
+
     def fixture(self):
         return {"today": 1791234000, "update": "06.10.2026 10:00", "data": {
             "1791234000": {g: {str(h): "yes" for h in range(1, 25)} for g in GROUPS}}}
@@ -120,6 +138,8 @@ class BridgeTests(unittest.TestCase):
                     return
                 report = {'status': 'dry_run_success' if path.startswith('/dry') else 'success',
                           'checkedGroups': 12, 'errors': ['failed'] if path.startswith('/error') else []}
+                if path.startswith('/emergency'):
+                    report.update(status='emergency_only', checkedGroups=0, emergencyProcessed=True)
                 self.wfile.write(json.dumps(report).encode())
 
             def log_message(self, *_):
@@ -133,6 +153,7 @@ class BridgeTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertTrue(send_html_to_worker('schedule', base+'/ok', 'secret'))
                 self.assertTrue(send_html_to_worker('schedule', base+'/dry', 'secret', dry_run=True))
+                self.assertTrue(send_html_to_worker('observation', base+'/emergency', 'secret'))
                 for path in ('redirect', 'html', 'error', 'unavailable'):
                     self.assertFalse(send_html_to_worker('schedule', base+'/'+path, 'secret'))
                 start = time.monotonic()

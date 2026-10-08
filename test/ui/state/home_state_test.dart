@@ -228,5 +228,21 @@ void main() {
         expect(state.isMissingRealDataSource, isFalse);
       });
     });
+
+    group('isEmergencyActive', () {
+      test('defaults to false', () {
+        const state = HomeState();
+        expect(state.isEmergencyActive, isFalse);
+      });
+
+      test('can be set and copied via copyWith', () {
+        const state = HomeState();
+        final emergencyState = state.copyWith(isEmergencyActive: true);
+        expect(emergencyState.isEmergencyActive, isTrue);
+
+        final restoredState = emergencyState.copyWith(isEmergencyActive: false);
+        expect(restoredState.isEmergencyActive, isFalse);
+      });
+    });
   });
 }

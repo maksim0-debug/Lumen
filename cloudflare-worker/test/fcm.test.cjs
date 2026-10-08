@@ -44,3 +44,39 @@ test('malformed service accounts and OAuth responses fail explicitly', async () 
   global.fetch = async () => Response.json({ expires_in: 3600 });
   assert.equal((await fcm.sendFcmTopicNotification(account, options)).success, false);
 });
+
+test('emergency delivery is data-only with explicit status and remaining TTL', async () => {
+  const observedAt = Date.now() - 30000;
+  const emergency = { ...options, group: 'EMERGENCY', topic: 'emergency_alerts',
+    changeType: 'emergency_alert', isEmergency: false, observedAt, expiresAt: observedAt + 900000 };
+  assert.equal((await fcm.sendFcmTopicNotification(account, emergency)).success, true);
+  const message = messages[0].message;
+  assert.equal(message.notification, undefined);
+  assert.equal(message.android.notification, undefined);
+  assert.equal(message.data.isEmergency, 'false');
+  assert.equal(message.data.observedAt, String(observedAt));
+  assert.equal(message.data.expiresAt, String(emergency.expiresAt));
+  assert.equal(message.data.title, 'test');
+  assert.ok(parseInt(message.android.ttl) <= 870 && parseInt(message.android.ttl) >= 860);
+  assert.equal(message.android.priority, 'HIGH');
+  assert.equal(message.android.collapse_key, 'emergency_status');
+});
+
+test('expired and incomplete emergency envelopes are rejected before network access', async () => {
+  for (const extra of [{}, { isEmergency: true, observedAt: Date.now() - 900001, expiresAt: Date.now() - 1 },
+    { isEmergency: false, observedAt: Date.now(), expiresAt: Date.now() + 1000000 }]) {
+    const result = await fcm.sendFcmTopicNotification(account, { ...options, changeType: 'emergency_alert', ...extra });
+    assert.equal(result.success, false);
+    assert.equal(result.retryable, false);
+  }
+  assert.equal(oauthCalls, 0);
+  assert.equal(fcmCalls, 0);
+});
+
+test('permanent and transient FCM failures have different retry policies', async () => {
+  for (const code of [400, 403, 404, 401, 429, 500, 503]) {
+    status = code;
+    const result = await fcm.sendFcmTopicNotification(account, options);
+    assert.equal(result.retryable, [401, 429, 500, 503].includes(code));
+  }
+});
