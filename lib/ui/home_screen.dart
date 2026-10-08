@@ -259,18 +259,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Widget _buildDarknessStageBar() => const DarknessStageBanner();
 
-  Widget _buildDataSourceToggle(HomeState state, HomeNotifier notifier) =>
+  Widget _buildEmergencyAlertBanner(HomeState state) => EmergencyAlertBanner(
+        isActive: true,
+        isStale: state.isEmergencyStatusStale,
+        isPossible: state.isEmergencyPossible,
+        noticeText: state.emergencyNoticeText,
+      );
+
+  Widget _buildDataSourceToggle(HomeState state, HomeNotifier notifier,
+          {required bool isMobile}) =>
       DataSourceToggle(
         powerMonitorEnabled: state.powerMonitorEnabled,
         currentMode: state.dataSourceMode,
         onModeChanged: notifier.switchMode,
         powerStatus: state.powerStatus,
-        leadingNotice: state.isEmergencyActive
-            ? EmergencyAlertBanner(
-                isActive: true,
-                isStale: state.isEmergencyStatusStale,
-                isPossible: state.isEmergencyPossible,
-                noticeText: state.emergencyNoticeText)
+        leadingNotice: !isMobile && state.isEmergencyActive
+            ? _buildEmergencyAlertBanner(state)
             : null,
       );
 
@@ -436,6 +440,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final int cols = screenWidth > 800 ? 8 : (screenWidth > 600 ? 6 : 4);
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final platform = Theme.of(context).platform;
+    final isMobile =
+        platform == TargetPlatform.android || platform == TargetPlatform.iOS;
 
     return KeyboardShortcutWrapper(
       focusNode: _focusNode,
@@ -848,7 +855,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ),
                     ),
                   ),
-                  _buildDataSourceToggle(state, notifier),
+                  _buildDataSourceToggle(state, notifier, isMobile: isMobile),
                   _buildDarknessStageBar(),
                   GestureDetector(
                     onTap: (state.historyVersions.isNotEmpty)
@@ -868,6 +875,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ],
                     ),
                   ),
+                  if (isMobile && state.isEmergencyActive)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                      child: Center(child: _buildEmergencyAlertBanner(state)),
+                    ),
                   if (!state.isLoading) ...[
                     if (state.viewMode == ScheduleViewMode.today) ...[
                       const SizedBox(height: 8),
