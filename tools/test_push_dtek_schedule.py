@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 
-from push_dtek_schedule import GROUPS, canonical_snapshot, emergency_status, emergency_transport, send_html_to_worker, worker_endpoint
+from push_dtek_schedule import GROUPS, canonical_snapshot, emergency_status, emergency_notice, emergency_transport, send_html_to_worker, worker_endpoint
 
 
 class BridgeTests(unittest.TestCase):
@@ -17,6 +17,12 @@ class BridgeTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case['name']):
                 self.assertIs(emergency_status(case['html']), case['active'])
+                if 'possible' in case:
+                    notice = emergency_notice(case['html'])
+                    self.assertIs(notice['isPossible'], case['possible'])
+                    self.assertIs(notice['confirmed'], True)
+                    if 'noticeText' in case:
+                        self.assertEqual(notice['noticeText'], case['noticeText'])
 
     def test_canonical_emergency_metadata_does_not_export_the_source_page(self):
         now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
@@ -28,6 +34,15 @@ class BridgeTests(unittest.TestCase):
         for active, observed_at in [('false', 1), (True, 0), (True, True)]:
             with self.assertRaises(ValueError):
                 emergency_transport(active, observed_at)
+
+    def test_bridge_preserves_full_notice_and_classification(self):
+        notice = emergency_notice("<div id='modal-attention'><p>Аварійні відключення у Бучанському районі.</p><p>Текст &lt;/script&gt;.</p></div>")
+        payload = emergency_transport(True, 1, notice=notice)
+        value = json.loads(payload.split('>', 1)[1].rsplit('</script>', 1)[0])
+        self.assertTrue(value['isPossible'])
+        self.assertTrue(value['confirmed'])
+        self.assertEqual(value['noticeText'], 'Аварійні відключення у Бучанському районі.\n\nТекст </script>.')
+        self.assertEqual(payload.count('</script>'), 1)
 
     def fixture(self):
         return {"today": 1791234000, "update": "06.10.2026 10:00", "data": {

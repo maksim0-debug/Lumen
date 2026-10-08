@@ -162,6 +162,8 @@ class HomeNotifier extends Notifier<HomeState> {
     _emergencyStatus = status;
     state = state.copyWith(
       isEmergencyActive: status.active == true,
+      isEmergencyPossible: status.isPossible,
+      emergencyNoticeText: status.noticeText,
       isEmergencyStatusStale:
           !status.isFreshAt(DateTime.now().millisecondsSinceEpoch),
     );

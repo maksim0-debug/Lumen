@@ -204,6 +204,8 @@ export interface FcmMessageOptions {
   eventId?: string;
   targetDate?: string;
   isEmergency?: boolean;
+  isPossible?: boolean;
+  noticeText?: string;
   observedAt?: number;
   expiresAt?: number;
   testAudience?: 'group' | 'emergency';
@@ -227,6 +229,8 @@ export async function sendFcmTopicNotification(
       return { success: false, error: 'Invalid test topic', retryable: false };
     }
     if (emergency && (typeof options.isEmergency !== 'boolean' ||
+        (options.isPossible !== undefined && (typeof options.isPossible !== 'boolean' || (options.isPossible && !options.isEmergency))) ||
+        (options.noticeText !== undefined && typeof options.noticeText !== 'string') ||
         !Number.isSafeInteger(options.observedAt) || !Number.isSafeInteger(options.expiresAt) ||
         options.observedAt! <= 0 || options.observedAt! > Date.now() + 60_000 ||
         options.expiresAt! <= options.observedAt! || options.expiresAt! - options.observedAt! > 900_000)) {
@@ -267,6 +271,9 @@ export async function sendFcmTopicNotification(
           ...(dataOnly ? { title: options.title, body: options.body } : {}),
           ...(emergency ? {
             isEmergency: String(options.isEmergency),
+            isPossible: String(options.isPossible ?? false),
+            ...(options.noticeText && new TextEncoder().encode(options.noticeText).length <= 2000
+              ? { noticeText: options.noticeText } : {}),
             observedAt: String(options.observedAt), expiresAt: String(options.expiresAt),
           } : {}),
         },

@@ -9,6 +9,12 @@ const { extractEmergencyStatus, readEmergencyObservation, acceptEmergency, EMERG
 const cases = JSON.parse(fs.readFileSync(path.join(__dirname, '../../test/fixtures/emergency_status_cases.json'), 'utf8'));
 for (const example of cases) test(`emergency parser: ${example.name}`, () => {
   assert.equal(extractEmergencyStatus(example.html), example.active);
+  if ('possible' in example) {
+    const observation = readEmergencyObservation(example.html, Date.now());
+    assert.equal(observation.isPossible, example.possible);
+    assert.equal(observation.confirmed, true);
+    if ('noticeText' in example) assert.equal(observation.noticeText, example.noticeText);
+  }
 });
 const realNow = Date.now;
 const now = Date.parse('2026-10-08T12:00:00Z');

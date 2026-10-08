@@ -78,8 +78,10 @@ class _NoticeParser(HTMLParser):
         self.notices = []
 
     def handle_starttag(self, tag, attrs):
+        if tag in {'p', 'div', 'br', 'li', 'h2', 'h3', 'h4', 'h5', 'h6'}:
+            self.handle_data('\n')
         attributes = dict(attrs)
-        ignored = tag in {'script', 'style', 'template', 'noscript'} or any(item[1] for item in self.stack)
+        ignored = tag in {'script', 'style', 'template', 'noscript', 'button', 'svg'} or any(item[1] for item in self.stack)
         notice = (attributes.get('id') == 'modal-attention' or
                   bool({'m-attention', 'modal-attention'} & set((attributes.get('class') or '').split())))
         index = None
@@ -90,6 +92,8 @@ class _NoticeParser(HTMLParser):
             self.stack.append((tag, ignored, index))
 
     def handle_endtag(self, tag):
+        if tag in {'p', 'div', 'li', 'h2', 'h3', 'h4', 'h5', 'h6'}:
+            self.handle_data('\n')
         for index in range(len(self.stack) - 1, -1, -1):
             if self.stack[index][0] == tag:
                 del self.stack[index:]
@@ -103,41 +107,76 @@ class _NoticeParser(HTMLParser):
                 self.notices[index].append(data)
 
 
-def emergency_status(html: str) -> Optional[bool]:
+EMERGENCY = re.compile(r'(?:екстрен[а-яіїєґ]*|аварійн[а-яіїєґ]*)(?:\s+(?:відключен|вимкнен|знеструмлен)[а-яіїєґ]*)?')
+CANCELLATION_WORDS = r'(?:скасован[а-яіїєґ]*|скасовано|відмінен[а-яіїєґ]*|відмінено|припинен[а-яіїєґ]*|припинено|не діють|не застосовуються|не застосовують|не вводяться|не запроваджуються|не введен[а-яіїєґ]*|не запроваджен[а-яіїєґ]*|немає|відсутн[а-яіїєґ]*)'
+CANCELLATION_FILLER = r'(?:(?:електроенергії|вже|були|наразі|більше)\s+)*'
+CANCELLED = re.compile(
+    rf'{CANCELLATION_WORDS}\s+{CANCELLATION_FILLER}{EMERGENCY.pattern}|'
+    rf'{EMERGENCY.pattern}\s+{CANCELLATION_FILLER}{CANCELLATION_WORDS}')
+HYPOTHETICAL = re.compile(r'якщо|у разі|уникн|запобіг|не допуст|недопущ|будуть')
+STANDARD = re.compile(r'(?:введені|введено|запроваджені|запроваджено|застосовуються|діють)\s+екстрені відключення|екстрені відключення\s+(?:введені|введено|запроваджені|запроваджено|діють|застосовуються)')
+LOCAL = re.compile(r'район|частин|окрем|громад|населен|вулиц|адрес|локаль')
+
+
+WHOLE = re.compile(r'(?:всій|усій|всю|усю)\s+област|(?:всіх|усіх)\s+(?:район|громад)')
+UNCERTAIN = re.compile(r'можлив|можуть|може')
+
+
+def emergency_notice(html: str):
     if not html or re.search(r'_Incapsula_Resource|cf-browser-verification|Just a moment\.\.\.', html):
         return None
     parser = _NoticeParser()
     parser.feed(html)
     states = set()
+    texts = []
+    possible = False
     for notice in parser.notices:
-        text = re.sub(r'\s+', ' ', ' '.join(notice).lower().replace('i', 'і')).strip()
-        for sentence in re.split(r'[.!?;]', text):
-            if re.search(r'якщо|у разі|можуть|можлив|будуть|не введен|не запроваджен', sentence):
+        source = '\n\n'.join(line for part in ''.join(notice).split('\n')
+                             if (line := re.sub(r'\s+', ' ', part).strip()))
+        if not source:
+            continue
+        if source not in texts:
+            texts.append(source)
+        text = re.sub(r'\s+', ' ', source.lower().replace('i', 'і'))
+        has_emergency = False
+        for part in re.split(r'[.!?;]', text):
+            sentence = CANCELLED.sub('', part)
+            if not EMERGENCY.search(sentence) or HYPOTHETICAL.search(sentence):
                 continue
-            if re.search(r'екстрені відключення\s+(?:скасовано|скасовані|припинено|не діють|не застосовуються)|(?:скасовано|скасовані|припинено|не діють|не застосовуються)\s+екстрені відключення', sentence):
-                states.add(False)
-            elif re.search(r'(?:введені|введено|запроваджені|запроваджено|застосовуються|діють)\s+екстрені відключення|екстрені відключення\s+(?:введені|введено|запроваджені|запроваджено|діють|застосовуються)', sentence):
-                states.add(True)
+            has_emergency = True
+            possible |= not STANDARD.search(sentence) or bool(UNCERTAIN.search(sentence)) or bool(LOCAL.search(sentence) and not WHOLE.search(sentence))
+        if has_emergency:
+            states.add(True)
+        else:
+            states.add(False)
     if len(states) == 1:
-        return states.pop()
+        active = states.pop()
+        return dict(active=active, confirmed=True, isPossible=active and possible, noticeText='\n\n'.join(texts))
     if states or parser.notices:
         return None
     complete = all(re.search(pattern, html, re.I) for pattern in
                    (r'<html(?:\s|>)', r'<body(?:\s|>)', r'</body\s*>', r'</html\s*>'))
-    return False if complete and re.search(r'DisconSchedule\.fact\s*=', html) else None
+    return dict(active=False, confirmed=True) if complete and re.search(r'DisconSchedule\.fact\s*=', html) else None
 
 
-def emergency_transport(active: Optional[bool], observed_at: int) -> str:
+def emergency_status(html: str) -> Optional[bool]:
+    notice = emergency_notice(html)
+    return notice['active'] if notice is not None else None
+
+
+def emergency_transport(active: Optional[bool], observed_at: int, *, notice=None) -> str:
     if active is None:
         return ''
     if type(active) is not bool or type(observed_at) is not int or observed_at <= 0:
         raise ValueError('Invalid emergency observation')
     value = {'schemaVersion': 1, 'active': active, 'observedAt': observed_at}
-    return '<script id="lumen-emergency" type="application/json">' + json.dumps(value, separators=(',', ':')) + '</script>'
+    if notice is not None:
+        value.update(notice)
+    return '<script id="lumen-emergency" type="application/json">' + json.dumps(value, separators=(',', ':')).replace('<', r'\u003c') + '</script>'
 
 
 def canonical_snapshot(value, *, now: Optional[datetime] = None,
-                       emergency: Optional[bool] = None, observed_at: Optional[int] = None) -> str:
+                       emergency: Optional[bool] = None, observed_at: Optional[int] = None, notice=None) -> str:
     """Export runtime data, not a script tag that may merely assign null."""
     if isinstance(value, str):
         value = json.loads(value)
@@ -202,7 +241,7 @@ def canonical_snapshot(value, *, now: Optional[datetime] = None,
                     raise ValueError(f"Incomplete tomorrow schedule for {group}")
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace('<', r'\u003c')
     html = "<script>DisconSchedule.fact = " + encoded + ";</script>"
-    html += emergency_transport(emergency, observed_at if observed_at is not None else int(current.timestamp() * 1000))
+    html += emergency_transport(emergency, observed_at if observed_at is not None else int(current.timestamp() * 1000), notice=notice)
     if len(html.encode("utf-8")) > MAX_HTML_BYTES:
         raise ValueError("Snapshot exceeds 2 MiB")
     return html
@@ -234,11 +273,12 @@ def fetch_dtek_html(chrome_path: Optional[str] = None, timeout_seconds: int = 90
             while time.monotonic() < deadline and not page.is_closed():
                 try:
                     capture = page.evaluate("() => ({fact: typeof DisconSchedule === 'undefined' ? null : DisconSchedule.fact, html: document.documentElement.outerHTML})")
-                    active = emergency_status(capture['html'])
+                    notice = emergency_notice(capture['html'])
+                    active = notice['active'] if notice is not None else None
                     try:
-                        html = canonical_snapshot(capture['fact'], emergency=active, observed_at=observed_at)
+                        html = canonical_snapshot(capture['fact'], emergency=active, observed_at=observed_at, notice=notice)
                     except (ValueError, TypeError):
-                        html = emergency_transport(active, observed_at)
+                        html = emergency_transport(active, observed_at, notice=notice)
                         if not html:
                             raise ValueError('Neither a schedule nor an emergency observation is ready')
                     print(f"[+] Отримано повний графік: {len(html.encode('utf-8'))} байт.")

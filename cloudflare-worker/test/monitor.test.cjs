@@ -82,6 +82,26 @@ test('script-only Python/legacy snapshots never imply cancellation', async () =>
   assert.equal(sent.length, 1);
 });
 
+test('source notices switch global to local, preserve text, then immediately clear for stabilization', async () => {
+  const s = setup();
+  const cases = JSON.parse(fs.readFileSync(require('node:path').join(__dirname, '../../test/fixtures/emergency_status_cases.json'), 'utf8'));
+  for (const name of ['full standard screenshot', 'district emergency from screenshot', 'stabilization from screenshot']) {
+    now += 1000;
+    const example = cases.find(item => item.name === name);
+    const response = await s.monitor.fetch(new Request('https://internal/check', { method: 'POST',
+      body: JSON.stringify({ html: example.html, source: 'test', observedAt: now }) }));
+    const report = await response.json();
+    assert.equal(report.emergencyProcessed, true);
+    assert.equal(s.record().emergency.active, example.active);
+    assert.equal(s.record().emergency.isPossible, example.possible);
+    assert.equal(s.record().emergency.cancellationSince, undefined);
+    assert.equal(sent.at(-1).isPossible, example.possible);
+    assert.equal(sent.at(-1).noticeText, s.record().emergency.noticeText);
+    if (name === 'district emergency from screenshot') assert.equal(sent.at(-1).title, 'Можливі екстрені відключення');
+  }
+  assert.equal(sent.length, 3);
+});
+
 test('identical emergency-only replay succeeds without confirming cancellation or duplicating delivery', async () => {
   const s = setup();
   await sendEmergency(s, true, { fact: null });

@@ -37,6 +37,8 @@ class HomeState {
   final bool hasRealCoverage;
   final bool isEmergencyActive;
   final bool isEmergencyStatusStale;
+  final bool isEmergencyPossible;
+  final String emergencyNoticeText;
 
   const HomeState({
     this.allSchedules = const {},
@@ -65,6 +67,8 @@ class HomeState {
     this.hasRealCoverage = false,
     this.isEmergencyActive = false,
     this.isEmergencyStatusStale = false,
+    this.isEmergencyPossible = false,
+    this.emergencyNoticeText = '',
   });
 
   bool get isHistoryMode =>
@@ -163,6 +167,8 @@ class HomeState {
     bool? hasRealCoverage,
     bool? isEmergencyActive,
     bool? isEmergencyStatusStale,
+    bool? isEmergencyPossible,
+    String? emergencyNoticeText,
   }) {
     return HomeState(
       allSchedules: allSchedules ?? this.allSchedules,
@@ -198,6 +204,8 @@ class HomeState {
           isRealSourceConfigured ?? this.isRealSourceConfigured,
       hasRealCoverage: hasRealCoverage ?? this.hasRealCoverage,
       isEmergencyActive: isEmergencyActive ?? this.isEmergencyActive,
+      isEmergencyPossible: isEmergencyPossible ?? this.isEmergencyPossible,
+      emergencyNoticeText: emergencyNoticeText ?? this.emergencyNoticeText,
       isEmergencyStatusStale:
           isEmergencyStatusStale ?? this.isEmergencyStatusStale,
     );

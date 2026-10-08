@@ -267,7 +267,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         powerStatus: state.powerStatus,
         leadingNotice: state.isEmergencyActive
             ? EmergencyAlertBanner(
-                isActive: true, isStale: state.isEmergencyStatusStale)
+                isActive: true,
+                isStale: state.isEmergencyStatusStale,
+                isPossible: state.isEmergencyPossible,
+                noticeText: state.emergencyNoticeText)
             : null,
       );
 

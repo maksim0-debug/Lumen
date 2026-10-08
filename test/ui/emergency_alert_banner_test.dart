@@ -3,6 +3,65 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lumen/ui/widgets/home/emergency_alert_banner.dart';
 
 void main() {
+  for (final brightness in Brightness.values) {
+    for (final size in [
+      const Size(320, 640),
+      const Size(640, 320),
+      const Size(800, 1000)
+    ]) {
+      for (final possible in [true, false]) {
+        testWidgets(
+            'opens complete DTEK text at $size, $brightness, possible=$possible',
+            (tester) async {
+          tester.view.physicalSize = size;
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final notice =
+              'Шановні клієнти!\n\n${'Повний текст ДТЕК про аварійні відключення у Бучанському районі.\n\n' * 12}Дякуємо за ваше розуміння!';
+          await tester.pumpWidget(MaterialApp(
+            theme: ThemeData(brightness: brightness),
+            builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: const TextScaler.linear(2)),
+                child: child!),
+            home: Scaffold(
+                body: Center(
+                    child: EmergencyAlertBanner(
+                        isActive: true,
+                        isPossible: possible,
+                        noticeText: notice))),
+          ));
+          expect(
+              find.text(possible
+                  ? 'Можливі екстрені відключення'
+                  : 'Зараз діють екстрені відключення'),
+              findsOneWidget);
+          expect(find.text('Не вдалося отримати актуальні дані'), findsNothing);
+          expect(tester.takeException(), null);
+          await tester.tap(find.byType(EmergencyAlertBanner));
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsOneWidget);
+          expect(
+              tester.widget<SelectableText>(find.byType(SelectableText)).data,
+              notice);
+          expect(tester.takeException(), null);
+          final scrollable = find
+              .descendant(
+                  of: find.byType(AlertDialog),
+                  matching: find.byType(SingleChildScrollView))
+              .first;
+          await tester.drag(scrollable, const Offset(0, -2000));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), null);
+          await tester.tap(find.text('Закрити'));
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsNothing);
+        });
+      }
+    }
+  }
+
   testWidgets('stale state does not claim a verified current emergency',
       (tester) async {
     await tester.pumpWidget(const MaterialApp(

@@ -41,7 +41,7 @@ class ParserFetchResult {
     return ParserFetchResult(
         schedules,
         '$payload<script id="lumen-emergency" type="application/json">'
-        '${jsonEncode(observation.toTransport())}</script>',
+        '${jsonEncode(observation.toTransport()).replaceAll('<', r'\u003c')}</script>',
         emergency: observation);
   }
 }
@@ -206,10 +206,10 @@ class ParserService {
       return const ParserFetchResult({}, null);
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    final active =
-        originalHtml == null ? null : EmergencyStatusParser.parse(originalHtml);
-    final observation =
-        active == null ? null : EmergencyObservation(active, observedAt ?? now);
+    final observation = originalHtml == null
+        ? null
+        : EmergencyStatusParser.parseObservation(
+            originalHtml, observedAt ?? now);
     final emergency =
         observation != null && observation.isValidAt(now) ? observation : null;
     if (emergency != null) {
@@ -263,7 +263,7 @@ class ParserService {
     }
     if (emergency != null) {
       canonical.write('<script id="lumen-emergency" type="application/json">'
-          '${jsonEncode(emergency.toTransport())}</script>');
+          '${jsonEncode(emergency.toTransport()).replaceAll('<', r'\u003c')}</script>');
     }
     return ParserFetchResult(snapshot?.schedules ?? {},
         canonical.isEmpty ? null : canonical.toString(),

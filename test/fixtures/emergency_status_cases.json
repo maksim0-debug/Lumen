@@ -42,22 +42,22 @@
   {
     "name": "noun first introduced remains negated",
     "html": "<div id='modal-attention'>Екстрені відключення не введені.</div>",
-    "active": null
+    "active": false
   },
   {
     "name": "noun first implemented remains conditional",
     "html": "<div id='modal-attention'>Якщо екстрені відключення запроваджені, перевірте повідомлення.</div>",
-    "active": null
+    "active": false
   },
   {
     "name": "conditional notice",
     "html": "<div id='modal-attention'>Якщо введені екстрені відключення, графіки не діють.</div>",
-    "active": null
+    "active": false
   },
   {
     "name": "negated notice",
     "html": "<div id='modal-attention'>Не введені екстрені відключення.</div>",
-    "active": null
+    "active": false
   },
   {
     "name": "FAQ only",
@@ -67,7 +67,7 @@
   {
     "name": "unrelated modal and FAQ",
     "html": "<div id='modal-attention'>Технічні роботи.</div><p>Якщо введені екстрені відключення, графіки не діють.</p>",
-    "active": null
+    "active": false
   },
   {
     "name": "script inside modal",
@@ -153,5 +153,125 @@
     "name": "complete page with template notice only",
     "html": "<html><body><template><div id='modal-attention'>Введені екстрені відключення</div></template><script>DisconSchedule.fact=null;</script></body></html>",
     "active": false
+  },
+  {
+    "name": "district emergency from screenshot",
+    "html": "<div id='modal-attention'><p>Через атаку на енергообʼєкти на Київщині зафіксовані аварійні відключення у Фастівському, Обухівському і Бучанському районах. В інших районах можливі затримки із включенням по графіку.</p><p>Енергетики вже працюють, щоб якомога швидше покращити ситуацію і повернути світло.</p></div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "stabilization from screenshot",
+    "html": "<div id='modal-attention'><p>За наказом НЕК Укренерго 8 жовтня діють стабілізаційні відключення електроенергії. Будь ласка, розумно споживайте електроенергію – це допоможе зменшити навантаження на мережу та уникнути екстрених відключень. Дякуємо за ваше розуміння!</p></div>",
+    "active": false,
+    "possible": false
+  },
+  {
+    "name": "standard emergency in a district",
+    "html": "<div id='modal-attention'><p>Введені екстрені відключення у Бучанському районі.</p></div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "nonstandard emergency",
+    "html": "<div id='modal-attention'><p>На Київщині застосовано аварійні відключення електроенергії.</p></div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "possible emergency",
+    "html": "<div id='modal-attention'><p>Можливі екстрені відключення у Фастівському районі.</p></div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "emergency cancelled with electricity",
+    "html": "<div id='modal-attention'><p>Аварійні відключення електроенергії скасовані. Діють стабілізаційні відключення.</p></div>",
+    "active": false,
+    "possible": false
+  },
+  {
+    "name": "cancelled inflection",
+    "html": "<div id='modal-attention'><p>Екстрених відключень немає.</p></div>",
+    "active": false,
+    "possible": false
+  },
+  {
+    "name": "cancellation then local emergency",
+    "html": "<div id='modal-attention'><p>Екстрені відключення скасовано. У Бучанському районі зафіксовані аварійні відключення.</p></div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "inline punctuation",
+    "html": "<div id='modal-attention'><p>За наказом НЕК Укренерго введені екстрені відключення електроенергії. Графіки відключень при цьому не діють.</p></div>",
+    "active": true,
+    "possible": false
+  },
+  {
+    "name": "schedule negation is not emergency cancellation",
+    "html": "<div id='modal-attention'><p>Введені екстрені відключення, графіки не діють.</p></div>",
+    "active": true,
+    "possible": false,
+    "noticeText": "Введені екстрені відключення, графіки не діють."
+  },
+  {
+    "name": "all districts still means global",
+    "html": "<div id='modal-attention'><p>Введені екстрені відключення в усіх районах Київської області.</p></div>",
+    "active": true,
+    "possible": false,
+    "noticeText": "Введені екстрені відключення в усіх районах Київської області."
+  },
+  {
+    "name": "potential introduction stays possible",
+    "html": "<div id='modal-attention'><p>Можуть бути введені екстрені відключення.</p></div>",
+    "active": true,
+    "possible": true,
+    "noticeText": "Можуть бути введені екстрені відключення."
+  },
+  {
+    "name": "cancellation with modifiers",
+    "html": "<div id='modal-attention'><p>Екстрені відключення електроенергії вже скасовані.</p></div>",
+    "active": false,
+    "possible": false,
+    "noticeText": "Екстрені відключення електроенергії вже скасовані."
+  },
+  {
+    "name": "full standard screenshot",
+    "html": "<div id='modal-attention'><p>За наказом НЕК Укренерго введені екстрені відключення електроенергії.</p><p>Графіки відключень при цьому не діють. Будь ласка, розумно споживайте електроенергію, щоб допомогти стабілізувати енергосистему.</p><p>Дякуємо за ваше розуміння!</p></div>",
+    "active": true,
+    "possible": false,
+    "noticeText": "За наказом НЕК Укренерго введені екстрені відключення електроенергії.\n\nГрафіки відключень при цьому не діють. Будь ласка, розумно споживайте електроенергію, щоб допомогти стабілізувати енергосистему.\n\nДякуємо за ваше розуміння!"
+  },
+  {
+    "name": "text preserves inline punctuation and paragraphs",
+    "html": "<div id='modal-attention'><h2>Шановні клієнти!</h2><p>Зафіксовані <b>аварійні відключення</b>.</p><p>Енергетики працюють.<br>Дякуємо!</p><button>Закрити</button></div>",
+    "active": true,
+    "possible": true,
+    "noticeText": "Шановні клієнти!\n\nЗафіксовані аварійні відключення.\n\nЕнергетики працюють.\n\nДякуємо!"
+  },
+  {
+    "name": "alternate cancellation wording",
+    "html": "<div id='modal-attention'>Екстрені відключення відмінено. Діють стабілізаційні відключення.</div>",
+    "active": false,
+    "possible": false
+  },
+  {
+    "name": "global cancellation and local accident in one sentence",
+    "html": "<div id='modal-attention'>Екстрені відключення скасовано, але у Бучанському районі тривають аварійні відключення.</div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "nonstandard emergency vocabulary",
+    "html": "<div id='modal-attention'>На Київщині аварійна ситуація в електромережі. Енергетики працюють над відновленням світла.</div>",
+    "active": true,
+    "possible": true
+  },
+  {
+    "name": "alternate outage noun cancellation",
+    "html": "<div id='modal-attention'>Аварійні знеструмлення скасовано. Діють стабілізаційні відключення.</div>",
+    "active": false,
+    "possible": false
   }
 ]

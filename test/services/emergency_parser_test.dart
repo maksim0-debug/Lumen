@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lumen/services/parser_service.dart';
+import 'package:lumen/services/emergency_status_parser.dart';
 
 void main() {
   group('ParserService Emergency Shutdown Extraction Tests', () {
@@ -13,6 +14,15 @@ void main() {
             ParserService.analyzeEmergencyStatus(item['html'] as String)
                 .isEmergency,
             item['active']);
+        if (item.containsKey('possible')) {
+          final observation = EmergencyStatusParser.parseObservation(
+              item['html'] as String, 1)!;
+          expect(observation.isPossible, item['possible']);
+          expect(observation.confirmed, true);
+          if (item.containsKey('noticeText')) {
+            expect(observation.noticeText, item['noticeText']);
+          }
+        }
       });
     }
 

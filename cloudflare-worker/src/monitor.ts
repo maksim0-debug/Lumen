@@ -109,10 +109,12 @@ export class ScheduleMonitor {
               next.pendingEmergency = { calendarDate: calendarDate(), attempts: 0,
                 nextAttemptAt: Date.now(), options: {
                   topic: EMERGENCY_TOPIC, group: 'EMERGENCY', changeType: 'emergency_alert',
-                  title: emergency.active ? 'Екстрені відключення' : 'Екстрені відключення скасовано',
-                  body: emergency.active ? 'ДТЕК повідомляє про екстрені відключення. Можливі відхилення від графіків.'
+                  title: emergency.active ? (emergency.isPossible ? 'Можливі екстрені відключення' : 'Екстрені відключення') : 'Екстрені відключення скасовано',
+                  body: emergency.active ? (emergency.isPossible ? 'ДТЕК повідомляє про можливі або локальні відключення. Перевірте повідомлення на сайті ДТЕК.' : 'ДТЕК повідомляє про екстрені відключення. Можливі відхилення від графіків.')
                     : 'ДТЕК повідомляє про скасування екстрених відключень.',
                   isEmergency: emergency.active, observedAt: emergency.observedAt,
+                  isPossible: emergency.isPossible ?? false,
+                  noticeText: emergency.noticeText,
                   expiresAt: emergency.observedAt + EMERGENCY_MAX_AGE,
                   eventId: `emergency:${emergency.changedAt}:${emergency.active}`,
                 } };
@@ -195,6 +197,8 @@ export class ScheduleMonitor {
       }
       const emergency = stored.emergency;
       if (emergency && (typeof emergency.active !== 'boolean' ||
+          (emergency.isPossible !== undefined && (typeof emergency.isPossible !== 'boolean' || (emergency.isPossible && !emergency.active))) ||
+          (emergency.noticeText !== undefined && typeof emergency.noticeText !== 'string') ||
           ![emergency.observedAt, emergency.changedAt, emergency.seenAt].every(value => Number.isSafeInteger(value) && value > 0) ||
           emergency.changedAt > emergency.observedAt || emergency.observedAt > emergency.seenAt ||
           (emergency.cancellationSince !== undefined && (!Number.isSafeInteger(emergency.cancellationSince) ||
@@ -308,6 +312,7 @@ export class ScheduleMonitor {
     const account = getServiceAccount(this.env.FIREBASE_SERVICE_ACCOUNT);
     if (stored.pendingEmergency && (stored.pendingEmergency.options.expiresAt! <= Date.now() ||
         stored.pendingEmergency.options.isEmergency !== stored.emergency?.active ||
+        (stored.pendingEmergency.options.isPossible ?? false) !== (stored.emergency?.isPossible ?? false) ||
         Date.now() - (stored.emergency?.observedAt ?? 0) > EMERGENCY_MAX_AGE)) {
       delete stored.pendingEmergency;
     }

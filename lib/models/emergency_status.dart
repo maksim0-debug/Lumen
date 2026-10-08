@@ -3,9 +3,11 @@ class EmergencyObservation {
   final bool active;
   final int observedAt;
   final bool confirmed;
+  final bool isPossible;
+  final String noticeText;
 
   const EmergencyObservation(this.active, this.observedAt,
-      {this.confirmed = false});
+      {this.confirmed = false, this.isPossible = false, this.noticeText = ''});
 
   static const maxAge = Duration(minutes: 15);
 
@@ -14,8 +16,14 @@ class EmergencyObservation {
       observedAt <= now + const Duration(minutes: 1).inMilliseconds &&
       now - observedAt <= maxAge.inMilliseconds;
 
-  Map<String, Object> toTransport() =>
-      {'schemaVersion': 1, 'active': active, 'observedAt': observedAt};
+  Map<String, Object> toTransport() => {
+        'schemaVersion': 1,
+        'active': active,
+        'observedAt': observedAt,
+        'confirmed': confirmed,
+        'isPossible': isPossible,
+        'noticeText': noticeText
+      };
 }
 
 /// Unknown and stale observations must never be presented as a cancellation.
@@ -25,13 +33,17 @@ class EmergencyStatus {
   final int changedAt;
   final int seenAt;
   final int? cancellationSince;
+  final bool isPossible;
+  final String noticeText;
 
   const EmergencyStatus(
       {this.active,
       this.observedAt = 0,
       this.changedAt = 0,
       this.seenAt = 0,
-      this.cancellationSince});
+      this.cancellationSince,
+      this.isPossible = false,
+      this.noticeText = ''});
 
   static const freshness = Duration(minutes: 30);
   static const cancellationDelay = Duration(seconds: 30);
@@ -54,8 +66,8 @@ class EmergencyStatus {
       return this;
     }
     final time = observation.observedAt;
-    // A missing modal needs a second fresh observation; a transient/truncated
-    // response must not announce that an ongoing emergency has ended.
+    // Legacy observations without verified page metadata still need a second
+    // capture. Fresh parsed pages and confirmed pushes apply immediately.
     if (active == true && !observation.active && !observation.confirmed) {
       final first = cancellationSince;
       if (first == null || time - first > confirmationWindow.inMilliseconds) {
@@ -64,6 +76,8 @@ class EmergencyStatus {
             observedAt: observedAt,
             changedAt: changedAt,
             seenAt: time,
+            isPossible: isPossible,
+            noticeText: noticeText,
             cancellationSince: time);
       }
       if (time - first < cancellationDelay.inMilliseconds) {
@@ -72,6 +86,8 @@ class EmergencyStatus {
             observedAt: observedAt,
             changedAt: changedAt,
             seenAt: time,
+            isPossible: isPossible,
+            noticeText: noticeText,
             cancellationSince: first);
       }
     }
@@ -79,7 +95,12 @@ class EmergencyStatus {
         active: observation.active,
         observedAt: time,
         seenAt: time,
-        changedAt: active == observation.active ? changedAt : time);
+        isPossible: observation.isPossible,
+        noticeText: observation.noticeText,
+        changedAt:
+            active == observation.active && isPossible == observation.isPossible
+                ? changedAt
+                : time);
   }
 
   Map<String, Object?> toJson() => {
@@ -87,11 +108,15 @@ class EmergencyStatus {
         'observedAt': observedAt,
         'changedAt': changedAt,
         'seenAt': seenAt,
-        'cancellationSince': cancellationSince
+        'cancellationSince': cancellationSince,
+        'isPossible': isPossible,
+        'noticeText': noticeText,
       };
 
   factory EmergencyStatus.fromJson(Map<String, dynamic> data) {
-    if (data['active'] is! bool ||
+    if ((data['isPossible'] != null && data['isPossible'] is! bool) ||
+        (data['noticeText'] != null && data['noticeText'] is! String) ||
+        data['active'] is! bool ||
         !['observedAt', 'changedAt', 'seenAt']
             .every((key) => data[key] is int && (data[key] as int) > 0) ||
         (data['cancellationSince'] != null &&
@@ -109,7 +134,9 @@ class EmergencyStatus {
         observedAt: data['observedAt'] as int,
         changedAt: data['changedAt'] as int,
         seenAt: data['seenAt'] as int,
-        cancellationSince: data['cancellationSince'] as int?);
+        cancellationSince: data['cancellationSince'] as int?,
+        isPossible: data['isPossible'] as bool? ?? false,
+        noticeText: data['noticeText'] as String? ?? '');
   }
 }
 
@@ -142,8 +169,18 @@ class EmergencyPush {
         expiresAt - observedAt > EmergencyObservation.maxAge.inMilliseconds) {
       return null;
     }
-    final observation =
-        EmergencyObservation(active, observedAt, confirmed: true);
+    final possible = data['isPossible'];
+    if (possible != null &&
+        ![true, false, 'true', 'false'].contains(possible)) {
+      return null;
+    }
+    if (data['noticeText'] != null && data['noticeText'] is! String) {
+      return null;
+    }
+    final observation = EmergencyObservation(active, observedAt,
+        confirmed: true,
+        isPossible: active && (possible == true || possible == 'true'),
+        noticeText: data['noticeText'] as String? ?? '');
     return observation.isValidAt(now)
         ? EmergencyPush(observation, expiresAt)
         : null;

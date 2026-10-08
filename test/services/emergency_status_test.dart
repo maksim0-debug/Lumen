@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:lumen/models/emergency_status.dart';
@@ -20,6 +21,64 @@ void main() {
     now = DateTime.now().millisecondsSinceEpoch;
   });
   tearDown(() async => db.close());
+
+  test(
+      'fresh source switches global to local and immediately hides for stabilization or absent notice',
+      () async {
+    final parser = ParserService();
+    final cases = jsonDecode(File('test/fixtures/emergency_status_cases.json')
+        .readAsStringSync()) as List;
+    var observedAt = now - 100;
+    for (final name in [
+      'full standard screenshot',
+      'district emergency from screenshot',
+      'stabilization from screenshot',
+      'full standard screenshot',
+      'complete schedule page without notice'
+    ]) {
+      final example = cases
+          .cast<Map<String, dynamic>>()
+          .singleWhere((item) => item['name'] == name);
+      final result = await parser.parseFetchedPage('null',
+          originalHtml: example['html'] as String,
+          emergencyService: service,
+          observedAt: observedAt++);
+      final state =
+          await EmergencyStatusService.forTesting(() async => db).read();
+      expect(state.active, example['active']);
+      expect(state.cancellationSince, null);
+      expect(state.isFreshAt(now), true);
+      expect(state.noticeText, result.emergency!.noticeText);
+      expect(state.isPossible, example['possible'] ?? false);
+    }
+  });
+
+  test(
+      'legacy cache loads and new metadata survives persistence without exporting HTML markup',
+      () async {
+    final old = {
+      'active': true,
+      'observedAt': now,
+      'changedAt': now,
+      'seenAt': now
+    };
+    expect(EmergencyStatus.fromJson(old).noticeText, '');
+    expect(EmergencyStatus.fromJson(old).isPossible, false);
+    const notice = 'Аварійні відключення.\n\nТекст </script> з сайту.';
+    final result = await ParserService().parseFetchedPage('null',
+        originalHtml:
+            "<div id='modal-attention'><p>Аварійні відключення.</p><p>Текст &lt;/script&gt; з сайту.</p></div>",
+        observedAt: now,
+        emergencyService: service);
+    expect(result.emergency!.noticeText, notice);
+    expect(result.html, contains(r'\u003c/script>'));
+    expect(RegExp('</script>').allMatches(result.html!).length, 1);
+    final restored =
+        await EmergencyStatusService.forTesting(() async => db).read();
+    expect(restored.noticeText, notice);
+    expect(restored.isPossible, true);
+    expect(restored.changedAt, now);
+  });
 
   test(
       'schema migration is shared by concurrent reads and cached per connection',
@@ -188,6 +247,24 @@ void main() {
       expect(
           EmergencyPush.parse(
               {...push(true, now), 'isEmergency': invalid}, now),
+          null);
+    }
+  });
+
+  test('local emergency push carries classification and original notice', () {
+    for (final possible in [true, 'true']) {
+      final parsed = EmergencyPush.parse({
+        ...push(true, now),
+        'isPossible': possible,
+        'noticeText': 'Аварійні відключення у Бучанському районі.'
+      }, now)!;
+      expect(parsed.observation.isPossible, true);
+      expect(parsed.observation.noticeText,
+          'Аварійні відключення у Бучанському районі.');
+    }
+    for (final invalid in [1, 'TRUE', [], {}]) {
+      expect(
+          EmergencyPush.parse({...push(true, now), 'isPossible': invalid}, now),
           null);
     }
   });

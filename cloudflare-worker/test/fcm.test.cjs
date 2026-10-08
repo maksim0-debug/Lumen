@@ -73,6 +73,20 @@ test('expired and incomplete emergency envelopes are rejected before network acc
   assert.equal(fcmCalls, 0);
 });
 
+test('local emergency pushes retain full text within FCM byte budget', async () => {
+  const observedAt = Date.now();
+  const noticeText = 'Аварійні відключення у Бучанському районі.\n\nЕнергетики працюють.';
+  const emergency = { ...options, group: 'EMERGENCY', topic: 'emergency_alerts',
+    changeType: 'emergency_alert', isEmergency: true, isPossible: true, noticeText,
+    observedAt, expiresAt: observedAt + 900000 };
+  assert.equal((await fcm.sendFcmTopicNotification(account, emergency)).success, true);
+  assert.equal(messages[0].message.data.isPossible, 'true');
+  assert.equal(messages[0].message.data.noticeText, noticeText);
+  assert.equal((await fcm.sendFcmTopicNotification(account, { ...emergency, noticeText: 'я'.repeat(2001) })).success, true);
+  assert.equal(messages[1].message.data.noticeText, undefined);
+  assert.ok(Buffer.byteLength(JSON.stringify(messages[1].message)) < 4096);
+});
+
 test('diagnostic pushes are data-only and never carry operational status or schedule mutations', async () => {
   for (const audience of ['emergency', 'group']) {
     const result = await fcm.sendFcmTopicNotification(account, {

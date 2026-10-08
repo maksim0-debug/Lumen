@@ -6,7 +6,7 @@ import 'preferences_helper.dart';
 
 class EmergencyNotificationService {
   final EmergencyStatusService statusService;
-  final Future<void> Function(bool active) _show;
+  final Future<void> Function(bool active)? _show;
   final Future<bool> Function() _enabled;
 
   EmergencyNotificationService(
@@ -14,7 +14,7 @@ class EmergencyNotificationService {
       Future<void> Function(bool)? show,
       Future<bool> Function()? enabled})
       : statusService = statusService ?? EmergencyStatusService(),
-        _show = show ?? _showNotification,
+        _show = show,
         _enabled = enabled ?? _notificationsEnabled;
 
   static Future<bool> _notificationsEnabled() async {
@@ -24,11 +24,17 @@ class EmergencyNotificationService {
     return prefs.getBool('notify_emergency_outages') ?? true;
   }
 
-  static Future<void> _showNotification(bool active) =>
+  static Future<void> _showNotification(bool active, bool isPossible) =>
       NotificationService().showImmediate(
-        active ? 'Екстрені відключення' : 'Екстрені відключення скасовано',
         active
-            ? 'ДТЕК повідомляє про екстрені відключення. Можливі відхилення від графіків.'
+            ? (isPossible
+                ? 'Можливі екстрені відключення'
+                : 'Екстрені відключення')
+            : 'Екстрені відключення скасовано',
+        active
+            ? (isPossible
+                ? 'ДТЕК повідомляє про можливі або локальні відключення. Перевірте повідомлення ДТЕК.'
+                : 'ДТЕК повідомляє про екстрені відключення. Можливі відхилення від графіків.')
             : 'ДТЕК повідомляє про скасування екстрених відключень.',
         notificationId: NotificationService.emergencyNotificationId,
         rethrowOnError: true,
@@ -60,7 +66,10 @@ class EmergencyNotificationService {
         return;
       }
       await statusService.deliverNotification(
-          status, () => _show(status.active!));
+          status,
+          () =>
+              _show?.call(status.active!) ??
+              _showNotification(status.active!, status.isPossible));
       final latest = await statusService.read();
       if (latest.changedAt > status.changedAt) await notifyStatus(latest);
     } catch (error, stack) {
