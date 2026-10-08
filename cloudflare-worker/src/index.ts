@@ -1,6 +1,7 @@
-import { getServiceAccount, groupToTopic, sendFcmTopicNotification } from './fcm';
+import { DIAGNOSTIC_CLIENT_TOPIC, getServiceAccount, groupToTopic, sendFcmTopicNotification } from './fcm';
 import { ALL_GROUPS, DTEK_URL, MAX_HTML_BYTES, PayloadError, readLimitedBody } from './schedule';
 import type { MonitoringReport } from './monitor';
+import { EMERGENCY_TOPIC } from './emergency';
 export { ALL_GROUPS } from './schedule';
 export { ScheduleMonitor } from './monitor';
 export type { MonitoringReport } from './monitor';
@@ -105,21 +106,35 @@ export default {
         if (!/^[a-zA-Z0-9_-]{1,64}$/.test(source)) return Response.json({ error: 'Invalid source' }, { status: 400 });
         return reportResponse(await processScheduleHtml(html, env, source, dryRun));
       }
-      const group = url.searchParams.get('group')?.trim() ?? 'GPV2.1';
-      const dayType = url.searchParams.get('dayType') ?? 'today';
-      if (!ALL_GROUPS.includes(group) || !['today', 'tomorrow'].includes(dayType)) {
+      const audience = url.searchParams.get('audience') ?? 'group';
+      if (!['group', 'emergency'].includes(audience)) {
+        return Response.json({ error: 'Invalid audience' }, { status: 400 });
+      }
+      const emergencyTest = audience === 'emergency';
+      // Emergency diagnostics have no schedule group or operational status.
+      const group = emergencyTest ? 'EMERGENCY' : url.searchParams.get('group')?.trim() ?? 'GPV2.1';
+      const dayType = emergencyTest ? undefined : url.searchParams.get('dayType') ?? 'today';
+      if (!emergencyTest && (!ALL_GROUPS.includes(group) || !['today', 'tomorrow'].includes(dayType!))) {
         return Response.json({ error: 'Invalid group or dayType' }, { status: 400 });
       }
       const account = getServiceAccount(env.FIREBASE_SERVICE_ACCOUNT);
       if (!account) return Response.json({ error: 'Firebase credentials are missing or invalid' }, { status: 503 });
-      const topic = groupToTopic(group, dayType as 'today' | 'tomorrow');
+      const topic = emergencyTest ? EMERGENCY_TOPIC : groupToTopic(group, dayType as 'today' | 'tomorrow');
       const fcmResult = await sendFcmTopicNotification(account, {
-        topic, group, dayType: dayType as 'today' | 'tomorrow', changeType: 'test',
-        title: url.searchParams.get('title')?.trim().slice(0, 200) || `Тестове сповіщення Lumen (${group.replace('GPV', 'Група ')})`,
-        body: url.searchParams.get('body')?.trim().slice(0, 500) || 'FCM push-інфраструктура працює.',
-        eventId: `${group}:${dayType}:test:${Date.now()}`,
+        topic, group, dayType: dayType as 'today' | 'tomorrow' | undefined, changeType: 'test',
+        testAudience: emergencyTest ? 'emergency' : 'group',
+        title: emergencyTest ? 'Lumen: тест каналу екстрених відключень'
+          : url.searchParams.get('title')?.trim().slice(0, 200) || `Тестове сповіщення Lumen (${group.replace('GPV', 'Група ')})`,
+        body: emergencyTest ? 'Це тестове повідомлення. Статус відключень і графіки не змінено.'
+          : url.searchParams.get('body')?.trim().slice(0, 500) || 'FCM push-інфраструктура працює.',
+        eventId: `${topic}:test:${crypto.randomUUID()}`,
       });
-      return Response.json({ group, dayType, topic, fcmResult }, { status: fcmResult.success ? 200 : 502 });
+      const ignoredParameters = emergencyTest
+        ? ['group', 'dayType', 'title', 'body'].filter(name => url.searchParams.has(name)) : [];
+      return Response.json({ audience, topic, requiredClientTopic: DIAGNOSTIC_CLIENT_TOPIC, fcmResult,
+        ...(!emergencyTest ? { group, dayType } : {}),
+        ...(ignoredParameters.length ? { ignoredParameters } : {}),
+      }, { status: fcmResult.success ? 200 : 502 });
     } catch (error) { return errorResponse(error); }
   },
 };

@@ -82,6 +82,36 @@ test('script-only Python/legacy snapshots never imply cancellation', async () =>
   assert.equal(sent.length, 1);
 });
 
+test('identical emergency-only replay succeeds without confirming cancellation or duplicating delivery', async () => {
+  const s = setup();
+  await sendEmergency(s, true, { fact: null });
+  const active = structuredClone(s.record().emergency);
+  const duplicate = await sendEmergency(s, true, { fact: null });
+  assert.equal(duplicate.status, 'emergency_only');
+  assert.equal(duplicate.emergencyProcessed, true);
+  assert.deepEqual(duplicate.errors, []);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(s.record().emergency, active);
+  const dry = await sendEmergency(s, true, { fact: null, dryRun: true });
+  assert.equal(dry.status, 'dry_run_success');
+  assert.equal(sent.length, 1);
+  now += 1000;
+  await sendEmergency(s, false, { fact: null });
+  const candidate = structuredClone(s.record().emergency);
+  const repeatedCandidate = await sendEmergency(s, false, { fact: null });
+  assert.equal(repeatedCandidate.status, 'emergency_only');
+  assert.deepEqual(s.record().emergency, candidate);
+  assert.equal(s.record().emergency.active, true);
+  assert.equal(sent.length, 1);
+  const contradictsCandidate = await sendEmergency(s, true, { fact: null });
+  assert.equal(contradictsCandidate.emergencyProcessed, false);
+  assert.deepEqual(s.record().emergency, candidate);
+  const conflicting = await sendEmergency(s, false, { capturedAt: active.observedAt, fact: null });
+  assert.equal(conflicting.emergencyProcessed, false);
+  assert.equal(conflicting.status, 'no_data_extracted');
+  assert.equal(sent.length, 1);
+});
+
 test('malformed/stale schedule does not block emergency state or delivery; dry run remains pure', async () => {
   const s = setup(); await s.send(fixture());
   const snapshot = structuredClone(s.record().snapshot);
@@ -262,12 +292,67 @@ test('HTTP boundary validates authentication, methods, groups and report status'
   assert.equal((await call('/check-html', undefined, 'GET')).status, 405);
   assert.equal((await call('/test-push?group=INVALID', '')).status, 400);
   assert.equal((await call('/test-push?dayType=invalid', '')).status, 400);
+  assert.equal((await call('/test-push?audience=invalid', '')).status, 400);
   assert.equal((await call('/check-html', '<html>login</html>')).status, 422);
   assert.equal((await call('/check-html', html(fixture()))).status, 200);
   outcome = { success: false, error: 'FCM unavailable' };
   assert.equal((await call('/check-html', html(fixture('06.10.2026 11:00', 'no')))).status, 503);
   assert.equal((await call('/check-html', html(fixture('06.10.2026 11:00', 'yes')))).status, 409);
   assert.equal((await call('/check-html', 'x'.repeat(MAX_HTML_BYTES + 1))).status, 413);
+});
+
+test('emergency topic test sends an explicit informational alert without mutating monitor state', async () => {
+  const worker = require('../src/index.ts').default;
+  const s = setup();
+  s.env.ADMIN_KEY = 'test-key';
+  const response = await worker.fetch(new Request('https://worker.test/test-push?audience=emergency&title=Misleading', {
+    headers: { 'X-Admin-Key': 'test-key' },
+  }), s.env, {});
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.topic, 'emergency_alerts');
+  assert.equal(result.audience, 'emergency');
+  assert.equal(result.requiredClientTopic, 'lumen_diagnostics_v1');
+  assert.equal(result.group, undefined);
+  assert.equal(result.dayType, undefined);
+  assert.deepEqual(result.ignoredParameters, ['title']);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].changeType, 'test');
+  assert.equal(sent[0].group, 'EMERGENCY');
+  assert.equal(sent[0].dayType, undefined);
+  assert.equal(sent[0].testAudience, 'emergency');
+  assert.equal(sent[0].isEmergency, undefined);
+  assert.match(sent[0].title, /тест каналу/);
+  assert.match(sent[0].body, /Статус відключень і графіки не змінено/);
+  assert.equal(s.record(), undefined);
+  assert.equal(s.writes(), 0);
+});
+
+test('emergency tests ignore schedule selectors explicitly and group tests retain their targeting', async () => {
+  const worker = require('../src/index.ts').default;
+  const s = setup(); s.env.ADMIN_KEY = 'test-key';
+  const call = query => worker.fetch(new Request(`https://worker.test/test-push?${query}`, {
+    method: 'POST', headers: { 'X-Admin-Key': 'test-key' },
+  }), s.env, {});
+  const emergency = await call('audience=emergency&group=all&dayType=invalid&title=Misleading&body=Misleading');
+  assert.equal(emergency.status, 200);
+  assert.deepEqual((await emergency.json()).ignoredParameters, ['group', 'dayType', 'title', 'body']);
+  assert.equal(sent[0].group, 'EMERGENCY');
+  assert.match(sent[0].title, /тест каналу/);
+  assert.match(sent[0].body, /тестове повідомлення/);
+  assert.equal((await call('audience=emergency&group=')).status, 200);
+  const group = await call('audience=group&group=GPV1.1&dayType=tomorrow&title=Custom&body=Body');
+  assert.equal(group.status, 200);
+  const result = await group.json();
+  assert.equal(result.audience, 'group');
+  assert.equal(result.group, 'GPV1.1');
+  assert.equal(result.dayType, 'tomorrow');
+  assert.equal(result.ignoredParameters, undefined);
+  assert.equal(sent[2].topic, 'group_gpv1_1_tomorrow');
+  assert.equal(sent[2].testAudience, 'group');
+  assert.equal(sent[2].title, 'Custom');
+  assert.equal(sent[2].body, 'Body');
+  assert.equal(s.writes(), 0);
 });
 
 test('cron accepts emergency-only success but warns on report errors and delivery failures', async () => {

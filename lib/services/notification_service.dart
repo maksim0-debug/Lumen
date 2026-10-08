@@ -31,6 +31,7 @@ class NotificationService {
   static const int immediateGroupNotificationBaseId = 9000000;
   static const int emergencyNotificationId =
       immediateGroupNotificationBaseId + 12;
+  static const int testNotificationId = immediateGroupNotificationBaseId + 13;
 
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();

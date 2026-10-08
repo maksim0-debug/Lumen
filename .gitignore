@@ -82,7 +82,7 @@ release.jks
 
 # Cloudflare Worker & Secrets
 cloudflare-worker/node_modules/
-cloudflare-worker/.wrangler/
+.wrangler/
 cloudflare-worker/.env
 cloudflare-worker/service-account*.json
 service-account*.json

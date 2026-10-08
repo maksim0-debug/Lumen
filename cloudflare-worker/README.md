@@ -30,6 +30,10 @@ Worker перевіряє графіки ДТЕК кожні п'ять хвил�
 - `POST /check-html?dryRun=true` — валідація та план змін без запису стану, alarm чи FCM.
 - `GET|POST /test-push?group=GPV2.1&dayType=today` — тестова доставка; невідомі групи й типи дня відхиляються.
 
+`GET|POST /test-push?audience=emergency` sends a clearly labeled informational test to `emergency_alerts`. Emergency tests have fixed wording; `group`, `dayType`, `title`, and `body` are unused and, when supplied, are listed in the response's `ignoredParameters`. The response contains `audience`, `topic`, and `fcmResult` without a schedule group or day. Group tests still validate `group` and `dayType` and accept custom `title` and `body`.
+
+All tests use a data-only `type=test` envelope with `testAudience=group|emergency`. Updated clients display them according to the matching notification preference without fetching schedules, changing cooldowns or emergency status, rescheduling reminders, or emitting schedule refresh events. Tests have a separate local notification ID. FCM targeting uses a condition requiring both the actual channel topic and the `lumen_diagnostics_v1` capability topic, which updated clients subscribe to alongside their notification topics. Older clients therefore never receive these tests. Install and open the updated client before testing; FCM acceptance alone does not confirm that a matching device exists or displayed the message. Emergency tests carry `group=EMERGENCY` and no operational status. A test does not verify actual emergency state transitions or cancellation confirmation. The admin authentication requirement is unchanged.
+
 Звіт містить status, checkedGroups, changesDetected, notificationsPlanned, notificationsSent та errors. `success`, `dry_run_success` і `emergency_only` без errors повертають HTTP 200; застарілий snapshot або конфлікт — 409; невдала доставка чи storage — 503; некоректний графік — 422; перевищення розміру — 413; тайм-аут завантаження — 408. Клієнт має перевіряти і HTTP, і JSON-звіт.
 
 ## Desktop і Python bridge
@@ -58,6 +62,8 @@ Bridges export validated runtime schedule JSON plus optional metadata, never the
 ```
 
 `observedAt` is the capture time in Unix milliseconds, not the schedule update time. Observations older than 15 minutes or more than one minute in the future are rejected. HTTP fetchers also consider `Date`/`Age` headers. Legacy script-only uploads leave emergency state unchanged. A valid status can be accepted when the schedule is missing, stale or invalid: `emergency_only`, `emergencyProcessed: true`, `scheduleStatus` and `warnings` identify this partial result. An initial active notice sends one alert; an initial inactive baseline stays quiet.
+
+Replaying the latest accepted observation returns success without advancing cancellation confirmation or creating another alert. Earlier observations and contradictory events at the same timestamp remain rejected.
 
 Emergency FCM messages use `type=emergency_alert`, `isEmergency`, `observedAt`, `expiresAt` and `eventId`. They are data-only so the client can validate ordering, expiry and the local notification preference before showing them. Android uses high priority, a shared collapse key and a separate local notification ID. Expiry remains 15 minutes from the original observation across retries, including midnight. Permanent FCM errors stop retries; transient errors use the durable outbox. SQLite on the client stores status and notification claims across isolates; a short delivery lease avoids holding database transactions across OS calls. The banner labels active data older than 30 minutes as requiring an update. Schedule forecasts and reminders remain enabled during emergencies.
 

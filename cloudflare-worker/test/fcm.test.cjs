@@ -73,6 +73,52 @@ test('expired and incomplete emergency envelopes are rejected before network acc
   assert.equal(fcmCalls, 0);
 });
 
+test('diagnostic pushes are data-only and never carry operational status or schedule mutations', async () => {
+  for (const audience of ['emergency', 'group']) {
+    const result = await fcm.sendFcmTopicNotification(account, {
+      ...options, changeType: 'test', testAudience: audience,
+      topic: audience === 'emergency' ? 'emergency_alerts' : 'group_gpv1_1_tomorrow',
+      group: audience === 'emergency' ? 'EMERGENCY' : 'GPV1.1', dayType: 'tomorrow',
+    });
+    assert.equal(result.success, true);
+    const message = messages.at(-1).message;
+    assert.equal(message.topic, undefined);
+    assert.equal(message.condition,
+      `'${audience === 'emergency' ? 'emergency_alerts' : 'group_gpv1_1_tomorrow'}' in topics && 'lumen_diagnostics_v1' in topics`);
+    assert.equal(message.notification, undefined);
+    assert.equal(message.android.notification, undefined);
+    assert.equal(message.android.collapse_key, undefined);
+    assert.equal(message.data.type, 'test');
+    assert.equal(message.data.testAudience, audience);
+    assert.equal(message.data.title, 'test');
+    assert.equal(message.data.body, 'test');
+    assert.equal(message.data.eventId, 'event');
+    assert.equal(message.data.isEmergency, undefined);
+    assert.equal(message.data.observedAt, undefined);
+    assert.equal(message.data.expiresAt, undefined);
+    assert.equal(message.data.scheduleHash, undefined);
+    assert.equal(message.data.outageMinutes, undefined);
+    assert.equal(message.data.targetDate, undefined);
+    assert.equal(message.data.dayType, audience === 'group' ? 'tomorrow' : undefined);
+    assert.equal(message.apns.headers['apns-push-type'], 'background');
+    assert.equal(message.apns.payload.aps['content-available'], 1);
+  }
+});
+
+test('diagnostic envelopes require an explicit audience before network access', async () => {
+  const result = await fcm.sendFcmTopicNotification(account, { ...options, changeType: 'test' });
+  assert.equal(result.success, false);
+  assert.equal(result.retryable, false);
+  assert.equal(oauthCalls, 0);
+  assert.equal(fcmCalls, 0);
+  const injection = await fcm.sendFcmTopicNotification(account, {
+    ...options, changeType: 'test', testAudience: 'group', topic: "invalid' || 'other",
+  });
+  assert.equal(injection.success, false);
+  assert.equal(oauthCalls, 0);
+  assert.equal(fcmCalls, 0);
+});
+
 test('permanent and transient FCM failures have different retry policies', async () => {
   for (const code of [400, 403, 404, 401, 429, 500, 503]) {
     status = code;

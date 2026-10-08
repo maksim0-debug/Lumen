@@ -9,6 +9,8 @@ export interface ServiceAccount {
   private_key: string;
 }
 
+export const DIAGNOSTIC_CLIENT_TOPIC = 'lumen_diagnostics_v1';
+
 /**
  * Normalizes outage group name into valid FCM topic name.
  * Example: ('GPV1.1', 'today') -> 'group_gpv1_1'
@@ -204,6 +206,7 @@ export interface FcmMessageOptions {
   isEmergency?: boolean;
   observedAt?: number;
   expiresAt?: number;
+  testAudience?: 'group' | 'emergency';
 }
 
 /**
@@ -215,6 +218,14 @@ export async function sendFcmTopicNotification(
 ): Promise<{ success: boolean; messageId?: string; error?: string; retryable?: boolean }> {
   try {
     const emergency = options.changeType === 'emergency_alert';
+    const diagnostic = options.changeType === 'test';
+    const dataOnly = emergency || diagnostic;
+    if (diagnostic && !['group', 'emergency'].includes(options.testAudience ?? '')) {
+      return { success: false, error: 'Invalid test audience', retryable: false };
+    }
+    if (diagnostic && !/^[a-zA-Z0-9_.~%-]{1,900}$/.test(options.topic)) {
+      return { success: false, error: 'Invalid test topic', retryable: false };
+    }
     if (emergency && (typeof options.isEmergency !== 'boolean' ||
         !Number.isSafeInteger(options.observedAt) || !Number.isSafeInteger(options.expiresAt) ||
         options.observedAt! <= 0 || options.observedAt! > Date.now() + 60_000 ||
@@ -229,8 +240,12 @@ export async function sendFcmTopicNotification(
 
     const payload = {
       message: {
-        topic: options.topic,
-        ...(!emergency ? { notification: {
+        // Only updated clients can consume diagnostics without schedule side
+        // effects. Retain the real channel subscription as part of the check.
+        ...(diagnostic ? {
+          condition: `'${options.topic}' in topics && '${DIAGNOSTIC_CLIENT_TOPIC}' in topics`,
+        } : { topic: options.topic }),
+        ...(!dataOnly ? { notification: {
           title: options.title,
           body: options.body,
         } } : {}),
@@ -239,13 +254,18 @@ export async function sendFcmTopicNotification(
           type: options.changeType ?? 'schedule_update',
           click_action: 'FLUTTER_NOTIFICATION_CLICK',
           timestamp: Date.now().toString(),
-          scheduleHash: options.scheduleHash ?? '',
-          outageMinutes: options.outageMinutes !== undefined ? String(options.outageMinutes) : '',
-          dayType: options.dayType ?? 'today',
           eventId: options.eventId ?? '',
-          targetDate: options.targetDate ?? '',
+          ...(!diagnostic ? {
+            scheduleHash: options.scheduleHash ?? '',
+            outageMinutes: options.outageMinutes !== undefined ? String(options.outageMinutes) : '',
+            dayType: options.dayType ?? 'today',
+            targetDate: options.targetDate ?? '',
+          } : {
+            testAudience: options.testAudience!,
+            ...(options.testAudience === 'group' ? { dayType: options.dayType ?? 'today' } : {}),
+          }),
+          ...(dataOnly ? { title: options.title, body: options.body } : {}),
           ...(emergency ? {
-            title: options.title, body: options.body,
             isEmergency: String(options.isEmergency),
             observedAt: String(options.observedAt), expiresAt: String(options.expiresAt),
           } : {}),
@@ -253,7 +273,7 @@ export async function sendFcmTopicNotification(
         android: {
           priority: 'HIGH',
           ttl: `${ttl}s`,
-          ...(emergency ? { collapse_key: 'emergency_status' } : { notification: {
+          ...(dataOnly ? (emergency ? { collapse_key: 'emergency_status' } : {}) : { notification: {
             // Re-delivery after an uncertain acknowledgement replaces the same system notification.
             ...(options.eventId ? { tag: options.eventId } : {}),
             channel_id: 'schedule_channel',
@@ -264,8 +284,8 @@ export async function sendFcmTopicNotification(
         },
         apns: {
           headers: { 'apns-expiration': String(Math.floor(Date.now() / 1000) + ttl),
-            ...(emergency ? { 'apns-push-type': 'background', 'apns-priority': '5' } : {}) },
-          payload: { aps: emergency ? { 'content-available': 1 } : { sound: 'default' } },
+            ...(dataOnly ? { 'apns-push-type': 'background', 'apns-priority': '5' } : {}) },
+          payload: { aps: dataOnly ? { 'content-available': 1 } : { sound: 'default' } },
         },
       },
     };

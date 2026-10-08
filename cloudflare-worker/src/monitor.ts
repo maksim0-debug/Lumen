@@ -92,7 +92,12 @@ export class ScheduleMonitor {
         const observation = readEmergencyObservation(input.html, input.observedAt);
         if (observation) {
           const emergency = acceptEmergency(stored.emergency, observation);
-          result.emergencyProcessed = emergency !== stored.emergency;
+          // A retry of an already accepted observation is successful too. It
+          // must not advance the confirmation clock or create another push.
+          const acceptedReplay = emergency?.seenAt === observation.observedAt &&
+            (emergency.cancellationSince !== undefined
+              ? !observation.active : emergency.active === observation.active);
+          result.emergencyProcessed = emergency !== stored.emergency || acceptedReplay;
           if (emergency) {
             next.emergency = emergency;
             result.isEmergency = emergency.active;

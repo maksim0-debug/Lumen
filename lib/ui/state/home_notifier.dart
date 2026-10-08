@@ -16,6 +16,7 @@ import '../../services/achievement_service.dart';
 import '../../services/app_logger.dart';
 import '../../services/darkness_theme_service.dart';
 import '../../services/fcm_service.dart';
+import '../../services/fcm_test_notification_service.dart';
 import '../../services/history_service.dart';
 import '../../services/hour_segment_service.dart';
 import '../../services/notification_service.dart';
@@ -101,6 +102,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
     _fcmSubscription = FcmService.onMessageStream.listen((message) async {
       if (!ref.mounted) return;
+      if (FcmTestNotificationService.isTest(message.data)) return;
       if (EmergencyPush.isEmergency(message.data)) {
         await refreshEmergencyStatus();
         if (ref.mounted &&

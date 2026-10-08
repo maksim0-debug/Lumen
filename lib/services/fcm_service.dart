@@ -5,22 +5,40 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'app_logger.dart';
 import 'notification_service.dart';
 import 'parser_service.dart';
 import 'preferences_helper.dart';
 import 'widget_service.dart';
 import 'fcm_event_guard.dart';
+import 'fcm_test_notification_service.dart';
 import 'dtek_snapshot.dart';
 import '../models/emergency_status.dart';
 import 'emergency_notification_service.dart';
 import '../utils/app_formatters.dart';
 
 @pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) =>
+    handleFcmBackgroundMessage(message);
+
+@visibleForTesting
+Future<void> handleFcmBackgroundMessage(RemoteMessage message,
+    {FcmTestNotificationService? testNotifications,
+    Future<void> Function()? initializeFirebase}) async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
-    await Firebase.initializeApp();
+    if (await (testNotifications ?? FcmTestNotificationService())
+        .handleIfTest(message,
+            // Older notification payloads are already displayed by the OS.
+            notify: message.notification == null)) {
+      return;
+    }
+    if (initializeFirebase != null) {
+      await initializeFirebase();
+    } else {
+      await Firebase.initializeApp();
+    }
     if (EmergencyPush.isEmergency(message.data)) {
       await EmergencyNotificationService().handlePush(message.data);
       return;
@@ -122,6 +140,7 @@ class FcmService {
       StreamController<RemoteMessage>.broadcast();
 
   static const String emergencyTopic = "emergency_alerts";
+  static const String diagnosticClientTopic = 'lumen_diagnostics_v1';
 
   /// Потік отриманих FCM-повідомлень для реактивного оновлення UI
   static Stream<RemoteMessage> get onMessageStream =>
@@ -137,6 +156,117 @@ class FcmService {
     final clean = group.replaceAll('.', '_').replaceAll('-', '_').toLowerCase();
     final suffix = dayType == 'tomorrow' ? '_tomorrow' : '';
     return "group_$clean$suffix";
+  }
+
+  @visibleForTesting
+  static Set<String> topicsForPreferences(SharedPreferences prefs) {
+    final notificationGroups =
+        PreferencesHelper.getActiveNotificationGroups(prefs);
+    final topics = <String>{};
+    if (prefs.getBool('notify_schedule_change') ?? true) {
+      for (final group in notificationGroups) {
+        topics.add(groupToTopic(group));
+      }
+    }
+    if (prefs.getBool('notify_tomorrow_schedule') ?? true) {
+      for (final group in notificationGroups) {
+        topics.add(groupToTopic(group, dayType: 'tomorrow'));
+      }
+    }
+    if (prefs.getBool('notify_emergency_outages') ?? true) {
+      topics.add(emergencyTopic);
+    }
+    if (topics.isNotEmpty) topics.add(diagnosticClientTopic);
+    return topics;
+  }
+
+  @visibleForTesting
+  Future<void> handleForegroundMessage(RemoteMessage message,
+      {FcmTestNotificationService? testNotifications}) async {
+    if (await (testNotifications ?? FcmTestNotificationService())
+        .handleIfTest(message)) {
+      return;
+    }
+    if (EmergencyPush.isEmergency(message.data)) {
+      await EmergencyNotificationService().handlePush(message.data);
+      _messageStreamController.add(message);
+      return;
+    }
+    try {
+      final date = message.data['targetDate'] as String?;
+      if (date != null &&
+          date.isNotEmpty &&
+          date !=
+              DtekSnapshot.notificationDate(
+                  message.data['dayType'] as String? ?? 'today')) {
+        return;
+      }
+      if (!await FcmEventGuard.claim(message.data['eventId'] as String?)) {
+        return;
+      }
+    } catch (error) {
+      AppLogger.w('Cannot check FCM event identity', tag: 'FCM');
+      // Identity storage failure must not suppress a valid update.
+    }
+    AppLogger.i(
+      "🔔 FCM повідомлення у передньому плані [${message.messageId}] для групи ${message.data['group'] ?? 'не вказано'}: ${message.notification?.title ?? message.data['title']}",
+      tag: 'FCM',
+      persistToHistory: true,
+    );
+
+    // Перевіряємо, чи користувач увімкнув відповідне сповіщення
+    try {
+      final prefs = await PreferencesHelper.getSafeInstance();
+      final groupName = message.data['group'] as String?;
+      final dayType = message.data['dayType'] as String? ?? 'today';
+      final notifyAllowed = dayType == 'tomorrow'
+          ? (prefs.getBool('notify_tomorrow_schedule') ?? true)
+          : (prefs.getBool('notify_schedule_change') ?? true);
+
+      final activeGroups = PreferencesHelper.getActiveNotificationGroups(prefs);
+
+      final isGroupTargeted =
+          groupName == null || activeGroups.contains(groupName);
+
+      if (notifyAllowed && isGroupTargeted) {
+        final notification = message.notification;
+        final defaultTitle =
+            dayType == 'tomorrow' ? "Графік на завтра" : "Зміна графіку";
+        final defaultBody = dayType == 'tomorrow'
+            ? "Оновлено розклад на завтра"
+            : "Оновлено розклад відключень";
+
+        final title =
+            notification?.title ?? message.data['title'] ?? defaultTitle;
+        final body = notification?.body ?? message.data['body'] ?? defaultBody;
+
+        await NotificationService().showImmediate(
+          title,
+          body,
+          groupName: groupName,
+        );
+      }
+    } catch (e) {
+      AppLogger.w("Помилка перевірки налаштувань у foreground FCM: $e",
+          tag: 'FCM');
+    }
+
+    // Сповіщаємо UI про надходження свіжих даних
+    _messageStreamController.add(message);
+  }
+
+  @visibleForTesting
+  Future<void> handleNotificationOpened(RemoteMessage message) async {
+    if (FcmTestNotificationService.isTest(message.data)) return;
+    if (EmergencyPush.isEmergency(message.data)) {
+      await EmergencyNotificationService()
+          .handlePush(message.data, notify: false);
+    }
+    AppLogger.i(
+      "📲 Додаток відкрито через клік по пушу: ${message.data}",
+      tag: 'FCM',
+    );
+    _messageStreamController.add(message);
   }
 
   Future<void> init() async {
@@ -175,103 +305,15 @@ class FcmService {
       );
 
       // Обробка пушів, коли додаток відкритий (Foreground)
-      FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-        if (EmergencyPush.isEmergency(message.data)) {
-          await EmergencyNotificationService().handlePush(message.data);
-          _messageStreamController.add(message);
-          return;
-        }
-        try {
-          final date = message.data['targetDate'] as String?;
-          if (date != null &&
-              date.isNotEmpty &&
-              date !=
-                  DtekSnapshot.notificationDate(
-                      message.data['dayType'] as String? ?? 'today')) {
-            return;
-          }
-          if (!await FcmEventGuard.claim(message.data['eventId'] as String?)) {
-            return;
-          }
-        } catch (error) {
-          AppLogger.w('Cannot check FCM event identity', tag: 'FCM');
-          // Identity storage failure must not suppress a valid update.
-        }
-        AppLogger.i(
-          "🔔 FCM повідомлення у передньому плані [${message.messageId}] для групи ${message.data['group'] ?? 'не вказано'}: ${message.notification?.title ?? message.data['title']}",
-          tag: 'FCM',
-          persistToHistory: true,
-        );
-
-        // Перевіряємо, чи користувач увімкнув відповідне сповіщення
-        try {
-          final prefs = await PreferencesHelper.getSafeInstance();
-          final groupName = message.data['group'] as String?;
-          final dayType = message.data['dayType'] as String? ?? 'today';
-          final notifyAllowed = dayType == 'tomorrow'
-              ? (prefs.getBool('notify_tomorrow_schedule') ?? true)
-              : (prefs.getBool('notify_schedule_change') ?? true);
-
-          final activeGroups =
-              PreferencesHelper.getActiveNotificationGroups(prefs);
-
-          final isGroupTargeted =
-              groupName == null || activeGroups.contains(groupName);
-
-          if (notifyAllowed && isGroupTargeted) {
-            final notification = message.notification;
-            final defaultTitle =
-                dayType == 'tomorrow' ? "Графік на завтра" : "Зміна графіку";
-            final defaultBody = dayType == 'tomorrow'
-                ? "Оновлено розклад на завтра"
-                : "Оновлено розклад відключень";
-
-            final title =
-                notification?.title ?? message.data['title'] ?? defaultTitle;
-            final body =
-                notification?.body ?? message.data['body'] ?? defaultBody;
-
-            await NotificationService().showImmediate(
-              title,
-              body,
-              groupName: groupName,
-            );
-          }
-        } catch (e) {
-          AppLogger.w("Помилка перевірки налаштувань у foreground FCM: $e",
-              tag: 'FCM');
-        }
-
-        // Сповіщаємо UI про надходження свіжих даних
-        _messageStreamController.add(message);
-      });
+      FirebaseMessaging.onMessage.listen(handleForegroundMessage);
 
       // Обробка відкриття додатку через клік по пушу
-      FirebaseMessaging.onMessageOpenedApp
-          .listen((RemoteMessage message) async {
-        if (EmergencyPush.isEmergency(message.data)) {
-          await EmergencyNotificationService()
-              .handlePush(message.data, notify: false);
-        }
-        AppLogger.i(
-          "📲 Додаток відкрито через клік по пушу: ${message.data}",
-          tag: 'FCM',
-        );
-        _messageStreamController.add(message);
-      });
+      FirebaseMessaging.onMessageOpenedApp.listen(handleNotificationOpened);
 
       // Обробка холодного старту через клік по пушу
       final initialMessage = await messaging.getInitialMessage();
       if (initialMessage != null) {
-        if (EmergencyPush.isEmergency(initialMessage.data)) {
-          await EmergencyNotificationService()
-              .handlePush(initialMessage.data, notify: false);
-        }
-        AppLogger.i(
-          "📲 Додаток запущено з нуля через клік по пушу: ${initialMessage.data}",
-          tag: 'FCM',
-        );
-        _messageStreamController.add(initialMessage);
+        await handleNotificationOpened(initialMessage);
       }
 
       _isInitialized = true;
@@ -345,13 +387,6 @@ class FcmService {
       {bool forceResubscribe = false}) async {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
-      final notifyScheduleChange =
-          prefs.getBool('notify_schedule_change') ?? true;
-      final notifyTomorrowSchedule =
-          prefs.getBool('notify_tomorrow_schedule') ?? true;
-      final notifyEmergencyOutages =
-          prefs.getBool('notify_emergency_outages') ?? true;
-
       final messaging = FirebaseMessaging.instance;
       final currentSubscribed =
           (prefs.getStringList('fcm_subscribed_topics') ?? []).toSet();
@@ -359,20 +394,7 @@ class FcmService {
       final notificationGroups =
           PreferencesHelper.getActiveNotificationGroups(prefs);
 
-      final targetTopics = <String>{};
-      if (notifyScheduleChange) {
-        for (final group in notificationGroups) {
-          targetTopics.add(groupToTopic(group, dayType: 'today'));
-        }
-      }
-      if (notifyTomorrowSchedule) {
-        for (final group in notificationGroups) {
-          targetTopics.add(groupToTopic(group, dayType: 'tomorrow'));
-        }
-      }
-      if (notifyEmergencyOutages) {
-        targetTopics.add(emergencyTopic);
-      }
+      final targetTopics = topicsForPreferences(prefs);
 
       AppLogger.d(
         "FCM: Старт синхронізації топіків. Цільові групи (${notificationGroups.length}): ${notificationGroups.join(', ')}. Усього топіків: ${targetTopics.length} (force: $forceResubscribe)",
