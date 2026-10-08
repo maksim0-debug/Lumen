@@ -82,10 +82,8 @@ Future<void> handleFcmBackgroundMessage(RemoteMessage message,
     }
 
     // Оновлюємо розклад у фоні та віджет на робочому столі, щоб користувач бачив свіжі дані
-    final parser = ParserService();
-    final allSchedules = await parser
-        .fetchAllSchedules()
-        .timeout(const Duration(seconds: 15), onTimeout: () => {});
+    final parser = ParserService.background();
+    final allSchedules = await parser.fetchAllSchedules();
 
     if (allSchedules.isNotEmpty) {
       final widgetService = WidgetService();

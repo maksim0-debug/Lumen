@@ -30,7 +30,7 @@ void callbackDispatcher() {
         await HistoryService()
             .logAction("Групи для оновлення: $notificationGroups");
 
-        final parser = ParserService();
+        final parser = ParserService.background();
 
         final allSchedules = await parser.fetchAllSchedules();
 

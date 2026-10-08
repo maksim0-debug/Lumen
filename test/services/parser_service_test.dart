@@ -48,6 +48,34 @@ void main() {
               '<html><body>Hello world</body></html>'),
           isFalse);
     });
+
+    test(
+        'isBotChallengeHtml detects Imperva Error 15 and country policy blocks',
+        () {
+      const error15Html = '''
+<!DOCTYPE html>
+<html lang="uk">
+<head><title>Access Denied</title></head>
+<body>
+  <h2>Ви намагаєтесь підключитися до сайту з адреси країни, яка заблокована нашою політикою безпеки.</h2>
+  <h3>You are trying to connect to the site from a country address that is blocked by our security policy.</h3>
+  <h1>Error 15</h1>
+  <div>Powered by imperva</div>
+</body>
+</html>
+''';
+
+      expect(ParserService.isBotChallengeHtml(error15Html), isTrue);
+      expect(
+          ParserService.isBotChallengeHtml(
+              'Error 15: Access Denied. Powered by imperva'),
+          isTrue);
+      expect(
+          ParserService.isBotChallengeHtml(
+              'підключитися до сайту з адреси країни, яка заблокована нашою політикою безпеки'),
+          isTrue);
+      expect(ParserService.isBotChallengeHtml('blocked by our security policy'),
+          isTrue);
+    });
   });
 }
-

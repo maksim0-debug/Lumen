@@ -15,7 +15,7 @@ Future<void> backgroundCallback(Uri? uri) async {
     } catch (_) {}
     final widgetService = WidgetService();
     try {
-      final parser = ParserService();
+      final parser = ParserService.background();
       final allSchedules = await parser.fetchAllSchedules();
       if (allSchedules.isNotEmpty) {
         await widgetService.updateWidget(allSchedules);
