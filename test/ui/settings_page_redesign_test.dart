@@ -25,7 +25,7 @@ void main() {
       PackageInfo(
         appName: 'Lumen',
         packageName: 'lumen',
-        version: '1.2.0',
+        version: '1.2.1',
         buildNumber: '8',
         buildSignature: '',
       ),
@@ -140,7 +140,7 @@ void main() {
     expect(find.text('Увімкнути логування'), findsOneWidget);
 
     // Verify footer
-    expect(find.text('Lumen v1.2.0+8'), findsOneWidget);
+    expect(find.text('Lumen v1.2.1+8'), findsOneWidget);
     expect(find.text('Розробник: @maksim0-debug'), findsOneWidget);
   });
 }

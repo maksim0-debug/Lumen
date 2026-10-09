@@ -5,7 +5,7 @@ class OpenApiSpecs {
       'openapi': '3.0.3',
       'info': {
         'title': 'Lumen Local REST & SSE API',
-        'version': '1.2.0',
+        'version': '1.2.1',
         'description':
             'High-performance local REST & Server-Sent Events (SSE) API for electricity status monitoring, DTEK outage schedules, countdown timers, outage history, and analytics.',
       },

@@ -15,7 +15,7 @@ void main() {
       PackageInfo(
         appName: 'Lumen',
         packageName: 'lumen',
-        version: '1.2.0',
+        version: '1.2.1',
         buildNumber: '10',
         buildSignature: '',
       ),
@@ -47,7 +47,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    final versionFinder = find.text('Lumen v1.2.0+10');
+    final versionFinder = find.text('Lumen v1.2.1+10');
     expect(versionFinder, findsOneWidget);
 
     final authorFinder = find.text('Розробник: @maksim0-debug');
