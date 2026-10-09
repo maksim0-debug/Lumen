@@ -13,6 +13,8 @@ import '../services/darkness_theme_service.dart';
 import '../services/desktop_tray_coordinator.dart';
 import '../services/desktop_sync_service.dart';
 import '../services/parser_service.dart';
+import '../services/visible_schedule_ticker.dart';
+import 'package:flutter/foundation.dart';
 import '../services/preferences_helper.dart';
 import '../services/schedule_calculation_service.dart';
 import '../utils/app_formatters.dart';
@@ -58,7 +60,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   int _lastAutoRefreshMinute = -1;
   int _lastRenderedMinute = -1;
-  Timer? _timer;
+  late final VisibleScheduleTicker _ticker;
 
   @override
   void initState() {
@@ -67,7 +69,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _desktopTrayCoordinator.init();
     unawaited(DesktopSyncService().init());
     _initAchievements();
-    _schedulePeriodicUpdates();
+    _ticker = VisibleScheduleTicker(
+      foregroundOnly: defaultTargetPlatform == TargetPlatform.android,
+      initialState: WidgetsBinding.instance.lifecycleState,
+      now: ScheduleClock.now,
+      onMinute: _onMinute,
+      onResume: () {
+        unawaited(ref.read(homeNotifierProvider.notifier).refreshAfterResume());
+      },
+    );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(homeNotifierProvider.notifier).loadPreferencesAndData();
@@ -75,29 +85,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     });
   }
 
-  void _schedulePeriodicUpdates() {
-    _timer?.cancel();
-    final now = ScheduleClock.now();
-    final msToNextMinute = (60 - now.second) * 1000 - now.millisecond + 100;
-    _timer = Timer(Duration(milliseconds: msToNextMinute), () {
-      if (!mounted) return;
-      final current = ScheduleClock.now();
-
-      if (!DesktopSyncService().isInitialized &&
-          current.minute % 15 == 0 &&
-          current.minute != _lastAutoRefreshMinute) {
-        _lastAutoRefreshMinute = current.minute;
-        ref.read(homeNotifierProvider.notifier).loadData(silent: true);
-      }
-
-      if (current.minute != _lastRenderedMinute) {
-        _lastRenderedMinute = current.minute;
-        ref.read(homeNotifierProvider.notifier).recalculateDisplayData();
-        unawaited(
-            ref.read(homeNotifierProvider.notifier).refreshEmergencyStatus());
-      }
-      _schedulePeriodicUpdates();
-    });
+  void _onMinute(DateTime current) {
+    if (!mounted) return;
+    if (!DesktopSyncService().isInitialized &&
+        current.minute % 15 == 0 &&
+        current.minute != _lastAutoRefreshMinute) {
+      _lastAutoRefreshMinute = current.minute;
+      unawaited(ref
+          .read(homeNotifierProvider.notifier)
+          .loadData(silent: true, diagnosticSource: 'home_timer'));
+    }
+    if (current.minute != _lastRenderedMinute) {
+      _lastRenderedMinute = current.minute;
+      ref.read(homeNotifierProvider.notifier).recalculateDisplayData();
+      unawaited(
+          ref.read(homeNotifierProvider.notifier).refreshEmergencyStatus());
+    }
   }
 
   Future<void> _initAchievements() async {
@@ -116,13 +119,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _focusNode.dispose();
     _desktopTrayCoordinator.dispose();
-    _timer?.cancel();
+    _ticker.dispose();
     _achievementService.onAchievementUnlocked = null;
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _ticker.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed && mounted) {
       setState(() {});
     }

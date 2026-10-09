@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:lumen/models/schedule_change_event.dart';
 import 'package:lumen/models/schedule_status.dart';
 import 'package:lumen/services/fcm_service.dart';
+import 'package:lumen/services/android_fetch_diagnostics.dart';
 import 'package:lumen/services/schedule_change_notification_service.dart';
 import 'package:lumen/services/schedule_change_notification_store.dart';
 import 'package:lumen/services/schedule_clock.dart';
@@ -99,6 +101,34 @@ void main() {
     service = makeService(store);
   });
   tearDown(() async => db.close());
+
+  test(
+      'Diagnostics distinguish unchanged data from completed notification delivery',
+      () async {
+    await service.observeSchedules(snapshot(a, 0));
+    final records = <Map<String, dynamic>>[];
+    final diagnostics = AndroidFetchDiagnostics(
+        enabled: true,
+        modeLoader: () async => AndroidDiagnosticMode.verbose,
+        snapshot: (_) async => {},
+        sink: (message, _) async => records.add(jsonDecode(message)));
+    await diagnostics.run(
+        source: 'periodic_poll',
+        execution: 'workmanager',
+        action: () async {
+          await service.observeSchedules(snapshot(a, 0));
+          await service.observeSchedules(snapshot(b, 1));
+        });
+    expect(shown, hasLength(1));
+    expect(
+        records.where((r) => r['stage'] == 'notification_skipped'), isNotEmpty);
+    expect(
+        records.singleWhere(
+            (r) => r['stage'] == 'notification_show_returned')['group'],
+        'GPV2.1');
+    expect(records.map((r) => r['operationId']).toSet(), hasLength(1));
+    expect(jsonEncode(records), isNot(contains(b)));
+  });
 
   test('background push queues recovery even when platform delivery fails',
       () async {

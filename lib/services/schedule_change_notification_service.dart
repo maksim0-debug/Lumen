@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/schedule_change_event.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
+import 'android_fetch_diagnostics.dart';
 import 'dtek_snapshot.dart';
 import 'notification_service.dart';
 import 'preferences_helper.dart';
@@ -75,6 +76,12 @@ class ScheduleChangeNotificationService {
     final prefs = await _preferences();
     await prefs.reload();
     final now = _now();
+    AndroidFetchDiagnostics.current?.event('notification_settings', {
+      'activeGroups': PreferencesHelper.getActiveNotificationGroups(prefs),
+      'notifyToday': prefs.getBool('notify_schedule_change') ?? true,
+      'notifyTomorrow': prefs.getBool('notify_tomorrow_schedule') ?? true,
+      'deliver': deliver,
+    });
     (Object, StackTrace)? failure;
     for (final group in PreferencesHelper.getActiveNotificationGroups(prefs)) {
       final schedule = schedules[group];
@@ -92,6 +99,14 @@ class ScheduleChangeNotificationService {
               handled: !allowed,
               legacyHash: _legacyHash(prefs, event));
         } on FormatException catch (error) {
+          AndroidFetchDiagnostics.current?.event(
+              'notification_snapshot_rejected',
+              {
+                'group': group,
+                'dayType': dayType,
+                ...AndroidFetchDiagnostics.errorFields(error),
+              },
+              level: AppLogLevel.warning);
           // Conflicting source publications cannot advance the watermark or
           // block independent groups/dates, widgets and reminders.
           AppLogger.w(
@@ -112,6 +127,14 @@ class ScheduleChangeNotificationService {
             !allowed ||
             event.isWithdrawal ||
             observation != ScheduleNotificationObservation.pending) {
+          AndroidFetchDiagnostics.current?.event('notification_skipped', {
+            'group': group,
+            'dayType': dayType,
+            'allowed': allowed,
+            'observation': observation.name,
+            'withdrawal': event.isWithdrawal,
+            'deliver': deliver,
+          });
           continue;
         }
         try {
@@ -166,14 +189,36 @@ class ScheduleChangeNotificationService {
       }
       final claim =
           await _store.claim(event, nowMs: _now().millisecondsSinceEpoch);
-      if (claim == null) return;
+      if (claim == null) {
+        AndroidFetchDiagnostics.current?.event('notification_not_claimed', {
+          'group': event.group,
+          'dayType': event.dayType,
+        });
+        return;
+      }
       try {
+        AndroidFetchDiagnostics.current?.event('notification_show_start', {
+          'group': event.group,
+          'dayType': event.dayType,
+        });
         await _show(claim).timeout(const Duration(seconds: 10));
       } catch (error) {
+        AndroidFetchDiagnostics.current?.event(
+            'notification_show_error',
+            {
+              'group': event.group,
+              'dayType': event.dayType,
+              ...AndroidFetchDiagnostics.errorFields(error),
+            },
+            level: AppLogLevel.error);
         await _store.finish(claim, success: false);
         rethrow;
       }
       await _store.finish(claim, success: true);
+      AndroidFetchDiagnostics.current?.event('notification_show_returned', {
+        'group': event.group,
+        'dayType': event.dayType,
+      });
       AppLogger.i('Displayed schedule change ${claim.identity}',
           tag: 'ScheduleNotifications', persistToHistory: true);
     }

@@ -14,6 +14,7 @@ import '../../models/schedule_status.dart';
 import '../../models/schedule_view_mode.dart';
 import '../../services/achievement_service.dart';
 import '../../services/app_logger.dart';
+import '../../services/android_fetch_diagnostics.dart';
 import '../../services/darkness_theme_service.dart';
 import '../../services/fcm_service.dart';
 import '../../services/fcm_test_notification_service.dart';
@@ -113,7 +114,10 @@ class HomeNotifier extends Notifier<HomeState> {
                 null) {
           // Older workers did not attach a timestamp. Refresh rather than
           // treating a missing boolean as a cancellation.
-          unawaited(loadData(silent: true, force: true));
+          unawaited(loadData(
+              silent: true,
+              force: true,
+              diagnosticSource: 'foreground_emergency_push'));
         }
         return;
       }
@@ -121,7 +125,7 @@ class HomeNotifier extends Notifier<HomeState> {
           "🔄 FCM оновлення отримано у foreground. Оновлюємо розклад...",
           tag: 'HomeNotifier');
       if (!state.isHistoryMode) {
-        loadData(force: true);
+        loadData(force: true, diagnosticSource: 'foreground_schedule_push');
       }
     });
 
@@ -762,7 +766,43 @@ class HomeNotifier extends Notifier<HomeState> {
     );
   }
 
-  Future<void> loadData({bool silent = false, bool force = false}) async {
+  Future<void> refreshAfterResume() async {
+    try {
+      final recent = await _scheduleSyncService.parser.recentAndroidSnapshot();
+      if (!ref.mounted) return;
+      if (recent != null && recent.value.schedules.isNotEmpty) {
+        _scheduleSyncService.lastFetchTime =
+            DateTime.fromMillisecondsSinceEpoch(recent.completedAt);
+        await _applySyncedSchedules(recent.value.schedules);
+        await refreshEmergencyStatus();
+      } else {
+        await loadData(silent: true, diagnosticSource: 'home_resume');
+      }
+    } catch (error, stack) {
+      AppLogger.e('Cannot refresh Android UI after resume',
+          tag: 'Main', error: error, stackTrace: stack);
+      if (ref.mounted) {
+        await loadData(silent: true, diagnosticSource: 'home_resume');
+      }
+    }
+  }
+
+  Future<void> loadData(
+          {bool silent = false,
+          bool force = false,
+          String diagnosticSource = 'home_load'}) =>
+      AndroidFetchDiagnostics.instance.run(
+          source: diagnosticSource,
+          execution: 'main_engine',
+          fields: {
+            'silent': silent,
+            'force': force,
+            'cachedGroups': state.allSchedules.length,
+            'isHistoryMode': state.isHistoryMode
+          },
+          action: () => _loadData(silent: silent, force: force));
+
+  Future<void> _loadData({required bool silent, required bool force}) async {
     await _scheduleSyncService.sync(
       silent: silent,
       force: force,
@@ -1106,7 +1146,8 @@ class HomeNotifier extends Notifier<HomeState> {
       await loadHistoryData(targetDate);
       if (!ref.mounted) return;
     } else {
-      await loadData(silent: silent, force: true);
+      await loadData(
+          silent: silent, force: true, diagnosticSource: 'manual_refresh');
       if (!ref.mounted) return;
     }
     if (state.powerMonitorEnabled) {

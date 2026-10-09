@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
+import '../services/android_diagnostic_settings.dart';
 import '../services/api/local_api_service.dart';
 import '../services/app_info_service.dart';
 import '../services/app_logger.dart';
@@ -51,6 +52,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _launchAtStartup = false;
   bool _isLoading = true;
   bool _enableLogging = true;
+  bool _verboseAndroidDiagnostics = false;
   bool _powerMonitorEnabled = false;
   int _powerMonitorTtlMinutes = 25;
   double _uiScale = 1.0;
@@ -123,6 +125,13 @@ class _SettingsPageState extends State<SettingsPage> {
           _isDarkMode = prefs.getBool('is_dark_mode') ?? true;
           _animationsEnabled = DarknessThemeService().areAnimationsEnabled;
           _enableLogging = prefs.getBool('enable_logging') ?? true;
+          _verboseAndroidDiagnostics = AndroidDiagnosticSettings.resolve(
+                  loggingEnabled: _enableLogging,
+                  verboseUntilMs:
+                      prefs.getInt(AndroidDiagnosticSettings.verboseUntilKey) ??
+                          0,
+                  nowMs: DateTime.now().millisecondsSinceEpoch) ==
+              AndroidDiagnosticMode.verbose;
           _powerMonitorEnabled =
               prefs.getBool('power_monitor_enabled') ?? false;
           _uiScale = prefs.getDouble('ui_scale') ?? 1.0;
@@ -1091,13 +1100,29 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         _buildSwitchTile(
           "Увімкнути логування",
-          "Записувати детальну інформацію про роботу",
+          "Компактний журнал роботи; помилки зберігаються завжди",
           _enableLogging,
           (val) {
             setState(() => _enableLogging = val);
             _saveSetting('enable_logging', val);
           },
         ),
+        if (Platform.isAndroid && _enableLogging)
+          _buildSwitchTile(
+            "Докладна діагностика Android на 2 години",
+            "Етапи завантаження та стан системи. Потім — компактний журнал",
+            _enableLogging && _verboseAndroidDiagnostics,
+            (val) async {
+              try {
+                await AndroidDiagnosticSettings.setVerbose(val);
+                if (!mounted) return;
+                setState(() => _verboseAndroidDiagnostics = val);
+              } catch (error) {
+                AppLogger.e('Cannot change Android diagnostic mode',
+                    tag: 'SettingsPage', error: error);
+              }
+            },
+          ),
       ],
     );
   }

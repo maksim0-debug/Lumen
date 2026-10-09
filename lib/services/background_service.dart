@@ -2,6 +2,7 @@ import 'package:workmanager/workmanager.dart';
 import 'package:flutter/foundation.dart';
 
 import 'app_logger.dart';
+import 'android_fetch_diagnostics.dart';
 import 'parser_service.dart';
 import 'widget_service.dart';
 import 'notification_service.dart';
@@ -15,30 +16,63 @@ const String taskUpdateSchedule = 'taskUpdateSchedule';
 /// FCM only queues recovery work; displaying a push never waits for DTEK/WAF.
 Future<void> enqueueScheduleRefresh() =>
     Workmanager().registerOneOffTask('fcm_schedule_refresh', taskUpdateSchedule,
+        inputData: {'diagnostic_source': 'fcm_recovery'},
         existingWorkPolicy: ExistingWorkPolicy.keep,
         constraints: Constraints(networkType: NetworkType.connected));
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    try {
-      await HistoryService().logAction('Бекграунд завдання запущено: $task');
-      if (task != taskUpdateSchedule) return true;
-      final schedules = await ParserService.background().fetchAllSchedules();
-      if (schedules.isEmpty) {
-        AppLogger.w('Background schedule refresh returned no data',
-            tag: 'Background');
-        return false;
-      }
-      await applyBackgroundSchedules(schedules);
-      await HistoryService().logAction('Бекграунд завдання завершено');
-      return true;
-    } catch (error, stack) {
-      AppLogger.e('Background schedule refresh failed',
-          tag: 'Background', error: error, stackTrace: stack);
-      return false;
-    }
-  });
+  Workmanager().executeTask((task, inputData) =>
+      AndroidFetchDiagnostics.instance.run(
+          source: inputData?['diagnostic_source'] as String? ??
+              'workmanager_legacy',
+          execution: 'workmanager',
+          fields: {'task': task},
+          action: () async {
+            try {
+              await HistoryService()
+                  .logAction('Бекграунд завдання запущено: $task');
+              if (task != taskUpdateSchedule) {
+                AndroidFetchDiagnostics.current?.event('worker_result', {
+                  'result': 'success',
+                  'reason': 'unrecognized_task',
+                });
+                return true;
+              }
+              final schedules =
+                  await ParserService.background().fetchAllSchedules();
+              if (schedules.isEmpty) {
+                AndroidFetchDiagnostics.current?.event(
+                    'worker_result',
+                    {
+                      'result': 'retry',
+                      'reason': 'empty_schedule',
+                    },
+                    level: AppLogLevel.warning);
+                AppLogger.w('Background schedule refresh returned no data',
+                    tag: 'Background');
+                return false;
+              }
+              await applyBackgroundSchedules(schedules);
+              await HistoryService().logAction('Бекграунд завдання завершено');
+              AndroidFetchDiagnostics.current?.event('worker_result', {
+                'result': 'success',
+                'groups': schedules.length,
+              });
+              return true;
+            } catch (error, stack) {
+              AndroidFetchDiagnostics.current?.event(
+                  'worker_result',
+                  {
+                    'result': 'retry',
+                    ...AndroidFetchDiagnostics.errorFields(error),
+                  },
+                  level: AppLogLevel.error);
+              AppLogger.e('Background schedule refresh failed',
+                  tag: 'Background', error: error, stackTrace: stack);
+              return false;
+            }
+          }));
 }
 
 /// Shared by periodic polling and FCM recovery, with injectable side effects.
@@ -50,9 +84,25 @@ Future<void> applyBackgroundSchedules(
 }) async {
   (Object, StackTrace)? failure;
   Future<void> attempt(String operation, Future<void> Function() action) async {
+    final elapsed = Stopwatch()..start();
+    AndroidFetchDiagnostics.current?.event('background_effect_start', {
+      'effect': operation,
+    });
     try {
       await action();
+      AndroidFetchDiagnostics.current?.event('background_effect_returned', {
+        'effect': operation,
+        'durationMs': elapsed.elapsedMilliseconds,
+      });
     } catch (error, stack) {
+      AndroidFetchDiagnostics.current?.event(
+          'background_effect_error',
+          {
+            'effect': operation,
+            'durationMs': elapsed.elapsedMilliseconds,
+            ...AndroidFetchDiagnostics.errorFields(error),
+          },
+          level: AppLogLevel.error);
       failure ??= (error, stack);
       AppLogger.e('Background $operation failed',
           tag: 'Background', error: error, stackTrace: stack);
@@ -121,6 +171,7 @@ class BackgroundManager {
         ),
         existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
         initialDelay: const Duration(seconds: 10),
+        inputData: {'diagnostic_source': 'periodic_poll'},
       );
       AppLogger.i("Періодичну задачу зареєстровано", tag: 'BackgroundManager');
     } catch (e) {

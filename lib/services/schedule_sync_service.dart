@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
+import 'android_fetch_diagnostics.dart';
 import 'history_service.dart';
 import 'parser_service.dart';
 import 'schedule_calculation_service.dart';
@@ -93,8 +94,13 @@ class ScheduleSyncService {
   Future<Map<String, FullSchedule>> loadCachedData() async {
     try {
       final cached = await _historyService.getLastKnownSchedules();
+      AndroidFetchDiagnostics.current
+          ?.event('cache_loaded', {'groups': cached.length});
       return cached;
     } catch (e) {
+      AndroidFetchDiagnostics.current?.event(
+          'cache_load_error', AndroidFetchDiagnostics.errorFields(e),
+          level: AppLogLevel.warning);
       AppLogger.e("Error loading cached data", tag: 'Main', error: e);
       return {};
     }
@@ -188,6 +194,8 @@ class ScheduleSyncService {
     required void Function(Object error) onFetchError,
   }) async {
     if (_isFetching) {
+      AndroidFetchDiagnostics.current
+          ?.event('sync_skipped', {'reason': 'already_fetching'});
       AppLogger.d("⏳ Fetch already in progress, skipping duplicate request",
           tag: 'Main');
       return;
@@ -199,6 +207,10 @@ class ScheduleSyncService {
         DateTime.now().difference(lastFetchTime!) < cooldown) {
       AppLogger.d("⏳ Data is fresh (cooldown active), skipping fetch",
           tag: 'Main');
+      AndroidFetchDiagnostics.current?.event('sync_skipped', {
+        'reason': 'cooldown',
+        'lastFetchAt': lastFetchTime?.toUtc().toIso8601String(),
+      });
       if (!silent && !isHistoryMode) {
         await onCooldownSkipped();
       }
@@ -221,6 +233,8 @@ class ScheduleSyncService {
 
       final allData = await _parser.fetchAllSchedules();
       if (allData.isEmpty) {
+        AndroidFetchDiagnostics.current
+            ?.event('sync_empty_schedule', {}, level: AppLogLevel.warning);
         await _historyService.logAction(
             "Парсер: Помилка — список графіків порожній (не вдалося завантажити)",
             level: "ERROR");
@@ -231,9 +245,18 @@ class ScheduleSyncService {
       _publish(allData);
 
       await onFetchSuccess(allData);
+      AndroidFetchDiagnostics.current
+          ?.event('sync_applied', {'groups': allData.length});
       await _historyService.logAction(
           "Парсер: Синхронізація успішна — застосовано графіки для ${allData.length} груп");
     } catch (e) {
+      AndroidFetchDiagnostics.current?.event(
+          'sync_error',
+          {
+            'isHistoryMode': isHistoryMode,
+            ...AndroidFetchDiagnostics.errorFields(e),
+          },
+          level: AppLogLevel.error);
       if (!isHistoryMode) {
         onFetchError(e);
       }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'services/app_info_service.dart';
 import 'services/app_logger.dart';
+import 'services/android_fetch_diagnostics.dart';
 import 'services/platform_init_service.dart';
 import 'app.dart';
 
@@ -10,6 +11,7 @@ export 'services/widget_background_callback.dart' show backgroundCallback;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AndroidFetchDiagnostics.instance.startLifecycleLogging();
 
   // Логування версії додатку у фоні (не блокуємо показ вікна та рендеринг UI)
   unawaited(AppInfoService.getAppVersion().then((version) {

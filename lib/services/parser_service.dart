@@ -13,6 +13,9 @@ import 'dtek_snapshot.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'history_service.dart';
+import 'android_fetch_diagnostics.dart';
+import 'android_fetch_coordinator.dart';
+import 'package:lumen_android_diagnostics/lumen_android_diagnostics.dart';
 
 part 'parser_transport.dart';
 
@@ -62,7 +65,12 @@ class ParserService {
         _target = Uri.parse(_url),
         _windows = Platform.isWindows,
         _httpClientFactory = HttpClient.new,
-        _environmentFactory = null;
+        _environmentFactory = null,
+        _coordinator = Platform.isAndroid
+            ? AndroidFetchCoordinator(() => HistoryService().database)
+            : null,
+        _networkAvailable =
+            Platform.isAndroid ? _androidNetworkAvailable : null;
 
   @visibleForTesting
   ParserService.forTesting({
@@ -71,12 +79,18 @@ class ParserService {
     bool windows = false,
     HttpClient Function()? httpClientFactory,
     Future<WebViewEnvironment?> Function()? environmentFactory,
+    AndroidFetchCoordinator? coordinator,
+    Future<bool?> Function()? networkAvailable,
   })  : _policy = policy,
         _target = target ?? Uri.parse(_url),
         _windows = windows,
         _httpClientFactory = httpClientFactory ?? HttpClient.new,
-        _environmentFactory = environmentFactory;
+        _environmentFactory = environmentFactory,
+        _coordinator = coordinator,
+        _networkAvailable = networkAvailable;
 
+  final AndroidFetchCoordinator? _coordinator;
+  final Future<bool?> Function()? _networkAvailable;
   final ParserFetchPolicy _policy;
   final Uri _target;
   final bool _windows;
@@ -121,6 +135,7 @@ class ParserService {
   }
 
   Future<ParserFetchResult>? _ongoingFetch;
+  String? _ongoingDiagnosticId;
 
   Future<void> init() async {}
 
@@ -129,18 +144,110 @@ class ParserService {
   }
 
   /// HTML and schedules belong to the same completed fetch, including coalesced callers.
-  Future<ParserFetchResult> fetchSnapshot() async {
+  Future<ParserFetchResult> fetchSnapshot() =>
+      AndroidFetchDiagnostics.instance.run(
+        source: 'parser_direct',
+        execution: identical(_policy, ParserFetchPolicy.background)
+            ? 'background_parser'
+            : 'main_parser',
+        action: _fetchSnapshot,
+      );
+
+  Future<ParserFetchResult> _fetchSnapshot() async {
     if (_ongoingFetch != null) {
+      AndroidFetchDiagnostics.current?.event('fetch_join', {
+        'sharedOperationId': _ongoingDiagnosticId,
+      });
       AppLogger.d("⏳ Парсинг вже виконується, очікуємо спільний результат...",
           tag: 'Parser');
       return _ongoingFetch!;
     }
 
-    _ongoingFetch = _executeFetchAllSchedules();
+    _ongoingDiagnosticId = AndroidFetchDiagnostics.current?.id;
+    final coordinator = _coordinator;
+    _ongoingFetch = coordinator == null
+        ? _executeFetchAllSchedules()
+        : coordinator.run<ParserFetchResult>(
+            target: _target.toString(),
+            waitTimeout: _policy.totalTimeout,
+            leaseDuration: _policy.totalTimeout +
+                _policy.controllerTimeout +
+                const Duration(seconds: 10),
+            fetch: _executeFetchAllSchedules,
+            encode: (result) => jsonEncode({
+              'html': result.html,
+              'emergency': result.emergency?.toTransport()
+            }),
+            decode: decodeSharedSnapshot,
+            observe: (stage, fields) =>
+                AndroidFetchDiagnostics.current?.event(stage, fields),
+          );
     try {
       return await _ongoingFetch!;
     } finally {
       _ongoingFetch = null;
+      _ongoingDiagnosticId = null;
+    }
+  }
+
+  Future<({ParserFetchResult value, int completedAt})?>
+      recentAndroidSnapshot() async => _coordinator?.recent<ParserFetchResult>(
+          target: _target.toString(),
+          maxAge: const Duration(seconds: 30),
+          decode: decodeSharedSnapshot);
+
+  static Future<bool?> _androidNetworkAvailable() async {
+    try {
+      final state = await AndroidSystemDiagnostics.networkState()
+          .timeout(const Duration(milliseconds: 300));
+      AndroidFetchDiagnostics.current?.event('network_state', state);
+      if (state['networkBlocked'] == true || state['networkPresent'] == false) {
+        return false;
+      }
+      return state['networkPresent'] == true ? true : null;
+    } catch (error) {
+      AndroidFetchDiagnostics.current?.event('network_state_unavailable',
+          AndroidFetchDiagnostics.errorFields(error),
+          level: AppLogLevel.warning);
+      return null; // Unavailable diagnostics must never block a real request.
+    }
+  }
+
+  @visibleForTesting
+  static ParserFetchResult? decodeSharedSnapshot(String payload) {
+    try {
+      final data = jsonDecode(payload) as Map;
+      final html = data['html'] as String?;
+      if (html == null) return const ParserFetchResult({}, null);
+      final json = DtekSnapshot.extractJson(html);
+      final schedules = json.isEmpty
+          ? <String, FullSchedule>{}
+          : DtekSnapshot.parse(json, allGroups).schedules;
+      final transported = data['emergency'];
+      EmergencyObservation? emergency;
+      if (transported is Map &&
+          transported['schemaVersion'] == 1 &&
+          transported['active'] is bool &&
+          transported['observedAt'] is int &&
+          transported['confirmed'] is bool &&
+          transported['isPossible'] is bool &&
+          transported['noticeText'] is String) {
+        emergency = EmergencyObservation(
+            transported['active'], transported['observedAt'],
+            confirmed: transported['confirmed'],
+            isPossible: transported['isPossible'],
+            noticeText: transported['noticeText']);
+      }
+      return ParserFetchResult(schedules, html,
+          emergency:
+              emergency?.isValidAt(DateTime.now().millisecondsSinceEpoch) ==
+                      true
+                  ? emergency
+                  : null);
+    } catch (error) {
+      AppLogger.w('Cannot reuse overlapping snapshot (${error.runtimeType})',
+          tag: 'Parser', persistToHistory: false);
+      return null;
     }
   }
 
@@ -159,8 +266,13 @@ class ParserService {
   String extractJsonFromHtml(String html) => DtekSnapshot.extractJson(html);
 
   @visibleForTesting
-  static ({String json, String? html, String? url, bool fromCache})
-      decodeRuntimeCapture(dynamic value) {
+  static ({
+    String json,
+    String? html,
+    String? url,
+    bool fromCache,
+    bool htmlUnchanged
+  }) decodeRuntimeCapture(dynamic value) {
     dynamic decoded = value;
     for (var i = 0; i < 2 && decoded is String; i++) {
       decoded = jsonDecode(decoded);
@@ -168,13 +280,16 @@ class ParserService {
     if (decoded is! Map ||
         (decoded['html'] != null && decoded['html'] is! String) ||
         (decoded['url'] != null && decoded['url'] is! String) ||
-        (decoded['fromCache'] != null && decoded['fromCache'] is! bool)) {
+        (decoded['fromCache'] != null && decoded['fromCache'] is! bool) ||
+        (decoded['htmlUnchanged'] != null &&
+            decoded['htmlUnchanged'] is! bool)) {
       throw const FormatException('Invalid runtime page capture');
     }
     return (
       json: jsonEncode(decoded['fact']),
       html: decoded['html'] as String?,
       url: decoded['url'] as String?,
+      htmlUnchanged: decoded['htmlUnchanged'] == true,
       fromCache: decoded['fromCache'] == true
     );
   }
@@ -227,10 +342,20 @@ class ParserService {
     try {
       snapshot = DtekSnapshot.parse(rawJson, allGroups);
     } catch (error) {
+      AndroidFetchDiagnostics.current?.event(
+          'snapshot_invalid', AndroidFetchDiagnostics.errorFields(error),
+          level: AppLogLevel.warning);
       AppLogger.w('No valid schedule in fetched page',
           tag: 'Parser', error: error);
     }
     if (snapshot != null) {
+      AndroidFetchDiagnostics.current?.event('snapshot_valid', {
+        'groups': snapshot.schedules.length,
+        'sourceVersion': snapshot.update,
+        'todayDate': snapshot.todayDate,
+        'tomorrowDate': snapshot.tomorrowDate,
+        'emergencyObserved': emergency != null,
+      });
       try {
         if (persistSchedules != null) {
           await persistSchedules(snapshot);
@@ -241,7 +366,11 @@ class ParserService {
               tomorrowDate: snapshot.tomorrowDate,
               dtekUpdatedAt: snapshot.update);
         }
+        AndroidFetchDiagnostics.current?.event('snapshot_persisted', {});
       } on FormatException catch (error) {
+        AndroidFetchDiagnostics.current?.event(
+            'snapshot_rejected', AndroidFetchDiagnostics.errorFields(error),
+            level: AppLogLevel.warning);
         // A source watermark rejection is a data-integrity decision, not a
         // storage outage. Do not publish an older/conflicting graph to the UI.
         snapshot = null;
@@ -250,6 +379,9 @@ class ParserService {
             tag: 'Parser',
             error: error);
       } catch (error) {
+        AndroidFetchDiagnostics.current?.event('snapshot_storage_error',
+            AndroidFetchDiagnostics.errorFields(error),
+            level: AppLogLevel.error);
         AppLogger.w('Cannot persist schedule history',
             tag: 'Parser', error: error);
       }

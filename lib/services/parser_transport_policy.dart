@@ -34,9 +34,10 @@ class ParserFetchPolicy {
     this.maxReloads = 2,
   });
 
-  // FCM background handlers may be stopped by the OS after about 30 seconds.
+  // FCM only enqueues this work. Allow a bounded WorkManager/widget browser
+  // fetch to finish a slow page, without keeping a permanent service alive.
   static const background = ParserFetchPolicy(
-      totalTimeout: Duration(seconds: 25), httpTimeout: Duration(seconds: 8));
+      totalTimeout: Duration(seconds: 45), httpTimeout: Duration(seconds: 8));
 
   // Preserve the previous connection limit while bounding the whole response.
   Duration get connectionTimeout => httpTimeout < const Duration(seconds: 12)

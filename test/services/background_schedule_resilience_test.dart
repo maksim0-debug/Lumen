@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lumen/services/android_fetch_diagnostics.dart';
 import 'package:lumen/models/schedule_status.dart';
 import 'package:lumen/services/background_service.dart';
 import 'package:lumen/services/notification_service.dart';
@@ -88,6 +90,41 @@ void main() {
     expect(notifications.cancellations, [true, false]);
     expect(notifications.permissionRequest, false);
     expect(widgets.received, same(schedules));
+  });
+
+  test('Diagnostics retain the failed effect and original retry exception',
+      () async {
+    final records = <Map<String, dynamic>>[];
+    final diagnostics = AndroidFetchDiagnostics(
+        enabled: true,
+        modeLoader: () async => AndroidDiagnosticMode.verbose,
+        snapshot: (_) async => {},
+        sink: (message, _) async => records.add(jsonDecode(message)));
+    final failure = StateError('private display failure');
+    final notifications = _Notifications();
+    final widgets = _Widgets();
+    await expectLater(
+        diagnostics.run(
+            source: 'periodic_poll',
+            execution: 'workmanager',
+            action: () => applyBackgroundSchedules(schedules,
+                changes: _Changes(failure),
+                notifications: notifications,
+                widgets: widgets)),
+        throwsA(same(failure)));
+    expect(
+        records.singleWhere(
+            (r) => r['stage'] == 'background_effect_error')['effect'],
+        'change notifications');
+    expect(
+        records
+            .where((r) => r['stage'] == 'background_effect_returned')
+            .map((r) => r['effect']),
+        containsAll(['widget refresh', 'reminder initialization']));
+    expect(records.map((r) => r['operationId']).toSet(), hasLength(1));
+    expect(jsonEncode(records), isNot(contains('private display failure')));
+    expect(widgets.received, same(schedules));
+    expect(notifications.attempts, ['GPV2.1', 'GPV1.1']);
   });
 
   test('reminder initialization failure cannot block widget refresh', () async {

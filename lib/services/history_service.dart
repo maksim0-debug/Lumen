@@ -10,6 +10,7 @@ import 'app_logger.dart';
 import 'preferences_helper.dart';
 import 'schedule_clock.dart';
 import 'schedule_change_notification_store.dart';
+import 'android_fetch_coordinator.dart';
 
 class HistoryService {
   static final HistoryService _instance = HistoryService._internal();
@@ -132,6 +133,7 @@ class HistoryService {
       },
       onOpen: (db) async {
         await ScheduleChangeNotificationStore.createSchema(db);
+        await AndroidFetchCoordinator.createSchema(db);
         // Ensure all required tables exist even if imported from legacy/partial backups
         await db.execute('''
           CREATE TABLE IF NOT EXISTS schedule_history (
@@ -190,19 +192,32 @@ class HistoryService {
 
   /// Direct, low-overhead database insertion for raw logs with automatic retention.
   Future<void> insertRawLog(String message, {String level = 'INFO'}) async {
+    await insertRawLogs([(message: message, level: level)]);
+  }
+
+  /// One transaction per bounded diagnostic operation, rather than per stage.
+  Future<void> insertRawLogs(
+      Iterable<({String message, String level})> entries) async {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       final enabled = prefs.getBool('enable_logging') ?? true;
-      if (!enabled && level != 'ERROR') return; // Always log errors
+      final retained =
+          entries.where((entry) => enabled || entry.level == 'ERROR').toList();
+      if (retained.isEmpty) return;
 
       final db = await database;
-      await db.insert('app_logs', {
-        'timestamp': DateTime.now().toIso8601String(),
-        'level': level,
-        'message': message,
-      });
+      final timestamp = DateTime.now().toIso8601String();
+      final batch = db.batch();
+      for (final entry in retained) {
+        batch.insert('app_logs', {
+          'timestamp': timestamp,
+          'level': entry.level,
+          'message': entry.message,
+        });
+      }
+      await batch.commit(noResult: true);
 
-      _logInsertCount++;
+      _logInsertCount += retained.length;
       if (_logInsertCount >= _logPruneInterval) {
         _logInsertCount = 0;
         if (!_isPruning) {

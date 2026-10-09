@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import '../services/history_service.dart';
 import 'dialogs/shortcut_help_dialog.dart';
 import 'shortcuts/app_intents.dart';
@@ -120,7 +121,10 @@ class _LogsPageState extends State<LogsPage> {
 
   Future<void> _loadLogs() async {
     setState(() => _isLoading = true);
-    final logs = await HistoryService().getLogs(limit: 300);
+    final logs = await HistoryService().getLogs(
+        limit: defaultTargetPlatform == TargetPlatform.android
+            ? HistoryService.maxLogEntries
+            : 300);
     if (!mounted) return;
     setState(() {
       _rawLogs = logs;

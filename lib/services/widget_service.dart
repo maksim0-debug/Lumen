@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:home_widget/home_widget.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
+import 'android_fetch_diagnostics.dart';
 
 class WidgetService {
   static final WidgetService _instance = WidgetService._internal();
@@ -58,13 +59,20 @@ class WidgetService {
 
       for (var provider in providers) {
         await HomeWidget.updateWidget(
-          androidName: provider,
+          qualifiedAndroidName: 'ua.maksim0.lumen.$provider',
         );
       }
 
       AppLogger.i("✅ Дані всіх груп збережено для віджетів",
           tag: 'WidgetService');
+      AndroidFetchDiagnostics.current?.event('widgets_updated', {
+        'groups': allSchedules.length,
+        'providers': providers.length,
+      });
     } catch (e) {
+      AndroidFetchDiagnostics.current?.event(
+          'widgets_update_error', AndroidFetchDiagnostics.errorFields(e),
+          level: AppLogLevel.error);
       AppLogger.e("Помилка оновлення віджетів", tag: 'WidgetService', error: e);
     }
   }
@@ -93,7 +101,7 @@ class WidgetService {
 
       for (var provider in providers) {
         await HomeWidget.updateWidget(
-          androidName: provider,
+          qualifiedAndroidName: 'ua.maksim0.lumen.$provider',
         );
       }
       AppLogger.d("🔄 Стан завантаження скинуто", tag: 'WidgetService');

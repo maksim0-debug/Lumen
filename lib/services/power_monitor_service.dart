@@ -6,6 +6,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/power_event.dart';
 import '../models/power_monitor_status.dart';
 import 'app_logger.dart';
+import 'android_fetch_diagnostics.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
 
@@ -489,6 +490,7 @@ class PowerMonitorService {
 
       // Успішне відновлення зв'язку
       if (_hadPreviousError) {
+        _diagnoseConnection('power_monitor_recovered', {});
         AppLogger.i("PowerMonitor: З'єднання з Firebase успішно відновлено.",
             tag: 'PowerMonitor', persistToHistory: true);
       }
@@ -509,6 +511,14 @@ class PowerMonitorService {
 
       // Записуємо в історію БД лише першу помилку або зміну типу помилки, щоб не засмічувати логи кожні 30 секунд
       final shouldPersist = !_hadPreviousError || (isAuth && !_wasAuthError);
+      if (shouldPersist) {
+        _diagnoseConnection('power_monitor_error', {
+          'authorizationError': isAuth,
+          'consecutiveErrors': _consecutiveErrors,
+          'nextPollMs': _currentPollDelay.inMilliseconds,
+          ...AndroidFetchDiagnostics.errorFields(e),
+        });
+      }
       _hadPreviousError = true;
       _wasAuthError = isAuth;
 
@@ -554,6 +564,26 @@ class PowerMonitorService {
     } finally {
       _isSyncing = false;
     }
+  }
+
+  void _diagnoseConnection(String stage, Map<String, Object?> fields) {
+    unawaited(AndroidFetchDiagnostics.instance.run(
+      source: stage,
+      execution: 'main_engine',
+      includeHistory: false,
+      action: () async {
+        AndroidFetchDiagnostics.current?.event(
+            stage,
+            {
+              'lastSuccessfulSyncAt':
+                  _lastSuccessfulSync?.toUtc().toIso8601String(),
+              ...fields,
+            },
+            level: stage == 'power_monitor_error'
+                ? AppLogLevel.warning
+                : AppLogLevel.info);
+      },
+    ));
   }
 
   /// Повна синхронізація: видалити всі НЕ РУЧНІ локальні події і записати нові з Firebase.

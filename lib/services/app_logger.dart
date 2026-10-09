@@ -215,6 +215,22 @@ class AppLogger {
     }
   }
 
+  /// Awaitable persistence for bounded headless diagnostic flushes.
+  static Future<void> diagnostic(String message,
+      {AppLogLevel level = AppLogLevel.info, String tag = 'AndroidParser'}) {
+    return diagnosticBatch([(message: message, level: level)], tag: tag);
+  }
+
+  static Future<void> diagnosticBatch(
+      List<({String message, AppLogLevel level})> entries,
+      {String tag = 'AndroidParser'}) {
+    for (final entry in entries) {
+      _log(entry.level, entry.message, tag: tag, persistToHistory: false);
+    }
+    return HistoryService().insertRawLogs(entries.map((entry) =>
+        (message: '[$tag] ${entry.message}', level: entry.level.label)));
+  }
+
   static void _persistLogAsync(
     String tag,
     AppLogLevel level,

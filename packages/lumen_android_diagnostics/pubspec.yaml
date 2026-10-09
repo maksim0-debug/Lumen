@@ -1,0 +1,15 @@
+name: lumen_android_diagnostics
+description: Read-only Android diagnostics for Lumen foreground and headless engines.
+version: 0.0.1
+publish_to: none
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: ua.maksim0.lumen.diagnostics
+        pluginClass: AndroidDiagnosticsPlugin

@@ -1,0 +1,19 @@
+group 'ua.maksim0.lumen.diagnostics'
+version '1.0'
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'ua.maksim0.lumen.diagnostics'
+    compileSdk 36
+    defaultConfig { minSdk 24 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    // Match the runtime already used by workmanager_android 0.9.0+2.
+    implementation 'androidx.work:work-runtime:2.10.2'
+}

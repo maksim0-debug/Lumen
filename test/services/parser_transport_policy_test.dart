@@ -73,13 +73,16 @@ void main() {
       expect(huge, greaterThan(const Duration(days: 365)));
       expect(() => now.add(huge), returnsNormally);
     });
-    test('Background parsing leaves room inside the FCM time limit', () {
+    test('WorkManager browser fetch has a bounded budget independent of FCM',
+        () {
       expect(const ParserFetchPolicy().connectionTimeout,
           const Duration(seconds: 12));
       expect(ParserFetchPolicy.background.connectionTimeout,
           const Duration(seconds: 8));
       expect(ParserFetchPolicy.background.totalTimeout,
-          lessThan(const Duration(seconds: 30)));
+          const Duration(seconds: 45));
+      expect(ParserFetchPolicy.background.webViewTimeout,
+          lessThanOrEqualTo(ParserFetchPolicy.background.totalTimeout));
       expect(ParserFetchPolicy.background.httpTimeout,
           lessThan(ParserFetchPolicy.background.totalTimeout));
     });

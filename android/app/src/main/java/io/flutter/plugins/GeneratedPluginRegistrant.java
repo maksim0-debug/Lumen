@@ -51,6 +51,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin home_widget, es.antonborri.home_widget.HomeWidgetPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new ua.maksim0.lumen.diagnostics.AndroidDiagnosticsPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin lumen_android_diagnostics, ua.maksim0.lumen.diagnostics.AndroidDiagnosticsPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin package_info_plus, dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin", e);

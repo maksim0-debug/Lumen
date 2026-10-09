@@ -7,10 +7,12 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lumen/models/schedule_status.dart';
 import 'package:lumen/services/app_logger.dart';
+import 'package:lumen/services/android_fetch_diagnostics.dart';
 import 'package:lumen/services/dtek_snapshot.dart';
 import 'package:lumen/services/emergency_status_service.dart';
 import 'package:lumen/services/history_service.dart';
 import 'package:lumen/services/parser_service.dart';
+import 'package:lumen/services/android_fetch_coordinator.dart';
 import 'package:lumen/services/parser_transport_policy.dart';
 import 'package:lumen/services/schedule_clock.dart';
 import 'package:lumen/ui/logs_page.dart';
@@ -55,6 +57,8 @@ class _Browser extends InAppWebViewPlatform {
   int disposals = 0;
   int cookieReads = 0;
   bool cached = false;
+  bool reuseHtml = false;
+  String? previousHtml;
   bool failStartup = false;
   String startupFailureMessage = 'startup failed';
   bool failController = false;
@@ -73,12 +77,17 @@ class _Browser extends InAppWebViewPlatform {
   final devToolsCalls = <String>[];
   Future<void> Function(int)? navigate;
 
-  dynamic capture() => jsonEncode({
-        'fact': fact,
-        'html': html,
-        'url': captureUrl ?? target.toString(),
-        'fromCache': cached,
-      });
+  dynamic capture() {
+    final unchanged = reuseHtml && previousHtml == html;
+    previousHtml = html;
+    return jsonEncode({
+      'fact': fact,
+      'html': unchanged ? null : html,
+      'htmlUnchanged': unchanged,
+      'url': captureUrl ?? target.toString(),
+      'fromCache': cached,
+    });
+  }
 
   @override
   PlatformHeadlessInAppWebView createPlatformHeadlessInAppWebView(
@@ -341,6 +350,123 @@ void main() {
     await scratch.delete(recursive: true);
   });
 
+  group('Android diagnostic transport boundaries', () {
+    late List<Map<String, dynamic>> records;
+    late AndroidFetchDiagnostics diagnostics;
+    setUp(() {
+      records = [];
+      diagnostics = AndroidFetchDiagnostics(
+          enabled: true,
+          modeLoader: () async => AndroidDiagnosticMode.verbose,
+          snapshot: (_) async => {'deviceIdle': true, 'networkValidated': true},
+          sink: (message, _) async => records.add(jsonDecode(message)));
+    });
+
+    test('HTTP success records validation and persistence without browser work',
+        () async {
+      respond = (request, _) async {
+        request.response.write(_page(_fact()));
+        await request.response.close();
+      };
+      final result = await diagnostics.run(
+          source: 'periodic_poll',
+          execution: 'workmanager',
+          action: parser.fetchSnapshot);
+      expect(result.schedules, hasLength(12));
+      // This fixture publishes today's 12 groups and an empty tomorrow.
+      expect(await storedSchedules(), 12);
+      expect(browser.views, 0);
+      final summary = records.singleWhere((r) => r['stage'] == 'fetch_end');
+      expect(summary['reason'], 'http_success');
+      expect(summary['httpAttempts'], 1);
+      expect(summary['webViewStarted'], false);
+      expect(
+          records.map((r) => r['stage']),
+          containsAllInOrder([
+            'http_start',
+            'http_connected',
+            'http_response',
+            'http_body',
+            'snapshot_valid',
+            'snapshot_persisted',
+            'fetch_end',
+          ]));
+      expect(records.map((r) => r['operationId']).toSet(), hasLength(1));
+      expect(jsonEncode(records), isNot(contains('browser-session')));
+      expect(jsonEncode(records), isNot(contains('<html')));
+    });
+
+    test('WAF fallback success distinguishes HTTP from runtime browser data',
+        () async {
+      respond = (request, _) async {
+        request.response
+            .write('<script src="/_Incapsula_Resource?id=secret"></script>');
+        await request.response.close();
+      };
+      expect(
+          (await diagnostics.run(
+                  source: 'manual_refresh',
+                  execution: 'main_engine',
+                  action: parser.fetchSnapshot))
+              .schedules,
+          hasLength(12));
+      final summary = records.singleWhere((r) => r['stage'] == 'fetch_end');
+      expect(summary['reason'], 'webview_success');
+      expect(summary['webViewStarted'], true);
+      expect(
+          records.singleWhere(
+              (r) => r['stage'] == 'webview_schedule_received')['dataSource'],
+          'runtime_js');
+      expect(
+          records.singleWhere((r) => r['stage'] == 'http_body')['protection'],
+          isNot('none'));
+      expect(jsonEncode(records), isNot(contains('secret')));
+      expect(browser.disposals, 1);
+    });
+
+    test('Main-frame DNS failure records the browser error and empty result',
+        () async {
+      browser.navigate = (_) async =>
+          browser.view.navigationError(WebResourceErrorType.HOST_LOOKUP);
+      final result = await diagnostics.run(
+          source: 'periodic_poll',
+          execution: 'workmanager',
+          action: parser.fetchSnapshot);
+      expect(result.schedules, isEmpty);
+      expect(
+          records.singleWhere(
+              (r) => r['stage'] == 'webview_network_error')['webResourceError'],
+          contains('HOST_LOOKUP'));
+      expect(records.singleWhere((r) => r['stage'] == 'fetch_end')['outcome'],
+          'no_schedule');
+      expect(records.singleWhere((r) => r['stage'] == 'fetch_end')['reason'],
+          contains('HOST_LOOKUP'));
+    });
+
+    test('Total deadline records the interrupted stage and keeps its outcome',
+        () async {
+      browser.startupGate = Completer<void>();
+      final bounded = service(
+          policy: const ParserFetchPolicy(
+        totalTimeout: Duration(milliseconds: 170),
+        httpTimeout: Duration(milliseconds: 70),
+        webViewTimeout: Duration(seconds: 2),
+      ));
+      final result = await diagnostics.run(
+          source: 'periodic_poll',
+          execution: 'workmanager',
+          action: bounded.fetchSnapshot);
+      expect(result.schedules, isEmpty);
+      final timeout = records.singleWhere((r) => r['stage'] == 'fetch_timeout');
+      expect(timeout['interruptedStage'], 'webview_platform_run');
+      expect(records.singleWhere((r) => r['stage'] == 'fetch_end')['reason'],
+          'total_budget_exhausted');
+      browser.startupGate!.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(browser.disposals, 1);
+    });
+  });
+
   group('Real HTTP boundary', () {
     test('A cold parser sends the compatibility UA and navigation headers',
         () async {
@@ -555,6 +681,96 @@ void main() {
     });
   });
 
+  group('Android coordination and network availability', () {
+    test('Known offline state performs neither HTTP nor WebView work',
+        () async {
+      final offline = ParserService.forTesting(
+          target: target,
+          policy: _policy,
+          networkAvailable: () async => false,
+          httpClientFactory: () => HttpOverrides.runWithHttpOverrides(
+              HttpClient.new, _SocketOverrides()));
+      expect((await offline.fetchSnapshot()).schedules, isEmpty);
+      expect(httpRequests, isEmpty);
+      expect(browser.views, 0);
+    });
+
+    test(
+        'Unknown/unavailable native network state still tries the real connection',
+        () async {
+      respond = (request, _) async {
+        request.response.write(_page(_fact()));
+        await request.response.close();
+      };
+      for (final probe in <Future<bool?> Function()>[
+        () async => null,
+        () async => throw StateError('native unavailable')
+      ]) {
+        final online = ParserService.forTesting(
+            target: target,
+            policy: _policy,
+            networkAvailable: probe,
+            httpClientFactory: () => HttpOverrides.runWithHttpOverrides(
+                HttpClient.new, _SocketOverrides()));
+        expect((await online.fetchSnapshot()).schedules, hasLength(12));
+      }
+      expect(httpRequests, hasLength(2));
+      expect(browser.views, 0);
+    });
+
+    test('Lost network after WAF response suppresses futile browser fallback',
+        () async {
+      var checks = 0;
+      final disconnected = ParserService.forTesting(
+          target: target,
+          policy: _policy,
+          networkAvailable: () async => ++checks == 1,
+          httpClientFactory: () => HttpOverrides.runWithHttpOverrides(
+              HttpClient.new, _SocketOverrides()));
+      expect((await disconnected.fetchSnapshot()).schedules, isEmpty);
+      expect(httpRequests, hasLength(1));
+      expect(browser.views, 0);
+    });
+
+    test('Two separate parsers share one real HTTP response and all 12 groups',
+        () async {
+      final started = Completer<void>();
+      final release = Completer<void>();
+      respond = (request, _) async {
+        started.complete();
+        await release.future;
+        request.response.write(_page(_fact(),
+            extra:
+                '<div id="modal-attention">Введені екстрені відключення.</div>'));
+        await request.response.close();
+      };
+      final db = await HistoryService().database;
+      ParserService coordinated() => ParserService.forTesting(
+          target: target,
+          policy: _policy,
+          coordinator: AndroidFetchCoordinator(() async => db,
+              pollInterval: const Duration(milliseconds: 5)),
+          httpClientFactory: () => HttpOverrides.runWithHttpOverrides(
+              HttpClient.new, _SocketOverrides()));
+      final owner = coordinated().fetchSnapshot();
+      await started.future;
+      final other = coordinated();
+      final waiter = other.fetchSnapshot();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      release.complete();
+      final results = await Future.wait([owner, waiter]);
+      expect(httpRequests, hasLength(1));
+      expect(results.map((r) => r.schedules.length), [12, 12]);
+      expect(results.map((r) => r.isEmergency), [true, true]);
+      expect(results.last.emergency!.observedAt,
+          results.first.emergency!.observedAt);
+      final recent = await other.recentAndroidSnapshot();
+      expect(recent!.value.schedules, hasLength(12));
+      expect(recent.value.isEmergency, true);
+      expect(await storedSchedules(), 12);
+    });
+  });
+
   group('Browser lifecycle and recovery', () {
     test('Runtime data appearing after page load is still captured', () async {
       browser.fact = null;
@@ -570,6 +786,41 @@ void main() {
       expect(browser.loads, 1);
       expect(await storedSchedules(), 12);
     });
+
+    test(
+        'Unchanged HTML is reused while late runtime data still updates the graph',
+        () async {
+      browser.reuseHtml = true;
+      browser.fact = null;
+      browser.html =
+          '<div id="modal-attention">Введені екстрені відключення.</div>';
+      final fetched = parser.fetchSnapshot();
+      await browser.loaded.future;
+      await Future<void>.delayed(const Duration(milliseconds: 35));
+      browser.fact = _fact();
+      final result = await fetched;
+      expect(browser.captures, greaterThan(1));
+      expect(result.schedules, hasLength(12));
+      expect(result.isEmergency, true);
+    });
+
+    test('Changed DOM replaces the reused emergency observation', () async {
+      browser.reuseHtml = true;
+      browser.fact = null;
+      browser.html =
+          '<div id="modal-attention">Введені екстрені відключення.</div>';
+      final fetched = parser.fetchSnapshot();
+      await browser.loaded.future;
+      await Future<void>.delayed(const Duration(milliseconds: 35));
+      browser.html = _page(_fact(),
+          extra:
+              '<div id="modal-attention">Екстрені відключення скасовано.</div>');
+      browser.fact = _fact();
+      final result = await fetched;
+      expect(result.schedules, hasLength(12));
+      expect(result.isEmergency, false);
+    });
+
     test('Inline HTML data is used when the runtime variable is absent',
         () async {
       browser.fact = null;
