@@ -28,6 +28,8 @@ import '../../services/schedule_notification_coordinator.dart';
 import '../../services/schedule_sync_service.dart';
 import '../../services/schedule_clock.dart';
 import '../../services/schedule_version_filter.dart';
+import '../../services/schedule_change_notification_service.dart';
+import '../../models/schedule_change_event.dart';
 import '../../utils/app_formatters.dart';
 import 'home_state.dart';
 import 'schedule_version_preferences.dart';
@@ -685,6 +687,37 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- LOAD DATA (SYNC) ---
+  static ScheduleChangeEvent? scheduleEventForDisplayedState(
+      HomeState displayed, DateTime viewedAt) {
+    if (displayed.isCachedData ||
+        displayed.isLoading ||
+        displayed.isHistoryMode ||
+        displayed.dataSourceMode != DataSourceMode.predicted) {
+      return null;
+    }
+    final value = displayed.allSchedules[displayed.currentGroup];
+    if (value == null) return null;
+    final dayType =
+        displayed.viewMode == ScheduleViewMode.tomorrow ? 'tomorrow' : 'today';
+    final actual = dayType == 'tomorrow' ? value.tomorrow : value.today;
+    if (actual.isEmpty ||
+        actual.scheduleHash != displayed.currentDisplaySchedule?.scheduleHash) {
+      return null;
+    }
+    try {
+      return ScheduleChangeEvent.fromSchedule(
+          displayed.currentGroup, value, dayType, viewedAt);
+    } on FormatException {
+      // Manual schedules have no verifiable DTEK publication to acknowledge.
+      return null;
+    }
+  }
+
+  Future<void> acknowledgeDisplayedSchedule(ScheduleChangeEvent event) async {
+    if (!Platform.isAndroid) return;
+    await ScheduleChangeNotificationService().acknowledge(event);
+  }
+
   Future<void> _scheduleApplyTail = Future.value();
   Map<String, FullSchedule>? _lastApplied;
 

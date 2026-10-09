@@ -81,6 +81,11 @@ changes.txt
 release.jks
 
 # Cloudflare Worker & Secrets
+
+# Generated APKs, isolated device QA projects, and local test evidence
+/artifacts/notification-device-qa/
+/artifacts/notification-qa/
+/android/.kotlin/
 cloudflare-worker/node_modules/
 .wrangler/
 cloudflare-worker/.env

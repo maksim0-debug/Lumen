@@ -9,6 +9,7 @@ import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'preferences_helper.dart';
 import 'schedule_clock.dart';
+import 'schedule_change_notification_store.dart';
 
 class HistoryService {
   static final HistoryService _instance = HistoryService._internal();
@@ -17,6 +18,7 @@ class HistoryService {
   HistoryService.forTesting(Database database) : _database = database;
 
   Database? _database;
+  Future<Database>? _openingDatabase;
 
   /// Maximum number of log entries retained in SQLite database.
   static const int maxLogEntries = 1500;
@@ -26,8 +28,12 @@ class HistoryService {
 
   Future<Database> get database async {
     if (_database != null && _database!.isOpen) return _database!;
-    _database = await _initDatabase();
-    return _database!;
+    final opening = _openingDatabase ??= _initDatabase();
+    try {
+      return _database = await opening;
+    } finally {
+      if (identical(_openingDatabase, opening)) _openingDatabase = null;
+    }
   }
 
   Future<String> get dbPath async {
@@ -54,8 +60,9 @@ class HistoryService {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
+        await ScheduleChangeNotificationStore.createSchema(db);
         await db.execute('''
           CREATE TABLE IF NOT EXISTS schedule_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +93,9 @@ class HistoryService {
         ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 5) {
+          await ScheduleChangeNotificationStore.createSchema(db);
+        }
         if (oldVersion < 2) {
           await db.execute('''
           CREATE TABLE IF NOT EXISTS app_logs (
@@ -121,6 +131,7 @@ class HistoryService {
         }
       },
       onOpen: (db) async {
+        await ScheduleChangeNotificationStore.createSchema(db);
         // Ensure all required tables exist even if imported from legacy/partial backups
         await db.execute('''
           CREATE TABLE IF NOT EXISTS schedule_history (

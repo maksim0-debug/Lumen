@@ -8,7 +8,23 @@ Worker перевіряє графіки ДТЕК кожні п'ять хвил�
 
 Перше завантаження створює базовий стан без масових сповіщень. Перша наступна публікація на завтра надсилає сповіщення. Помилка FCM залишає повідомлення у сховищі; alarm повторює доставку з паузою від 30 секунд до 15 хвилин. Прострочені повідомлення видаляються, якщо їхня цільова дата більше не відповідає сьогодні/завтра. Коли новіша версія замінює недоставлену, повідомлення містить поточну загальну тривалість відключень замість потенційно хибної різниці.
 
-Це доставка з повторними спробами, а не гарантія exactly-once: якщо FCM прийняв повідомлення, але відповідь загубилась, можливий повтор. `eventId` дозволяє клієнту відсіяти foreground-дублі; Android `tag` замінює ту саму системну картку. TTL сповіщення — 15 хвилин. Прийняття FCM не гарантує показ на кожному телефоні.
+Delivery uses retries rather than an exactly-once transport guarantee. FCM acceptance does not prove device delivery. Schedule messages have a 15-minute TTL.
+
+### Schedule notification deduplication
+
+Schedule changes use two separate audiences during migration: legacy `group_gpv2_1` / `group_gpv2_1_tomorrow` topics retain notification payloads; updated Android clients subscribe to `group_gpv2_1_v2` / `group_gpv2_1_v2_tomorrow` and receive high-priority data-only messages. The client unsubscribes from legacy topics before subscribing to their replacements. A failed unsubscribe defers the matching new subscription. Deploy the Worker before distributing the updated client; the existing desktop `/check-html` contract is unchanged.
+
+The versioned envelope contains `schemaVersion=2`, `sourceVersion`, `group`, `dayType`, `targetDate`, `scheduleHash`, and the canonical `eventId=group:targetDate:sourceVersion:scheduleHash`. The version is the DTEK publication time, not a device download time. Full 24-slot hashes detect shifted hours even when outage duration is unchanged. Identical republications do not repeat an alert; a real A-to-B-to-A transition remains eligible.
+
+FCM, periodic polling and actual foreground viewing share a SQLite delivery state keyed by group and calendar date. Viewing the current graph acknowledges only that displayed group and date. Background cache refreshes do not acknowledge it. Polling delivers confirmed changes immediately, without waiting for FCM, even when a versioned subscription is configured. Later matching pushes are deduplicated against the same state. A transaction claims pending delivery, and successful display acknowledges it. Failures release the claim for retry. Stable Android notification tags and `onlyAlertOnce` replace retries while the card remains active. A process crash between platform display and SQLite acknowledgment is an unavoidable atomicity boundary; no database transaction can commit Android display and SQLite together.
+
+Each delivered real transition has its own Android notification card, including A-to-B-to-A changes. Retrying the same transition reuses its tag; it does not create another card. Downloading a schedule records an observation, while foreground acknowledgment occurs only after the current graph is displayed.
+
+Background notification failures do not block independent reminder groups or widget refresh. Operational failures are reported after those attempts, leaving pending notifications available for retry. A background FCM display/database failure still queues schedule recovery. Conflicting publication hashes at the same source time are rejected per group/date during polling; accepting download order as source order would permit stale-cache rollbacks. Identical settled observations do not rewrite SQLite state or acquire delivery claims; they retain a transactional state read to arbitrate concurrent sources.
+
+The Worker persists the successfully accepted audience in its outbox. Partial-delivery retries send only to the remaining audience. Emergency alerts and diagnostics retain their separate behavior; group diagnostics target either schedule topic generation together with the diagnostic capability topic.
+
+Run the Flutter regression suite from the repository root with `dart .agents/tools/test_runner.dart`. `tool/run_schedule_notification_device_qa.ps1 -DeviceId <adb-device-id>` builds and runs an isolated Android package using the production parser, delivery state, FCM handlers and notification plugin. Its FCM inputs are deterministic fixtures, not live Google transport; the runner checks actual Android notification cards without modifying the installed Lumen application's data.
 
 ## Налаштування та оновлення
 

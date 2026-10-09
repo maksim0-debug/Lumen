@@ -9,6 +9,7 @@ import '../services/preferences_helper.dart';
 import '../services/widget_service.dart';
 import '../utils/app_formatters.dart';
 import 'schedule_clock.dart';
+import 'schedule_change_notification_service.dart';
 
 class ScheduleNotificationCoordinator {
   final NotificationService _notifier;
@@ -46,6 +47,14 @@ class ScheduleNotificationCoordinator {
     required String currentGroup,
     Iterable<String>? notificationGroups,
   }) async {
+    if (Platform.isAndroid) {
+      await ScheduleChangeNotificationService()
+          .observeSchedules(allSchedules, deliver: false);
+      await updateNotificationsOnly(
+          allSchedules: allSchedules, currentGroup: currentGroup);
+      await _widgetService.updateWidget(allSchedules);
+      return;
+    }
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
       final notifyChange = prefs.getBool('notify_schedule_change') ?? true;

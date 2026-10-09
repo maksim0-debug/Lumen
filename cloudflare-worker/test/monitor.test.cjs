@@ -240,6 +240,21 @@ test('failed delivery is durable, retried after restart, never marked notified p
   assert.equal(s.record().groups['state_GPV1.1'].pending, undefined); assert.ok(s.record().groups['state_GPV1.1'].lastNotifiedAt);
   assert.equal(s.alarm(), undefined);
 });
+
+test('partial client migration delivery persists completed audience through restart', async () => {
+  const s = setup();
+  await s.send(fixture('06.10.2026 10:00'));
+  outcome = { success: false, retryable: true, error: 'client unavailable', deliveredModes: ['legacy'] };
+  await s.send(fixture('06.10.2026 11:00', 'no'));
+  const pending = s.record().groups['state_GPV2.1'].pending;
+  assert.deepEqual(pending.options.deliveredModes, ['legacy']);
+  now = pending.nextAttemptAt + 1;
+  outcome = { success: true, messageId: 'client acknowledged', deliveredModes: ['legacy', 'client'] };
+  const restarted = new ScheduleMonitor({ storage: s.storage }, s.env);
+  await restarted.alarm();
+  assert.equal(s.record().groups['state_GPV2.1'].pending, undefined);
+  assert.deepEqual(sent.at(-1).deliveredModes, ['legacy', 'client']);
+});
 test('missing credentials retain an outbox and report failure', async () => {
   const s = setup(); s.env.FIREBASE_SERVICE_ACCOUNT = ''; await s.send(fixture());
   assert.equal((await s.send(fixture('06.10.2026 11:00', 'no'))).status, 'delivery_pending'); assert.equal(sent.length, 0);

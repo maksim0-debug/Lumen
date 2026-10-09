@@ -288,6 +288,7 @@ export class ScheduleMonitor {
           scheduleHash: hash, outageMinutes,
           eventId: `${group}:${day.calendarDate}:${snapshot.updateAt}:${hash}`,
           targetDate: day.calendarDate,
+          sourceVersion: snapshot.updateAt,
         };
         next.pending = { options, calendarDate: day.calendarDate, attempts: 0, nextAttemptAt: Date.now() };
       }
@@ -343,6 +344,9 @@ export class ScheduleMonitor {
         if (message.nextAttemptAt > Date.now()) return;
         const outcome = account ? await sendFcmTopicNotification(account, message.options)
           : { success: false, error: 'FIREBASE_SERVICE_ACCOUNT is missing or invalid' };
+        if ('deliveredModes' in outcome && outcome.deliveredModes) {
+          message.options.deliveredModes = outcome.deliveredModes;
+        }
         if (outcome.success) {
           result.notificationsSent.push(`${message.options.group} -> ${message.options.topic} (${outcome.messageId})`);
           group.lastNotifiedAt = new Date().toISOString();

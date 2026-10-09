@@ -1,4 +1,3 @@
-import 'schedule_clock.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -7,16 +6,12 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app_logger.dart';
-import 'notification_service.dart';
-import 'parser_service.dart';
 import 'preferences_helper.dart';
-import 'widget_service.dart';
-import 'fcm_event_guard.dart';
 import 'fcm_test_notification_service.dart';
-import 'dtek_snapshot.dart';
+import 'schedule_change_notification_service.dart';
+import 'background_service.dart';
 import '../models/emergency_status.dart';
 import 'emergency_notification_service.dart';
-import '../utils/app_formatters.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) =>
@@ -25,6 +20,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) =>
 @visibleForTesting
 Future<void> handleFcmBackgroundMessage(RemoteMessage message,
     {FcmTestNotificationService? testNotifications,
+    ScheduleChangeNotificationService? scheduleChanges,
+    Future<void> Function()? refreshSchedules,
     Future<void> Function()? initializeFirebase}) async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
@@ -49,78 +46,21 @@ Future<void> handleFcmBackgroundMessage(RemoteMessage message,
       persistToHistory: true,
     );
 
-    final prefs = await PreferencesHelper.getSafeInstance();
-    final now = ScheduleClock.now();
-    final todayStr = AppFormatters.formatDateKey(now);
-    final nowMs = now.millisecondsSinceEpoch;
-
-    // Миттєво фіксуємо час сповіщення для цільової групи пушу,
-    // щоб Workmanager не згенерував дублюючий пуш під час фонового парсингу
-    final incomingGroup = message.data['group'] as String?;
-    final dayType = message.data['dayType'] as String? ?? 'today';
-    final targetDate = message.data['targetDate'] as String?;
-    final currentTarget = targetDate == null ||
-        targetDate.isEmpty ||
-        targetDate == DtekSnapshot.notificationDate(dayType, now: now);
-    if (currentTarget &&
-        incomingGroup != null &&
-        ParserService.allGroups.contains(incomingGroup)) {
-      await prefs.setInt("last_change_notif_time_$incomingGroup", nowMs);
-      await prefs.remove("fcm_pending_hash_${incomingGroup}_today");
-      await prefs.remove("fcm_pending_time_${incomingGroup}_today");
-      final rawHash = message.data['scheduleHash'] as String?;
-      if (rawHash != null && rawHash.isNotEmpty) {
-        if (dayType == 'today') {
-          await prefs.setString("prev_hash_${incomingGroup}_today", rawHash);
-          await prefs.setString("prev_date_${incomingGroup}_today", todayStr);
-        } else if (dayType == 'tomorrow') {
-          await prefs.setString("prev_hash_${incomingGroup}_tomorrow", rawHash);
-          await prefs.setString(
-              "prev_date_${incomingGroup}_tomorrow", todayStr);
-        }
-      }
+    try {
+      await (scheduleChanges ?? ScheduleChangeNotificationService()).handlePush(
+          message.data,
+          alreadyDisplayed: message.notification != null);
+    } on FormatException catch (error) {
+      AppLogger.w('Ignoring invalid or expired schedule push',
+          tag: 'FCM', error: error);
+      return;
+    } catch (error, stack) {
+      AppLogger.e('Cannot process background schedule push',
+          tag: 'FCM', error: error, stackTrace: stack);
+      // Recover the durable pending delivery and refresh widgets/reminders even
+      // when notification display or SQLite access failed.
     }
-
-    // Оновлюємо розклад у фоні та віджет на робочому столі, щоб користувач бачив свіжі дані
-    final parser = ParserService.background();
-    final allSchedules = await parser.fetchAllSchedules();
-
-    if (allSchedules.isNotEmpty) {
-      final widgetService = WidgetService();
-      await widgetService.updateWidget(allSchedules);
-
-      final notificationService = NotificationService();
-      await notificationService.init();
-
-      final List<String> notificationGroups =
-          PreferencesHelper.getActiveNotificationGroups(prefs);
-
-      bool first = true;
-
-      for (final group in notificationGroups) {
-        final mySchedule = allSchedules[group];
-        if (mySchedule != null && !mySchedule.today.isEmpty) {
-          await notificationService.scheduleNotificationsForToday(
-            mySchedule,
-            groupName: group,
-            cancelExisting: first,
-          );
-          first = false;
-
-          // Синхронізуємо хеш, щоб уникнути повторного дублюючого сповіщення від Workmanager
-          final keyHash = "prev_hash_${group}_today";
-          final keyDate = "prev_date_${group}_today";
-          final keyLastNotif = "last_change_notif_time_$group";
-          await prefs.setString(keyHash, mySchedule.today.scheduleHash);
-          await prefs.setString(keyDate, todayStr);
-          await prefs.setInt(keyLastNotif, nowMs);
-          await prefs.remove("fcm_pending_hash_${group}_today");
-          await prefs.remove("fcm_pending_time_${group}_today");
-        }
-      }
-      AppLogger.i("✅ Фонове оновлення віджета та нагадувань завершено",
-          tag: 'FCM');
-    }
+    await (refreshSchedules ?? enqueueScheduleRefresh)();
   } catch (e, stackTrace) {
     AppLogger.e("Помилка обробки фонового FCM повідомлення",
         tag: 'FCM', error: e, stackTrace: stackTrace);
@@ -150,11 +90,10 @@ class FcmService {
   /// Конвертує назву групи у валідний FCM-топік (без крапок та спецсимволів)
   /// Наприклад: ("GPV1.1", dayType: 'today') -> "group_gpv1_1"
   /// Наприклад: ("GPV1.1", dayType: 'tomorrow') -> "group_gpv1_1_tomorrow"
-  static String groupToTopic(String group, {String dayType = 'today'}) {
-    final clean = group.replaceAll('.', '_').replaceAll('-', '_').toLowerCase();
-    final suffix = dayType == 'tomorrow' ? '_tomorrow' : '';
-    return "group_$clean$suffix";
-  }
+  static String groupToTopic(String group,
+          {String dayType = 'today', bool versioned = false}) =>
+      ScheduleChangeNotificationService.topicFor(group,
+          dayType: dayType, versioned: versioned);
 
   @visibleForTesting
   static Set<String> topicsForPreferences(SharedPreferences prefs) {
@@ -163,12 +102,12 @@ class FcmService {
     final topics = <String>{};
     if (prefs.getBool('notify_schedule_change') ?? true) {
       for (final group in notificationGroups) {
-        topics.add(groupToTopic(group));
+        topics.add(groupToTopic(group, versioned: true));
       }
     }
     if (prefs.getBool('notify_tomorrow_schedule') ?? true) {
       for (final group in notificationGroups) {
-        topics.add(groupToTopic(group, dayType: 'tomorrow'));
+        topics.add(groupToTopic(group, dayType: 'tomorrow', versioned: true));
       }
     }
     if (prefs.getBool('notify_emergency_outages') ?? true) {
@@ -180,7 +119,8 @@ class FcmService {
 
   @visibleForTesting
   Future<void> handleForegroundMessage(RemoteMessage message,
-      {FcmTestNotificationService? testNotifications}) async {
+      {FcmTestNotificationService? testNotifications,
+      ScheduleChangeNotificationService? scheduleChanges}) async {
     if (await (testNotifications ?? FcmTestNotificationService())
         .handleIfTest(message)) {
       return;
@@ -191,65 +131,17 @@ class FcmService {
       return;
     }
     try {
-      final date = message.data['targetDate'] as String?;
-      if (date != null &&
-          date.isNotEmpty &&
-          date !=
-              DtekSnapshot.notificationDate(
-                  message.data['dayType'] as String? ?? 'today')) {
-        return;
-      }
-      if (!await FcmEventGuard.claim(message.data['eventId'] as String?)) {
-        return;
-      }
-    } catch (error) {
-      AppLogger.w('Cannot check FCM event identity', tag: 'FCM');
-      // Identity storage failure must not suppress a valid update.
+      await (scheduleChanges ?? ScheduleChangeNotificationService())
+          .handlePush(message.data);
+    } on FormatException catch (error) {
+      AppLogger.w('Ignoring invalid or expired foreground schedule push',
+          tag: 'FCM', error: error);
+      return;
+    } catch (error, stack) {
+      AppLogger.e('Cannot process foreground schedule push',
+          tag: 'FCM', error: error, stackTrace: stack);
+      // Network refresh still runs, and the durable pending state can recover.
     }
-    AppLogger.i(
-      "🔔 FCM повідомлення у передньому плані [${message.messageId}] для групи ${message.data['group'] ?? 'не вказано'}: ${message.notification?.title ?? message.data['title']}",
-      tag: 'FCM',
-      persistToHistory: true,
-    );
-
-    // Перевіряємо, чи користувач увімкнув відповідне сповіщення
-    try {
-      final prefs = await PreferencesHelper.getSafeInstance();
-      final groupName = message.data['group'] as String?;
-      final dayType = message.data['dayType'] as String? ?? 'today';
-      final notifyAllowed = dayType == 'tomorrow'
-          ? (prefs.getBool('notify_tomorrow_schedule') ?? true)
-          : (prefs.getBool('notify_schedule_change') ?? true);
-
-      final activeGroups = PreferencesHelper.getActiveNotificationGroups(prefs);
-
-      final isGroupTargeted =
-          groupName == null || activeGroups.contains(groupName);
-
-      if (notifyAllowed && isGroupTargeted) {
-        final notification = message.notification;
-        final defaultTitle =
-            dayType == 'tomorrow' ? "Графік на завтра" : "Зміна графіка";
-        final defaultBody = dayType == 'tomorrow'
-            ? "Оновлено розклад на завтра"
-            : "Оновлено розклад відключень";
-
-        final title =
-            notification?.title ?? message.data['title'] ?? defaultTitle;
-        final body = notification?.body ?? message.data['body'] ?? defaultBody;
-
-        await NotificationService().showImmediate(
-          title,
-          body,
-          groupName: groupName,
-        );
-      }
-    } catch (e) {
-      AppLogger.w("Помилка перевірки налаштувань у foreground FCM: $e",
-          tag: 'FCM');
-    }
-
-    // Сповіщаємо UI про надходження свіжих даних
     _messageStreamController.add(message);
   }
 
@@ -383,9 +275,19 @@ class FcmService {
 
   Future<void> _executeSyncTopicSubscriptions(
       {bool forceResubscribe = false}) async {
+    await synchronizeTopics(await PreferencesHelper.getSafeInstance(),
+        subscribe: FirebaseMessaging.instance.subscribeToTopic,
+        unsubscribe: FirebaseMessaging.instance.unsubscribeFromTopic,
+        forceResubscribe: forceResubscribe);
+  }
+
+  @visibleForTesting
+  static Future<void> synchronizeTopics(SharedPreferences prefs,
+      {required Future<void> Function(String) subscribe,
+      required Future<void> Function(String) unsubscribe,
+      bool forceResubscribe = false}) async {
     try {
-      final prefs = await PreferencesHelper.getSafeInstance();
-      final messaging = FirebaseMessaging.instance;
+      await prefs.reload();
       final currentSubscribed =
           (prefs.getStringList('fcm_subscribed_topics') ?? []).toSet();
 
@@ -405,7 +307,7 @@ class FcmService {
       final toUnsubscribe = currentSubscribed.difference(targetTopics);
       for (final topic in toUnsubscribe) {
         try {
-          await messaging.unsubscribeFromTopic(topic);
+          await unsubscribe(topic);
           activeSubscribed.remove(topic);
           AppLogger.d("FCM: Відписано від застарілого топіка: $topic",
               tag: 'FCM');
@@ -422,8 +324,17 @@ class FcmService {
           : targetTopics.difference(currentSubscribed);
 
       for (final topic in topicsToSubscribe) {
+        final legacyTopic =
+            topic.replaceFirst(RegExp(r'_v2(?=_tomorrow$|$)'), '');
+        if (legacyTopic != topic && activeSubscribed.contains(legacyTopic)) {
+          // Android auto-displays legacy pushes before Dart can deduplicate.
+          AppLogger.w(
+              'FCM: Waiting for legacy unsubscribe before subscribing to $topic',
+              tag: 'FCM');
+          continue;
+        }
         try {
-          await messaging.subscribeToTopic(topic);
+          await subscribe(topic);
           activeSubscribed.add(topic);
           AppLogger.d("FCM: Підтверджено підписку на топік: $topic",
               tag: 'FCM');

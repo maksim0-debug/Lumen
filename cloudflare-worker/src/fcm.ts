@@ -16,10 +16,10 @@ export const DIAGNOSTIC_CLIENT_TOPIC = 'lumen_diagnostics_v1';
  * Example: ('GPV1.1', 'today') -> 'group_gpv1_1'
  * Example: ('GPV1.1', 'tomorrow') -> 'group_gpv1_1_tomorrow'
  */
-export function groupToTopic(group: string, dayType: 'today' | 'tomorrow' = 'today'): string {
+export function groupToTopic(group: string, dayType: 'today' | 'tomorrow' = 'today', versioned = false): string {
   const clean = group.replace(/\./g, '_').replace(/-/g, '_').toLowerCase();
   const suffix = dayType === 'tomorrow' ? '_tomorrow' : '';
-  return `group_${clean}${suffix}`;
+  return `group_${clean}${versioned ? '_v2' : ''}${suffix}`;
 }
 
 /**
@@ -203,6 +203,8 @@ export interface FcmMessageOptions {
   dayType?: 'today' | 'tomorrow';
   eventId?: string;
   targetDate?: string;
+  sourceVersion?: number;
+  deliveredModes?: Array<'legacy' | 'client'>;
   isEmergency?: boolean;
   isPossible?: boolean;
   noticeText?: string;
@@ -214,14 +216,45 @@ export interface FcmMessageOptions {
 /**
  * Dispatches high-priority push notification to a specified FCM topic
  */
+interface DeliveryResult {
+  success: boolean; messageId?: string; error?: string; retryable?: boolean;
+  deliveredModes?: Array<'legacy' | 'client'>;
+}
+
+/** Keep old clients working while new clients arbitrate display locally. */
 export async function sendFcmTopicNotification(
+  serviceAccount: ServiceAccount, options: FcmMessageOptions,
+): Promise<DeliveryResult> {
+  const schedule = ['schedule_updated', 'tomorrow_schedule_updated', 'tomorrow_published'].includes(options.changeType ?? '');
+  if (!schedule) return sendFcmMessage(serviceAccount, options);
+  const sourceVersion = options.sourceVersion ?? Number(options.eventId?.split(':')[2]);
+  if (!Number.isSafeInteger(sourceVersion) || sourceVersion <= 0 ||
+      !/^GPV[1-6]\.[12]$/.test(options.group) || !/^[0-4]{24}$/.test(options.scheduleHash ?? '') ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(options.targetDate ?? '') ||
+      options.eventId !== `${options.group}:${options.targetDate}:${sourceVersion}:${options.scheduleHash}`) {
+    return { success: false, error: 'Invalid schedule event', retryable: false };
+  }
+  const deliveredModes = [...(options.deliveredModes ?? [])];
+  const missing = (['legacy', 'client'] as const).filter(mode => !deliveredModes.includes(mode));
+  const results = await Promise.all(missing.map(async mode => ({ mode, result: await sendFcmMessage(
+    serviceAccount, { ...options, sourceVersion }, mode === 'client') })));
+  for (const { mode, result } of results) if (result.success) deliveredModes.push(mode);
+  const failed = results.filter(({ result }) => !result.success);
+  return failed.length ? { success: false, deliveredModes,
+    error: failed.map(({ mode, result }) => `${mode}: ${result.error}`).join('; '),
+    retryable: failed.some(({ result }) => result.retryable !== false),
+  } : { success: true, deliveredModes, messageId: results.map(({ result }) => result.messageId).filter(Boolean).join(',') || options.eventId };
+}
+
+async function sendFcmMessage(
   serviceAccount: ServiceAccount,
-  options: FcmMessageOptions
-): Promise<{ success: boolean; messageId?: string; error?: string; retryable?: boolean }> {
+  options: FcmMessageOptions,
+  clientSchedule = false,
+): Promise<DeliveryResult> {
   try {
     const emergency = options.changeType === 'emergency_alert';
     const diagnostic = options.changeType === 'test';
-    const dataOnly = emergency || diagnostic;
+    const dataOnly = emergency || diagnostic || clientSchedule;
     if (diagnostic && !['group', 'emergency'].includes(options.testAudience ?? '')) {
       return { success: false, error: 'Invalid test audience', retryable: false };
     }
@@ -247,8 +280,10 @@ export async function sendFcmTopicNotification(
         // Only updated clients can consume diagnostics without schedule side
         // effects. Retain the real channel subscription as part of the check.
         ...(diagnostic ? {
-          condition: `'${options.topic}' in topics && '${DIAGNOSTIC_CLIENT_TOPIC}' in topics`,
-        } : { topic: options.topic }),
+          condition: `${options.testAudience === 'group'
+            ? `('${options.topic}' in topics || '${groupToTopic(options.group, options.dayType, true)}' in topics)`
+            : `'${options.topic}' in topics`} && '${DIAGNOSTIC_CLIENT_TOPIC}' in topics`,
+        } : { topic: clientSchedule ? groupToTopic(options.group, options.dayType, true) : options.topic }),
         ...(!dataOnly ? { notification: {
           title: options.title,
           body: options.body,
@@ -264,6 +299,9 @@ export async function sendFcmTopicNotification(
             outageMinutes: options.outageMinutes !== undefined ? String(options.outageMinutes) : '',
             dayType: options.dayType ?? 'today',
             targetDate: options.targetDate ?? '',
+            ...(options.sourceVersion !== undefined ? {
+              sourceVersion: String(options.sourceVersion), schemaVersion: '2',
+            } : {}),
           } : {
             testAudience: options.testAudience!,
             ...(options.testAudience === 'group' ? { dayType: options.dayType ?? 'today' } : {}),

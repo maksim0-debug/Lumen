@@ -55,6 +55,30 @@ void main() {
   });
 
   test(
+      'failed legacy unsubscribe defers v2 and retries without dual subscription',
+      () async {
+    await prefs.setBool('notify_schedule_change', true);
+    await prefs.setStringList('fcm_subscribed_topics', ['group_gpv1_1']);
+    final subscribed = <String>[];
+    final unsubscribed = <String>[];
+    await FcmService.synchronizeTopics(prefs,
+        subscribe: (topic) async => subscribed.add(topic),
+        unsubscribe: (topic) async => throw StateError('Offline'));
+    expect(subscribed, isNot(contains('group_gpv1_1_v2')));
+    expect(
+        prefs.getStringList('fcm_subscribed_topics'), contains('group_gpv1_1'));
+    await FcmService.synchronizeTopics(prefs,
+        subscribe: (topic) async {
+          expect(unsubscribed, contains('group_gpv1_1'));
+          subscribed.add(topic);
+        },
+        unsubscribe: (topic) async => unsubscribed.add(topic));
+    expect(subscribed, contains('group_gpv1_1_v2'));
+    expect(prefs.getStringList('fcm_subscribed_topics'),
+        isNot(contains('group_gpv1_1')));
+  });
+
+  test(
       'emergency test displays for another group with schedule alerts disabled',
       () async {
     final before = storedValues();
@@ -288,7 +312,7 @@ void main() {
   test('diagnostic capability supplements the actual enabled subscriptions',
       () async {
     expect(FcmService.topicsForPreferences(prefs), {
-      'group_gpv1_1_tomorrow',
+      'group_gpv1_1_v2_tomorrow',
       'emergency_alerts',
       'lumen_diagnostics_v1',
     });
@@ -302,8 +326,8 @@ void main() {
     await prefs.setBool('notify_schedule_change', true);
     await prefs.setStringList('notification_groups', ['GPV1.1', 'GPV3.2']);
     expect(FcmService.topicsForPreferences(prefs), {
-      'group_gpv1_1',
-      'group_gpv3_2',
+      'group_gpv1_1_v2',
+      'group_gpv3_2_v2',
       'lumen_diagnostics_v1',
     });
   });

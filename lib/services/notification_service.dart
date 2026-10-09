@@ -38,20 +38,18 @@ class NotificationService {
 
   bool _isInitialized = false;
   Future<void>? _initFuture;
+  Future<void>? _permissionFuture;
   String? _windowsIconPath;
 
-  Future<void> init() {
-    if (_isInitialized) {
-      AppLogger.d("Вже ініціалізовано", tag: 'NotificationService');
-      return Future.value();
+  Future<void> init({bool requestPermissions = true}) async {
+    if (!_isInitialized) {
+      await (_initFuture ??= _doInit());
     }
-    if (_initFuture != null) {
-      AppLogger.d("Ініціалізація вже триває, очікуємо завершення...",
-          tag: 'NotificationService');
-      return _initFuture!;
+    // Headless FCM/Workmanager isolates cannot wait for a Settings activity.
+    // Foreground initialization still requests permissions once per instance.
+    if (_isInitialized && requestPermissions && Platform.isAndroid) {
+      await (_permissionFuture ??= _requestPermissions());
     }
-    _initFuture = _doInit();
-    return _initFuture!;
   }
 
   Future<void> _doInit() async {
@@ -92,12 +90,15 @@ class NotificationService {
         },
       );
       AppLogger.d("initialize() повернув: $result", tag: 'NotificationService');
+      if (result != true) {
+        throw StateError(
+            'Notification plugin initialization was not confirmed');
+      }
 
       if (Platform.isAndroid) {
         AppLogger.d("Платформа: Android. Налаштування каналів...",
             tag: 'NotificationService');
         await _createNotificationChannels();
-        await _requestPermissions();
       } else if (Platform.isWindows) {
         AppLogger.d("Платформа: Windows. Підготовка іконки...",
             tag: 'NotificationService');
@@ -238,6 +239,9 @@ class NotificationService {
     String body, {
     String? groupName,
     int? notificationId,
+    String? notificationTag,
+    String? payload,
+    bool onlyAlertOnce = false,
     bool rethrowOnError = false,
   }) async {
     AppLogger.d("========== showImmediate ==========",
@@ -248,7 +252,7 @@ class NotificationService {
     if (!_isInitialized) {
       AppLogger.d("Не ініціалізовано, викликаємо init()...",
           tag: 'NotificationService');
-      await init();
+      await init(requestPermissions: false);
     }
 
     if (rethrowOnError && !_isInitialized) {
@@ -256,29 +260,18 @@ class NotificationService {
     }
 
     try {
-      SharedPreferences? prefs;
-      try {
-        prefs = await PreferencesHelper.getSafeInstance();
-      } catch (e) {
-        AppLogger.w("Error getting SharedPreferences in showImmediate: $e",
-            tag: 'NotificationService');
-      }
-      final List<String> notificationGroups = prefs != null
-          ? PreferencesHelper.getActiveNotificationGroups(prefs)
-          : [];
-
       String finalTitle = title;
-      if (groupName != null && notificationGroups.length > 1) {
+      if (groupName != null) {
         String formattedGroup = AppFormatters.formatGroupName(groupName);
         if (!title.contains(formattedGroup) && !title.contains(groupName)) {
-          finalTitle = "$formattedGroup: $title";
+          finalTitle = "$title ($formattedGroup)";
         }
       }
 
       AppLogger.d("Створення Platform-specific details...",
           tag: 'NotificationService');
 
-      const AndroidNotificationDetails androidDetails =
+      final AndroidNotificationDetails androidDetails =
           AndroidNotificationDetails(
         'immediate_channel',
         'Миттєві сповіщення',
@@ -286,12 +279,14 @@ class NotificationService {
         importance: Importance.max,
         priority: Priority.high,
         icon: '@mipmap/launcher_icon',
+        tag: notificationTag,
+        onlyAlertOnce: onlyAlertOnce,
       );
 
       const WindowsNotificationDetails windowsDetails =
           WindowsNotificationDetails();
 
-      const NotificationDetails details = NotificationDetails(
+      final NotificationDetails details = NotificationDetails(
         android: androidDetails,
         windows: windowsDetails,
       );
@@ -317,6 +312,7 @@ class NotificationService {
         finalTitle,
         body,
         details,
+        payload: payload,
       );
 
       AppLogger.i("✅ show() успішно виконано", tag: 'NotificationService');
@@ -329,7 +325,7 @@ class NotificationService {
 
   Future<void> scheduleNotificationsForToday(FullSchedule fullSchedule,
       {String? groupName, bool cancelExisting = true}) async {
-    if (!_isInitialized) await init();
+    if (!_isInitialized) await init(requestPermissions: false);
 
     if (!Platform.isAndroid && !Platform.isWindows) return;
 

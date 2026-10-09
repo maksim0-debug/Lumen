@@ -16,6 +16,11 @@ class AppFormatters {
     return "$minutesхв";
   }
 
+  /// Formats minutes as hours without a trailing zero for whole hours.
+  static String formatHours(int totalMinutes) => totalMinutes % 60 == 0
+      ? (totalMinutes ~/ 60).toString()
+      : (totalMinutes / 60).toStringAsFixed(1);
+
   /// Форматування дати/часу DateTime у рядок виду "HH:mm".
   static String fmtTime(DateTime dt) {
     return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
@@ -65,10 +70,7 @@ class AppFormatters {
   }) {
     final diff = newMinutes - oldMinutes;
     if (diff != 0) {
-      final diffHours = (diff.abs() / 60);
-      final diffStr = diffHours == diffHours.toInt()
-          ? diffHours.toInt().toString()
-          : diffHours.toStringAsFixed(1);
+      final diffStr = formatHours(diff.abs());
       return diff > 0
           ? "Світла стало МЕНШЕ на $diffStr год. 😔"
           : "Світла стало БІЛЬШЕ на $diffStr год. 🎉";

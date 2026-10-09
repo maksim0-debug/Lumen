@@ -14,6 +14,9 @@ class RecordingNotifications extends Fake implements NotificationService {
   Future<void> showImmediate(String title, String body,
       {String? groupName,
       int? notificationId,
+      String? notificationTag,
+      String? payload,
+      bool onlyAlertOnce = false,
       bool rethrowOnError = false}) async {
     messages.add((title: title, body: body, group: groupName));
   }

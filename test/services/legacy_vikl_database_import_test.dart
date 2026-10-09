@@ -112,6 +112,12 @@ void main() {
 
       // 2. Verify schedule history was imported correctly
       final historyService = HistoryService();
+      final migratedDatabase = await historyService.database;
+      expect(await migratedDatabase.getVersion(), 5);
+      expect(
+          await migratedDatabase.query('schedule_notification_state'), isEmpty,
+          reason:
+              'Legacy imports must initialize the new delivery state without losing history');
       final versions = await historyService.getVersionsForDate(
         DateTime(2026, 9, 20),
         'GPV1.1',

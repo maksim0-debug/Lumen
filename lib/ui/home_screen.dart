@@ -32,6 +32,7 @@ import 'state/schedule_version_preferences.dart';
 import 'widgets/home/countdown_card.dart';
 import 'widgets/home/darkness_stage_banner.dart';
 import 'widgets/home/data_source_toggle.dart';
+import 'widgets/home/displayed_schedule_acknowledgment.dart';
 import 'widgets/home/emergency_alert_banner.dart';
 import 'widgets/home/predicted_mode_grid_cell.dart';
 import 'widgets/home/real_mode_grid_cell.dart';
@@ -47,7 +48,8 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
   final DesktopTrayCoordinator _desktopTrayCoordinator =
       DesktopTrayCoordinator();
   final AchievementService _achievementService = AchievementService();
@@ -61,6 +63,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _desktopTrayCoordinator.init();
     unawaited(DesktopSyncService().init());
     _initAchievements();
@@ -110,11 +113,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _focusNode.dispose();
     _desktopTrayCoordinator.dispose();
     _timer?.cancel();
     _achievementService.onAchievementUnlocked = null;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      setState(() {});
+    }
   }
 
   void _showVersionPicker(HomeState state) {
@@ -435,7 +446,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(homeNotifierProvider);
     final notifier = ref.read(homeNotifierProvider.notifier);
+    return DisplayedScheduleAcknowledgment(
+      event: HomeNotifier.scheduleEventForDisplayedState(
+          state, ScheduleClock.now()),
+      onAcknowledge: notifier.acknowledgeDisplayedSchedule,
+      child: _buildContent(context, state, notifier),
+    );
+  }
 
+  Widget _buildContent(
+      BuildContext context, HomeState state, HomeNotifier notifier) {
     final screenWidth = MediaQuery.of(context).size.width;
     final int cols = screenWidth > 800 ? 8 : (screenWidth > 600 ? 6 : 4);
 

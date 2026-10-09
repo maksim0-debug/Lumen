@@ -98,7 +98,8 @@ test('diagnostic pushes are data-only and never carry operational status or sche
     const message = messages.at(-1).message;
     assert.equal(message.topic, undefined);
     assert.equal(message.condition,
-      `'${audience === 'emergency' ? 'emergency_alerts' : 'group_gpv1_1_tomorrow'}' in topics && 'lumen_diagnostics_v1' in topics`);
+      audience === 'emergency' ? "'emergency_alerts' in topics && 'lumen_diagnostics_v1' in topics"
+        : "('group_gpv1_1_tomorrow' in topics || 'group_gpv1_1_v2_tomorrow' in topics) && 'lumen_diagnostics_v1' in topics");
     assert.equal(message.notification, undefined);
     assert.equal(message.android.notification, undefined);
     assert.equal(message.android.collapse_key, undefined);
@@ -139,4 +140,73 @@ test('permanent and transient FCM failures have different retry policies', async
     const result = await fcm.sendFcmTopicNotification(account, options);
     assert.equal(result.retryable, [401, 429, 500, 503].includes(code));
   }
+});
+
+const scheduleOptions = () => ({ ...options, group: 'GPV2.1', topic: 'group_gpv2_1',
+  changeType: 'schedule_updated', scheduleHash: '011111000000000000000000',
+  targetDate: '2026-10-09', sourceVersion: 1791498120000,
+  eventId: 'GPV2.1:2026-10-09:1791498120000:011111000000000000000000',
+  title: 'Графік змінено! (Група 2.1)', body: 'Світла стало БІЛЬШЕ на 1 год. 🎉',
+});
+
+test('schedule delivery preserves legacy display and provides data-only v2 to a disjoint topic', async () => {
+  const result = await fcm.sendFcmTopicNotification(account, scheduleOptions());
+  assert.equal(result.success, true);
+  assert.deepEqual(result.deliveredModes.sort(), ['client', 'legacy']);
+  assert.equal(oauthCalls, 1);
+  assert.equal(fcmCalls, 2);
+  const legacy = messages.find(p => p.message.topic === 'group_gpv2_1').message;
+  const client = messages.find(p => p.message.topic === 'group_gpv2_1_v2').message;
+  assert.ok(legacy.notification);
+  assert.equal(client.notification, undefined);
+  assert.equal(client.android.notification, undefined);
+  assert.equal(client.android.collapse_key, undefined);
+  assert.equal(client.data.sourceVersion, '1791498120000');
+  assert.equal(client.data.schemaVersion, '2');
+  assert.equal(client.data.eventId, legacy.data.eventId);
+  assert.equal(client.data.title, scheduleOptions().title);
+  assert.equal(client.data.body, scheduleOptions().body);
+  assert.equal(client.android.priority, 'HIGH');
+  assert.ok(Buffer.byteLength(JSON.stringify(client)) < 4096);
+});
+
+test('partial schedule delivery retries only the unacknowledged audience', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url, args) => {
+    if (String(url).includes('messages:send') && JSON.parse(args.body).message.topic.endsWith('_v2')) {
+      return new Response('transient', { status: 503 });
+    }
+    return originalFetch(url, args);
+  };
+  const first = await fcm.sendFcmTopicNotification(account, scheduleOptions());
+  assert.equal(first.success, false);
+  assert.equal(first.retryable, true);
+  assert.deepEqual(first.deliveredModes, ['legacy']);
+  global.fetch = originalFetch;
+  const second = await fcm.sendFcmTopicNotification(account, {
+    ...scheduleOptions(), deliveredModes: first.deliveredModes,
+  });
+  assert.equal(second.success, true);
+  assert.deepEqual(second.deliveredModes.sort(), ['client', 'legacy']);
+  assert.equal(messages.filter(p => p.message.topic === 'group_gpv2_1').length, 1);
+});
+
+test('legacy pending schedule outboxes derive original source version from event ID', async () => {
+  const opts = scheduleOptions(); delete opts.sourceVersion;
+  assert.equal((await fcm.sendFcmTopicNotification(account, opts)).success, true);
+  assert.ok(messages.every(p => p.message.data.sourceVersion === '1791498120000'));
+});
+
+test('tomorrow uses a separate v2 topic and incomplete schedule envelopes do not send', async () => {
+  const opts = { ...scheduleOptions(), dayType: 'tomorrow', topic: 'group_gpv2_1_tomorrow',
+    changeType: 'tomorrow_schedule_updated' };
+  assert.equal((await fcm.sendFcmTopicNotification(account, opts)).success, true);
+  assert.equal(messages[1].message.topic, 'group_gpv2_1_v2_tomorrow');
+  const before = fcmCalls;
+  for (const field of [{ scheduleHash: 'bad' }, { eventId: 'bad' }, { sourceVersion: 0 }, { group: 'GPV9.1' }]) {
+    const result = await fcm.sendFcmTopicNotification(account, { ...opts, ...field });
+    assert.equal(result.success, false);
+    assert.equal(result.retryable, false);
+  }
+  assert.equal(fcmCalls, before);
 });
