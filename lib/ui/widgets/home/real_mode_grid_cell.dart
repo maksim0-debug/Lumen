@@ -208,18 +208,6 @@ class RealModeGridCell extends StatelessWidget {
               ),
             ),
           ),
-
-          // Stalker: small radiation icon
-          if (stage == DarknessStage.stalker)
-            Positioned(
-              right: 2,
-              bottom: 1,
-              child: Icon(
-                Icons.radio_button_checked,
-                size: 8,
-                color: const Color(0xFF39FF14).withValues(alpha: 0.2),
-              ),
-            ),
         ],
       );
     });

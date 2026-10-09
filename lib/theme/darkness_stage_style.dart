@@ -55,14 +55,6 @@ class CurrentHourWrapStyle {
   });
 }
 
-/// Іконка та колір для статусу години.
-class CellIconStyle {
-  final IconData? icon;
-  final Color? color;
-
-  const CellIconStyle({this.icon, this.color});
-}
-
 /// Централізоване налаштування візуальних стилів для стадій темряви.
 abstract class DarknessStageStyle {
   Color get onColor;
@@ -71,7 +63,6 @@ abstract class DarknessStageStyle {
   double get borderRadius;
   TextStyle get cellTextStyle;
 
-  CellIconStyle cellIcon(bool isOn);
   BoxDecoration colorBoxDecoration(bool isOn, Color fallbackColor);
   BoxDecoration gradientBoxDecoration(
       bool isSemiOn, List<Color> colors, Color onColor);
@@ -126,9 +117,6 @@ class _DefaultStageStyle implements DarknessStageStyle {
         fontSize: 13,
         color: Colors.white,
       );
-
-  @override
-  CellIconStyle cellIcon(bool isOn) => const CellIconStyle();
 
   @override
   BoxDecoration colorBoxDecoration(bool isOn, Color fallbackColor) {
@@ -202,8 +190,6 @@ class _DefaultStageStyle implements DarknessStageStyle {
     if (isFuture) {
       return SegmentDecorationResult(
         decoration: BoxDecoration(color: themeColor.withValues(alpha: 0.4)),
-        overlay:
-            const Icon(Icons.help_outline, size: 12, color: Colors.white24),
       );
     }
     return SegmentDecorationResult(
@@ -237,14 +223,6 @@ class _SolarpunkStyle implements DarknessStageStyle {
         color: Colors.white,
         shadows: [Shadow(blurRadius: 2, color: Color(0x66000000))],
       );
-
-  @override
-  CellIconStyle cellIcon(bool isOn) {
-    return CellIconStyle(
-      icon: isOn ? Icons.wb_sunny_outlined : Icons.cloud_outlined,
-      color: Colors.white.withValues(alpha: 0.25),
-    );
-  }
 
   @override
   BoxDecoration colorBoxDecoration(bool isOn, Color fallbackColor) {
@@ -418,15 +396,6 @@ class _DieselpunkStyle implements DarknessStageStyle {
       );
 
   @override
-  CellIconStyle cellIcon(bool isOn) {
-    return CellIconStyle(
-      icon:
-          isOn ? Icons.settings_outlined : Icons.local_fire_department_outlined,
-      color: const Color(0xFFFF9800).withValues(alpha: 0.2),
-    );
-  }
-
-  @override
   BoxDecoration colorBoxDecoration(bool isOn, Color fallbackColor) {
     return BoxDecoration(
       borderRadius: BorderRadius.circular(borderRadius),
@@ -585,14 +554,6 @@ class _CyberpunkStyle implements DarknessStageStyle {
         color: Color(0xFF00FFFF),
         shadows: [Shadow(blurRadius: 4, color: Color(0xFF00FFFF))],
       );
-
-  @override
-  CellIconStyle cellIcon(bool isOn) {
-    return CellIconStyle(
-      icon: isOn ? Icons.bolt_outlined : Icons.visibility_off_outlined,
-      color: const Color(0xFFFF0080).withValues(alpha: 0.25),
-    );
-  }
 
   @override
   BoxDecoration colorBoxDecoration(bool isOn, Color fallbackColor) {
@@ -784,16 +745,6 @@ class _StalkerStyle implements DarknessStageStyle {
       );
 
   @override
-  CellIconStyle cellIcon(bool isOn) {
-    return CellIconStyle(
-      icon: isOn ? Icons.radio_button_checked : Icons.warning_amber_rounded,
-      color: isOn
-          ? const Color(0xFF39FF14).withValues(alpha: 0.15)
-          : const Color(0xFFFF1744).withValues(alpha: 0.25),
-    );
-  }
-
-  @override
   BoxDecoration colorBoxDecoration(bool isOn, Color fallbackColor) {
     final borderColor = isOn
         ? const Color(0xFF39FF14).withValues(alpha: 0.4)
@@ -817,7 +768,7 @@ class _StalkerStyle implements DarknessStageStyle {
         stops: const [0.5, 0.5],
       ),
       border: Border.all(
-        color: const Color(0xFFFFD600).withValues(alpha: 0.4),
+        color: const Color(0xFF39FF14).withValues(alpha: 0.4),
         width: 1,
       ),
     );

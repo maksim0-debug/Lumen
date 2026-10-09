@@ -69,12 +69,16 @@ void main() {
       expect(stalker.borderRadius, 2.0);
       expect(defaultStyle.borderRadius, 6.0);
 
-      // Verify cell icon styles
-      expect(solarpunk.cellIcon(true).icon, Icons.wb_sunny_outlined);
-      expect(dieselpunk.cellIcon(true).icon, Icons.settings_outlined);
-      expect(cyberpunk.cellIcon(true).icon, Icons.bolt_outlined);
-      expect(stalker.cellIcon(true).icon, Icons.radio_button_checked);
-      expect(defaultStyle.cellIcon(true).icon, isNull);
+      // Distinct status colors remain available after removing tile icons.
+      for (final style in [
+        solarpunk,
+        dieselpunk,
+        cyberpunk,
+        stalker,
+        defaultStyle
+      ]) {
+        expect(style.onColor, isNot(style.offColor));
+      }
     });
 
     test('Countdown styles adapt to dark/light theme per stage', () {
@@ -172,4 +176,3 @@ void main() {
     });
   });
 }
-

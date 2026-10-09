@@ -78,11 +78,9 @@ Widget themedColorBox(bool isOn, String text, DarknessStage? stage) {
   final color = isOn ? style.onColor : style.offColor;
   final radius = style.borderRadius;
   final textStyle = style.cellTextStyle;
-  final iconStyle = style.cellIcon(isOn);
   final decoration = style.colorBoxDecoration(isOn, color);
 
   // Stalker: override text for OFF cells
-  String displayText = text;
   TextStyle displayStyle = textStyle;
   if (stage == DarknessStage.stalker && !isOn) {
     displayStyle = textStyle.copyWith(
@@ -97,14 +95,6 @@ Widget themedColorBox(bool isOn, String text, DarknessStage? stage) {
     decoration: decoration,
     child: Stack(
       children: [
-        // Background decorative icon
-        if (iconStyle.icon != null)
-          Positioned(
-            right: 3,
-            bottom: 2,
-            child: Icon(iconStyle.icon,
-                size: 16, color: iconStyle.color ?? Colors.white24),
-          ),
         // Stalker scanline overlay for OFF cells
         if (stage == DarknessStage.stalker && !isOn)
           Positioned.fill(
@@ -112,17 +102,6 @@ Widget themedColorBox(bool isOn, String text, DarknessStage? stage) {
               painter: ScanlinePainter(
                 color: const Color(0xFFFF1744).withValues(alpha: 0.06),
               ),
-            ),
-          ),
-        // Stalker: radiation icon top-left for OFF
-        if (stage == DarknessStage.stalker && !isOn)
-          Positioned(
-            left: 3,
-            top: 2,
-            child: Icon(
-              Icons.warning_amber_rounded,
-              size: 10,
-              color: const Color(0xFFFF1744).withValues(alpha: 0.4),
             ),
           ),
         // Cyberpunk: subtle inner glow line at top
@@ -158,7 +137,7 @@ Widget themedColorBox(bool isOn, String text, DarknessStage? stage) {
             ),
           ),
         // Main text
-        Center(child: Text(displayText, style: displayStyle)),
+        Center(child: Text(text, style: displayStyle)),
       ],
     ),
   );
@@ -173,65 +152,21 @@ Widget themedGradientBox(bool isSemiOn, String text, DarknessStage? stage) {
   final textStyle = style.cellTextStyle;
   final colors = isSemiOn ? [offColor, onColor] : [onColor, offColor];
 
-  final iconOff = style.cellIcon(false);
-  final iconOn = style.cellIcon(true);
-  final iconLeft = isSemiOn ? iconOff.icon : iconOn.icon;
-  final iconColorLeft = isSemiOn ? iconOff.color : iconOn.color;
-  final iconRight = isSemiOn ? iconOn.icon : iconOff.icon;
-  final iconColorRight = isSemiOn ? iconOn.color : iconOff.color;
-
   final decoration = style.gradientBoxDecoration(isSemiOn, colors, onColor);
-
-  String displayText = text;
-  if (stage == DarknessStage.solarpunk ||
-      stage == DarknessStage.dieselpunk ||
-      stage == DarknessStage.cyberpunk ||
-      stage == null) {
-    displayText = isSemiOn ? '$text ⚡' : text;
-  } else if (stage == DarknessStage.stalker) {
-    displayText = isSemiOn ? '$text ?' : text;
-  }
 
   return Container(
     decoration: decoration,
     child: Stack(
       children: [
-        // 1) Icons for left/right halves
-        if (iconLeft != null)
-          Positioned(
-            left: 4,
-            bottom: 4,
-            child: Icon(iconLeft,
-                size: 14, color: iconColorLeft ?? Colors.white24),
-          ),
-        if (iconRight != null)
-          Positioned(
-            right: 4,
-            bottom: 4,
-            child: Icon(iconRight,
-                size: 14, color: iconColorRight ?? Colors.white24),
-          ),
-
         if (stage == DarknessStage.stalker)
           Positioned.fill(
             child: CustomPaint(
               painter: ScanlinePainter(
-                color: const Color(0xFFFFD600).withValues(alpha: 0.04),
+                color: const Color(0xFF39FF14).withValues(alpha: 0.04),
               ),
             ),
           ),
-        if (stage == DarknessStage.stalker)
-          Positioned(
-            right: 3,
-            bottom: 2,
-            child: Icon(
-              iconRight ?? Icons.help_outline,
-              size: 12,
-              color: iconColorRight ?? Colors.white24,
-            ),
-          ),
-
-        // 2) Dieselpunk: diagonal stripes for semiOff (right half is OFF)
+        // Dieselpunk: diagonal stripes for semiOff (right half is OFF)
         if (stage == DarknessStage.dieselpunk && !isSemiOn)
           Positioned.fill(
             child: Row(
@@ -276,19 +211,7 @@ Widget themedGradientBox(bool isSemiOn, String text, DarknessStage? stage) {
             ),
           ),
 
-        Center(
-          child: Text(
-            displayText,
-            style: stage == DarknessStage.stalker
-                ? textStyle.copyWith(
-                    color: const Color(0xFFFFD600),
-                    shadows: [
-                      const Shadow(blurRadius: 4, color: Color(0xFFFFD600)),
-                    ],
-                  )
-                : textStyle,
-          ),
-        ),
+        Center(child: Text(text, style: textStyle)),
       ],
     ),
   );
@@ -304,16 +227,6 @@ Widget themedMaybeBox(String text, DarknessStage? stage) {
     decoration: decoration,
     child: Stack(
       children: [
-        if (stage == DarknessStage.stalker)
-          Positioned(
-            right: 3,
-            bottom: 2,
-            child: Icon(
-              Icons.help_outline,
-              size: 12,
-              color: const Color(0xFF39FF14).withValues(alpha: 0.15),
-            ),
-          ),
         Center(
           child: Text(
             '$text ?',
