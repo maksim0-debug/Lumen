@@ -321,16 +321,16 @@ class AppKeyboardShortcuts {
   /// Cheatsheet data structured for display in the help dialog.
   static List<ShortcutCategory> get cheatSheetCategories => [
         const ShortcutCategory(
-          title: '📅 Навігація по датах',
+          title: '📅 Навігація за датами',
           icon: Icons.calendar_today,
           items: [
             ShortcutHelpItem(
-              actionName: 'День назад',
+              actionName: 'Попередній день',
               keyLabels: ['A', '←', 'Num 4'],
               description: 'Перехід на один день у минуле',
             ),
             ShortcutHelpItem(
-              actionName: 'День вперед',
+              actionName: 'Наступний день',
               keyLabels: ['D', '→', 'Num 6'],
               description: 'Перехід на один день уперед',
             ),
@@ -342,7 +342,7 @@ class AppKeyboardShortcuts {
             ShortcutHelpItem(
               actionName: 'Вчора / Завтра',
               keyLabels: ['Y', 'N'],
-              description: 'Прямий стрибок на вчора або завтра',
+              description: 'Прямий перехід на вчора або завтра',
             ),
             ShortcutHelpItem(
               actionName: 'Календар',
@@ -352,7 +352,8 @@ class AppKeyboardShortcuts {
             ShortcutHelpItem(
               actionName: 'Скопіювати статус',
               keyLabels: ['Ctrl + C', 'Cmd + C'],
-              description: 'Копіювати текстове зведення відключень у буфер',
+              description:
+                  'Копіювати текстове зведення відключень у буфер обміну',
             ),
           ],
         ),
@@ -423,7 +424,7 @@ class AppKeyboardShortcuts {
           ],
         ),
         const ShortcutCategory(
-          title: '🧭 Швидкі переходи по екранах',
+          title: '🧭 Швидкі переходи між екранами',
           icon: Icons.explore,
           items: [
             ShortcutHelpItem(
@@ -439,7 +440,7 @@ class AppKeyboardShortcuts {
             ShortcutHelpItem(
               actionName: 'Налаштування',
               keyLabels: ['O', 'F10', 'Ctrl + ,'],
-              description: 'Відкрити параметри програми та теми',
+              description: 'Відкрити параметри застосунку та теми',
             ),
             ShortcutHelpItem(
               actionName: 'Перемикання теми',
@@ -447,14 +448,14 @@ class AppKeyboardShortcuts {
               description: 'Швидке перемикання темної та світлої теми',
             ),
             ShortcutHelpItem(
-              actionName: 'Журнал логів',
+              actionName: 'Журнал подій',
               keyLabels: ['F12'],
-              description: 'Відкрити екран технічних логів',
+              description: 'Відкрити журнал подій застосунку',
             ),
             ShortcutHelpItem(
               actionName: 'Назад / Закрити',
               keyLabels: ['Esc'],
-              description: 'Закрити поточне вікно або повернутись',
+              description: 'Закрити поточне вікно або повернутися',
             ),
           ],
         ),
@@ -463,7 +464,7 @@ class AppKeyboardShortcuts {
           icon: Icons.insights,
           items: [
             ShortcutHelpItem(
-              actionName: 'Вкладка вліво / вправо',
+              actionName: 'Вкладка ліворуч / праворуч',
               keyLabels: ['A / D', '← / →', 'Num 4 / Num 6'],
               description: 'Перемикання між 5 аналітичними вкладками',
             ),
@@ -471,7 +472,7 @@ class AppKeyboardShortcuts {
               actionName: 'Прямий перехід на вкладку',
               keyLabels: ['1', '2', '3', '4', '5'],
               description:
-                  '1: Дашборд, 2: Точність, 3: Рекорди, 4: Графіки, 5: Порівняння',
+                  '1: Огляд, 2: Точність, 3: Рекорди, 4: Графіки, 5: Порівняння',
             ),
             ShortcutHelpItem(
               actionName: 'Зміна черги в аналітиці',
@@ -497,12 +498,12 @@ class AppKeyboardShortcuts {
             ShortcutHelpItem(
               actionName: 'Фільтри логів',
               keyLabels: ['1', '2', '3', '4'],
-              description: '1: Всі, 2: Помилки, 3: Парсер, 4: Монітор',
+              description: '1: Усі, 2: Помилки, 3: Парсер, 4: Монітор',
             ),
             ShortcutHelpItem(
               actionName: 'Скопіювати логи',
               keyLabels: ['Ctrl + C'],
-              description: 'Копіювати відфільтровані логи в буфер',
+              description: 'Копіювати відфільтровані логи в буфер обміну',
             ),
             ShortcutHelpItem(
               actionName: 'Зберегти в редакторі',

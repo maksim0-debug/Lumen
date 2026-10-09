@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 
 /// Категорія досягнення.
 enum AchievementCategory {
-  tutorial,   // 👶 Перші кроки
-  casual,     // 🌤 Повсякденність
-  survival,   // 💀 Виживання
-  oracle,     // 🔮 Оракул
-  lifestyle,  // ⚡ Стиль життя
-  secret,     // 🥚 Секретні
+  tutorial, // 👶 Перші кроки
+  casual, // 🌤 Повсякденність
+  survival, // 💀 Виживання
+  oracle, // 🔮 Оракул
+  lifestyle, // ⚡ Стиль життя
+  secret, // 🥚 Секретні
 }
 
 /// Визначення одного досягнення (статичне).
@@ -94,7 +94,7 @@ class AchievementCatalog {
       id: 'always_visible',
       title: 'Завжди перед очима',
       description: 'Використати віджет на головному екрані.',
-      conditionText: 'Відкрити додаток через віджет.',
+      conditionText: 'Відкрити застосунок через віджет.',
       category: AchievementCategory.tutorial,
       icon: Icons.widgets,
       color: Color(0xFF00ACC1),
@@ -105,8 +105,8 @@ class AchievementCatalog {
     // ═══════════════════════════════════════
     AchievementDef(
       id: 'seemed_like',
-      title: 'Показалось',
-      description: 'Світло зникло та повернулось менш ніж за 5 хвилин.',
+      title: 'Здалося',
+      description: 'Світло зникло та повернулося менш ніж за 5 хвилин.',
       conditionText: 'Інтервал offline < 5 хвилин.',
       category: AchievementCategory.casual,
       icon: Icons.blur_on,
@@ -124,7 +124,7 @@ class AchievementCatalog {
     AchievementDef(
       id: 'situation_control',
       title: 'Контроль ситуації',
-      description: 'Зайти в додаток 5 разів за один день.',
+      description: 'Зайти в застосунок 5 разів за один день.',
       conditionText: 'Лічильник сесій за добу ≥ 5.',
       category: AchievementCategory.casual,
       icon: Icons.repeat,
@@ -132,11 +132,11 @@ class AchievementCatalog {
     ),
 
     // ═══════════════════════════════════════
-    // �💀 ВИЖИВАННЯ (Survival)
+    // 💀 ВИЖИВАННЯ (Survival)
     // ═══════════════════════════════════════
     AchievementDef(
       id: 'initiated_into_darkness',
-      title: 'Посвячений у тьму',
+      title: 'Посвячений у темряву',
       description: 'Пережити перше зафіксоване відключення.',
       conditionText: 'Перша подія offline у базі даних.',
       category: AchievementCategory.survival,
@@ -154,8 +154,8 @@ class AchievementCatalog {
     ),
     AchievementDef(
       id: 'born_in_darkness',
-      title: 'Народжений у тьмі',
-      description: '1000 годин без світла. Ви адаптувались.',
+      title: 'Народжений у темряві',
+      description: '1000 годин без світла. Ви адаптувалися.',
       conditionText: 'Сумарний час offline > 1000 годин.',
       category: AchievementCategory.survival,
       icon: Icons.visibility_off,
@@ -164,16 +164,16 @@ class AchievementCatalog {
     AchievementDef(
       id: 'marathon_runner',
       title: 'Марафонець',
-      description: 'Одне безперервне відключення тривало більше 12 годин.',
-      conditionText: 'Тривалість одного інтервала offline > 12 год.',
+      description: 'Одне безперервне відключення тривало понад 12 годин.',
+      conditionText: 'Тривалість одного інтервалу offline > 12 год.',
       category: AchievementCategory.survival,
       icon: Icons.directions_run,
       color: Color(0xFFFF6F00),
     ),
     AchievementDef(
       id: 'blackout_survivor',
-      title: 'Блекаут Сюрвайвер',
-      description: 'Доба без світла (менше 2 годин зі світлом за 24 год).',
+      title: 'Переможець блекауту',
+      description: 'Доба без світла (менше ніж 2 години зі світлом за 24 год).',
       conditionText: 'Сумарний час offline > 22 год за календарну добу.',
       category: AchievementCategory.survival,
       icon: Icons.shield,
@@ -185,8 +185,8 @@ class AchievementCatalog {
     // ═══════════════════════════════════════
     AchievementDef(
       id: 'deceived_investor',
-      title: 'Обманутий вкладник',
-      description: 'Відключили у "білій зоні" (коли світло гарантовано).',
+      title: 'Ошуканий вкладник',
+      description: 'Відключили в «білій зоні» (коли світло гарантовано).',
       conditionText: 'Графік — yes, а статус offline > 15 хвилин.',
       category: AchievementCategory.oracle,
       icon: Icons.money_off,
@@ -195,8 +195,9 @@ class AchievementCatalog {
     AchievementDef(
       id: 'hachiko',
       title: 'Хатіко',
-      description: 'Світло дали з запізненням більше ніж на годину.',
-      conditionText: 'Графік змінився на yes, сенсор — online лише через 60+ хв.',
+      description: 'Світло дали із запізненням понад годину.',
+      conditionText:
+          'Графік змінився на yes, сенсор — online лише через 60+ хв.',
       category: AchievementCategory.oracle,
       icon: Icons.pets,
       color: Color(0xFF8D6E63),
@@ -213,7 +214,7 @@ class AchievementCatalog {
     AchievementDef(
       id: 'archivist',
       title: 'Архіваріус',
-      description: 'Проскролити історію графіків на місяць назад.',
+      description: 'Переглянути історію графіків за минулий місяць.',
       conditionText: 'Перегляд історії на дату Now - 30 днів.',
       category: AchievementCategory.oracle,
       icon: Icons.history_edu,
@@ -225,7 +226,7 @@ class AchievementCatalog {
     // ═══════════════════════════════════════
     AchievementDef(
       id: 'night_watch',
-      title: 'Нічний дожор',
+      title: 'Нічний перекус',
       description: 'Світло увімкнули між 03:00 та 05:00 ранку.',
       conditionText: 'Подія online з таймстемпом у інтервалі 03:00–05:00.',
       category: AchievementCategory.lifestyle,
@@ -235,7 +236,7 @@ class AchievementCatalog {
     AchievementDef(
       id: 'light_disco',
       title: 'Світлодискотека',
-      description: 'Світло ввімкнулось і вимкнулось 5 разів за одну годину.',
+      description: 'Світло увімкнулося і вимкнулося 5 разів за одну годину.',
       conditionText: '5 пар подій online/offline за 60 хвилин.',
       category: AchievementCategory.lifestyle,
       icon: Icons.flare,
@@ -247,7 +248,7 @@ class AchievementCatalog {
     // ═══════════════════════════════════════
     AchievementDef(
       id: 'nervous_tic',
-      title: 'Нервовий тік',
+      title: 'Нервовий тик',
       description: 'Оновити дані 20 разів за хвилину.',
       conditionText: '???',
       category: AchievementCategory.secret,
@@ -268,7 +269,8 @@ class AchievementCatalog {
     AchievementDef(
       id: 'second_wind',
       title: 'Друге дихання',
-      description: 'Світло увімкнули лише на 30 хвилин між двома відключеннями.',
+      description:
+          'Світло увімкнули лише на 30 хвилин між двома відключеннями.',
       conditionText: '???',
       category: AchievementCategory.secret,
       icon: Icons.air,
@@ -308,13 +310,13 @@ class AchievementCatalog {
   static String categorySubtitle(AchievementCategory cat) {
     switch (cat) {
       case AchievementCategory.tutorial:
-        return 'Ачівки за освоєння додатку';
+        return 'Досягнення за опанування застосунку';
       case AchievementCategory.casual:
         return 'Легкі ситуативні досягнення';
       case AchievementCategory.survival:
-        return 'Ачівки за стійкість та час без світла';
+        return 'Досягнення за стійкість і час без світла';
       case AchievementCategory.oracle:
-        return 'Графіки vs Реальність';
+        return 'Графіки проти реальності';
       case AchievementCategory.lifestyle:
         return 'Ситуативні та кумедні досягнення';
       case AchievementCategory.secret:

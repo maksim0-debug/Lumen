@@ -167,7 +167,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('−40 хв'), findsOneWidget);
     expect(find.text('−5,6%'), findsOneWidget);
-    expect(find.text('Світла менше за графік'), findsOneWidget);
+    expect(find.text('Світла менше, ніж за графіком'), findsOneWidget);
   });
 
   testWidgets('zero balance does not claim that switching times matched',
@@ -227,7 +227,7 @@ void main() {
     await tester.tap(find.text('Сьогодні'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Від 00:00 до 14:20'), findsOneWidget);
-    expect(find.textContaining('Сьогодні світло було'), findsOneWidget);
+    expect(find.textContaining('Сьогодні світла було'), findsOneWidget);
   });
 
   testWidgets(

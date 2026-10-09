@@ -323,8 +323,8 @@ class _SettingsPageState extends State<SettingsPage> {
       initiallyExpanded: true,
       children: [
         _buildSwitchTile(
-          "Автозапуск при старті Windows",
-          "Запускати програму автоматично при вході в систему",
+          "Автозапуск разом із Windows",
+          "Запускати застосунок автоматично під час входу в систему",
           _launchAtStartup,
           (val) async {
             setState(() => _launchAtStartup = val);
@@ -432,7 +432,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _buildNotificationSubBlock(
           icon: Icons.notifications_active_outlined,
           title: "До відключення світла",
-          subtitle: "Кожне нагадування можна ввімкнути окремо",
+          subtitle: "Кожне нагадування можна увімкнути окремо",
           chips: [
             _buildNotificationChip(
               label: "1 година",
@@ -464,7 +464,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _buildNotificationSubBlock(
           icon: Icons.lightbulb_outline,
           title: "До відновлення світла",
-          subtitle: "Кожне нагадування можна ввімкнути окремо",
+          subtitle: "Кожне нагадування можна увімкнути окремо",
           chips: [
             _buildNotificationChip(
               label: "1 година",
@@ -492,7 +492,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         const SizedBox(height: 4),
         _buildSwitchTile(
-          "Зміна графіку",
+          "Зміна графіка",
           "Сповіщення, якщо кількість годин зі світлом змінилась",
           _notifyScheduleChange,
           (val) {
@@ -503,7 +503,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         _buildSwitchTile(
           "Графік на завтра",
-          "Сповіщення при публікації або зміні графіка на наступний день",
+          "Сповіщення у разі публікації чи зміни графіка на наступний день",
           _notifyTomorrowSchedule,
           (val) {
             setState(() => _notifyTomorrowSchedule = val);
@@ -513,7 +513,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         _buildSwitchTile(
           "Екстрені відключення",
-          "Сповіщення при введенні або скасуванні екстрених відключень",
+          "Сповіщення у разі запровадження або скасування екстрених відключень",
           _notifyEmergencyOutages,
           (val) {
             setState(() => _notifyEmergencyOutages = val);
@@ -615,7 +615,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
     return SettingsCard(
       key: const ValueKey('card_power_monitor'),
-      title: "Моніторинг 220В",
+      title: "Моніторинг 220 В",
       subtitle: "Підключення реального моніторингу електромережі",
       icon: Icons.monitor_heart_outlined,
       persistenceKey: 'settings_card_power_monitor_expanded',
@@ -669,9 +669,9 @@ class _SettingsPageState extends State<SettingsPage> {
             child: DropdownButtonFormField<int>(
               initialValue: _powerMonitorTtlMinutes,
               decoration: InputDecoration(
-                labelText: 'Таймаут застарівання даних (TTL)',
+                labelText: 'Час до застарівання даних (TTL)',
                 helperText:
-                    'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN. Для сенсорів без регулярного пінгу оберіть "Вимкнено".',
+                    'Якщо сенсор мовчить понад цей час, статус стає UNKNOWN. Для сенсорів без регулярного пінгу оберіть «Вимкнено».',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
@@ -749,7 +749,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return SettingsCard(
       key: const ValueKey('card_backup'),
       title: "Резервне копіювання (Beta)",
-      subtitle: "Зберігайте, відновлюйте та переносіть історію",
+      subtitle: "Зберігайте, відновлюйте та переносьте історію",
       icon: Icons.cloud_outlined,
       persistenceKey: 'settings_card_backup_expanded',
       initiallyExpanded: _cardBackupExpanded,
@@ -814,7 +814,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text(
-                      "Базу даних успішно відновлено! Перезапустіть додаток для оновлення даних."),
+                      "Базу даних успішно відновлено! Перезапустіть застосунок для оновлення даних."),
                 ),
               );
             } catch (e) {
@@ -876,7 +876,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                        "Успішно додано записів: $count. Перезапустіть додаток."),
+                        "Успішно додано записів: $count. Перезапустіть застосунок."),
                   ),
                 );
               }
@@ -892,7 +892,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         ListTile(
           leading: const Icon(Icons.edit_calendar),
-          title: const Text("Ручне редагування графіку"),
+          title: const Text("Ручне редагування графіка"),
           subtitle: const Text("Створити або змінити дані історії"),
           trailing: const Icon(Icons.arrow_forward_ios, size: 14),
           onTap: () {
@@ -995,7 +995,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         SnackBar(
                           content: Text(
                             success
-                                ? 'Сервер перезапущено на порті $newPort'
+                                ? 'Сервер перезапущено на порту $newPort'
                                 : (apiService.lastError ??
                                     'Помилка перезапуску сервера'),
                           ),

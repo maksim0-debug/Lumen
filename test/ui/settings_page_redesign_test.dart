@@ -61,7 +61,7 @@ void main() {
     // Verify main card headers exist
     expect(find.text('Оформлення та інтерфейс'), findsOneWidget);
     expect(find.text('Сповіщення'), findsOneWidget);
-    expect(find.text('Моніторинг 220В'), findsOneWidget);
+    expect(find.text('Моніторинг 220 В'), findsOneWidget);
     expect(find.text('Підключення реального моніторингу електромережі'),
         findsOneWidget);
     expect(find.text('Резервне копіювання (Beta)'), findsOneWidget);
@@ -91,14 +91,14 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getBool('notify_5m_before_off'), false);
 
-    expect(find.text('Зміна графіку'), findsOneWidget);
+    expect(find.text('Зміна графіка'), findsOneWidget);
     expect(find.text('Графік на завтра'), findsOneWidget);
 
-    // "Моніторинг 220В" is collapsed by default when disabled
+    // "Моніторинг 220 В" is collapsed by default when disabled
     expect(find.text('Реальний моніторинг'), findsNothing);
 
-    // Tap to expand "Моніторинг 220В"
-    await tester.tap(find.text('Моніторинг 220В'));
+    // Tap to expand "Моніторинг 220 В"
+    await tester.tap(find.text('Моніторинг 220 В'));
     await tester.pumpAndSettle();
 
     expect(find.text('Реальний моніторинг'), findsOneWidget);
@@ -130,7 +130,7 @@ void main() {
     expect(find.text('Відновити з файлу'), findsOneWidget);
     expect(find.text('Експорт історії за період (JSON)'), findsOneWidget);
     expect(find.text('Імпорт історії з JSON'), findsOneWidget);
-    expect(find.text('Ручне редагування графіку'), findsOneWidget);
+    expect(find.text('Ручне редагування графіка'), findsOneWidget);
 
     // Tap to expand "Журнал та діагностика"
     await tester.tap(find.text('Журнал та діагностика'));

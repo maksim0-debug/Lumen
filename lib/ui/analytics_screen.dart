@@ -203,7 +203,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       labelColor: accentColor,
       unselectedLabelColor: Colors.grey,
       tabs: const [
-        Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+        Tab(icon: Icon(Icons.dashboard), text: 'Огляд'),
         Tab(icon: Icon(Icons.fact_check), text: 'Точність'),
         Tab(icon: Icon(Icons.emoji_events), text: 'Рекорди'),
         Tab(icon: Icon(Icons.show_chart), text: 'Графіки'),
@@ -552,7 +552,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           const SizedBox(height: 24),
 
           // Worst days chart
-          _buildSectionTitle('📅 Худші дні тижня', isDark),
+          _buildSectionTitle('📅 Найгірші дні тижня', isDark),
           const SizedBox(height: 8),
           if (_worstDays != null && _worstDays!.isNotEmpty)
             _buildWorstDaysChart(isDark, accent)
@@ -643,7 +643,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                 final hours = rod.toY;
                 final h = hours.floor();
                 final m = ((hours - h) * 60).round();
-                final timeStr = h > 0 ? '$hг $mхв' : '$mхв';
+                final timeStr = h > 0 ? '$h год $m хв' : '$m хв';
 
                 return BarTooltipItem(
                   timeStr,
@@ -666,7 +666,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                 showTitles: true,
                 reservedSize: 32,
                 getTitlesWidget: (value, meta) {
-                  return Text('${value.toStringAsFixed(0)}г',
+                  return Text('${value.toStringAsFixed(0)} год',
                       style:
                           TextStyle(fontSize: 10, color: Colors.grey.shade500));
                 },
@@ -731,14 +731,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           Icons.work,
           'Робочий час (9:00–18:00)',
           p.totalWorkMinutes > 0
-              ? 'Втрачено ${p.lostWorkFormatted} з ${(p.totalWorkMinutes / 60).round()}г (${p.lostWorkPercentage.toStringAsFixed(0)}%)'
+              ? 'Втрачено ${p.lostWorkFormatted} із ${(p.totalWorkMinutes / 60).round()} год (${p.lostWorkPercentage.toStringAsFixed(0)}%)'
               : 'Немає даних',
           isDark,
         ),
         const SizedBox(height: 8),
         _buildInfoTile(
           Icons.nightlight_round,
-          'Вечірній досуг (19:00–23:00)',
+          'Вечірнє дозвілля (19:00–23:00)',
           p.totalEvenings > 0
               ? 'Зіпсовано вечорів: ${p.ruinedEvenings} з ${p.totalEvenings}'
               : 'Немає даних',
@@ -807,7 +807,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ],
         ),
         const SizedBox(height: 8),
-        Text('Годин без світла по дням',
+        Text('Години без світла за днями',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         const SizedBox(height: 12),
         if (_accuracyTrendReal != null &&
@@ -921,7 +921,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
 
   String _getAccuracyInsight(double pct) {
     if (pct >= 90) return 'ДТЕК майже не бреше! 👏';
-    if (pct >= 75) return 'Графік більш-менш відповідає 🤔';
+    if (pct >= 75) return 'Графік здебільшого відповідає факту 🤔';
     if (pct >= 50) return 'Графіку вірити не варто 😒';
     return 'Повний обман! 🤥';
   }
@@ -970,7 +970,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                       final m = ((d.outageHours - h) * 60).round();
                       final label = isReal ? 'Фактично' : 'За графіком';
                       return LineTooltipItem(
-                        '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$label\n$hг $mх',
+                        '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$label\n$h год $m хв',
                         TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
                           fontSize: 11,
@@ -1246,7 +1246,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           if (_records!.longestUptime != null)
             _buildRecordCard(
               '☀️',
-              'Найдовше світло',
+              'Найдовший період зі світлом',
               '${_records!.longestUptime!.durationFormatted} (${_records!.longestUptime!.dateFormatted})',
               Colors.green.shade400,
               isDark,
@@ -1438,7 +1438,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ],
         ),
         const SizedBox(height: 8),
-        Text('Годин без світла по дням',
+        Text('Години без світла за днями',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         const SizedBox(height: 12),
         if (_dailyTrend != null && _dailyTrend!.isNotEmpty)
@@ -1448,7 +1448,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         const SizedBox(height: 24),
 
         // Heatmap
-        _buildSectionTitle('🗓 Хітмеп активності', isDark),
+        _buildSectionTitle('🗓 Теплова карта активності', isDark),
         const SizedBox(height: 8),
         _buildHeatmapPeriodSelector(isDark),
         const SizedBox(height: 12),
@@ -1487,7 +1487,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                   final h = d.outageHours.floor();
                   final m = ((d.outageHours - h) * 60).round();
                   return LineTooltipItem(
-                    '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$hг $mх',
+                    '${d.date.day}.${d.date.month.toString().padLeft(2, '0')}\n$h год $m хв',
                     TextStyle(
                       color: isDark ? Colors.white : Colors.black87,
                       fontSize: 11,
@@ -1804,7 +1804,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         // Блок А: Фільтр періоду
         _buildSectionTitle('📊 Порівняння груп', isDark),
         const SizedBox(height: 8),
-        Text('Аналіз планових відключень по всім групам ДТЕК',
+        Text('Аналіз планових відключень для всіх груп ДТЕК',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         const SizedBox(height: 16),
 

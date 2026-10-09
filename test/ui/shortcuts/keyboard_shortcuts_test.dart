@@ -451,7 +451,7 @@ void main() {
 
       // Check header and initially visible categories
       expect(find.text('Гарячі клавіші керування'), findsOneWidget);
-      expect(find.text('📅 Навігація по датах'), findsOneWidget);
+      expect(find.text('📅 Навігація за датами'), findsOneWidget);
 
       // Scroll and verify subsequent categories
       await tester.scrollUntilVisible(
@@ -466,8 +466,8 @@ void main() {
       expect(find.text('🔄 Оновлення та версії'), findsOneWidget);
 
       await tester.scrollUntilVisible(
-          find.text('🧭 Швидкі переходи по екранах'), 100);
-      expect(find.text('🧭 Швидкі переходи по екранах'), findsOneWidget);
+          find.text('🧭 Швидкі переходи між екранами'), 100);
+      expect(find.text('🧭 Швидкі переходи між екранами'), findsOneWidget);
 
       await tester.scrollUntilVisible(
           find.text('📊 Навігація в Аналітиці'), 100);

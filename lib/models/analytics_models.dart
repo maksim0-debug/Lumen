@@ -17,17 +17,17 @@ class OutageStats {
   String get totalFormatted {
     final h = totalMinutes ~/ 60;
     final m = totalMinutes % 60;
-    if (h > 0 && m > 0) return '$hг $mхв';
-    if (h > 0) return '$hг';
-    return '$mхв';
+    if (h > 0 && m > 0) return '$h год $m хв';
+    if (h > 0) return '$h год';
+    return '$m хв';
   }
 
   String get avgFormatted {
     final h = avgDurationMinutes ~/ 60;
     final m = avgDurationMinutes % 60;
-    if (h > 0 && m > 0) return '$hг $mхв';
-    if (h > 0) return '$hг';
-    return '$mхв';
+    if (h > 0 && m > 0) return '$h год $m хв';
+    if (h > 0) return '$h год';
+    return '$m хв';
   }
 }
 
@@ -50,9 +50,9 @@ class OutageRecord {
   String get durationFormatted {
     final h = duration.inHours;
     final m = duration.inMinutes % 60;
-    if (h > 0 && m > 0) return '$hг $mхв';
-    if (h > 0) return '$hг';
-    return '$mхв';
+    if (h > 0 && m > 0) return '$h год $m хв';
+    if (h > 0) return '$h год';
+    return '$m хв';
   }
 
   String get dateFormatted {
@@ -158,9 +158,9 @@ class ProductivityStats {
   String get lostWorkFormatted {
     final h = lostWorkMinutes ~/ 60;
     final m = lostWorkMinutes % 60;
-    if (h > 0 && m > 0) return '$hг $mхв';
-    if (h > 0) return '$hг';
-    return '$mхв';
+    if (h > 0 && m > 0) return '$h год $m хв';
+    if (h > 0) return '$h год';
+    return '$m хв';
   }
 
   double get lostWorkPercentage =>
@@ -219,13 +219,13 @@ class GroupStats {
     return totalOffMinutes / totalPossible * 100;
   }
 
-  /// Форматований рядок тривалості (напр. "14г 30хв").
+  /// Форматований рядок тривалості (напр. "14 год 30 хв").
   String get totalFormatted {
     final h = totalOffMinutes ~/ 60;
     final m = totalOffMinutes % 60;
-    if (h > 0 && m > 0) return '$hг $mхв';
-    if (h > 0) return '$hг';
-    return '$mхв';
+    if (h > 0 && m > 0) return '$h год $m хв';
+    if (h > 0) return '$h год';
+    return '$m хв';
   }
 }
 

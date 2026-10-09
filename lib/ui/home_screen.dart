@@ -505,8 +505,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ScaffoldMessenger.of(context).hideCurrentSnackBar();
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content:
-                        Text("Інформацію про відключення скопійовано в буфер"),
+                    content: Text(
+                        "Інформацію про відключення скопійовано в буфер обміну"),
                     duration: Duration(seconds: 2),
                     behavior: SnackBarBehavior.floating,
                   ),

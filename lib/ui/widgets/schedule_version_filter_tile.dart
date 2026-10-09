@@ -23,7 +23,7 @@ class ScheduleVersionFilterTile extends ConsumerWidget {
       title: const Text('Приховувати версії без змін'),
       subtitle: preference.loadFailed
           ? const Text('Не вдалося прочитати налаштування. '
-              'Використано значення за замовчуванням.')
+              'Використано типове значення.')
           : compact
               ? null
               : const Text('Приховувати повторні публікації з однаковим '

@@ -289,7 +289,7 @@ class _ManualScheduleEditorState extends State<ManualScheduleEditor> {
         },
         child: Scaffold(
           appBar: AppBar(
-            title: const Text("Редактор графіку"),
+            title: const Text("Редактор графіка"),
             actions: [
               IconButton(
                 icon: const Icon(Icons.save),

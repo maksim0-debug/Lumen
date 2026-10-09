@@ -169,8 +169,8 @@ class _ScheduleDeviationSectionState extends State<ScheduleDeviationSection> {
             balance.deltaSeconds == 0
                 ? 'Сумарний час зі світлом збігся'
                 : balance.deltaSeconds > 0
-                    ? 'Світла більше за графік'
-                    : 'Світла менше за графік',
+                    ? 'Світла більше, ніж за графіком'
+                    : 'Світла менше, ніж за графіком',
             style: TextStyle(color: muted, fontSize: 13)),
         const SizedBox(height: 8),
         Wrap(
@@ -350,9 +350,9 @@ class _ScheduleDeviationSectionState extends State<ScheduleDeviationSection> {
     final prefix = balance.period == ScheduleDeviationPeriod.today
         ? 'Сьогодні'
         : balance.period == ScheduleDeviationPeriod.yesterday
-            ? 'Вчора'
+            ? 'Учора'
             : 'У середньому';
-    return '$prefix світло було на ${_magnitude(minutes)} хв '
+    return '$prefix світла було на ${_magnitude(minutes)} хв '
         '${minutes > 0 ? 'довше' : 'менше'}'
         '${balance.period.dayCount > 1 ? ' на день' : ''}, ніж за графіком.';
   }

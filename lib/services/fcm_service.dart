@@ -229,7 +229,7 @@ class FcmService {
       if (notifyAllowed && isGroupTargeted) {
         final notification = message.notification;
         final defaultTitle =
-            dayType == 'tomorrow' ? "Графік на завтра" : "Зміна графіку";
+            dayType == 'tomorrow' ? "Графік на завтра" : "Зміна графіка";
         final defaultBody = dayType == 'tomorrow'
             ? "Оновлено розклад на завтра"
             : "Оновлено розклад відключень";

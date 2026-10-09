@@ -117,7 +117,7 @@ class ShortcutHelpDialog extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    'Швидке керування додатком без миші',
+                                    'Швидке керування застосунком без миші',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: isDark

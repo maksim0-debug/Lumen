@@ -203,7 +203,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
   }
 
   String _getStatusText(double ratio) {
-    if (ratio >= 1.0) return 'Абсолютний Мастер Тьми!';
+    if (ratio >= 1.0) return 'Абсолютний майстер темряви!';
     if (ratio >= 0.75) return 'Легенда блекаутів!';
     if (ratio >= 0.50) return 'Досвідчений виживальник';
     if (ratio >= 0.25) return 'На правильному шляху';
@@ -523,7 +523,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
             // Опис
             Text(
               isSecret
-                  ? 'Це приховане досягнення. Продовжуйте користуватись додатком, щоб відкрити його!'
+                  ? 'Це приховане досягнення. Продовжуйте користуватися застосунком, щоб відкрити його!'
                   : ach.description,
               textAlign: TextAlign.center,
               style: TextStyle(
