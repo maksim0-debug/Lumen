@@ -199,7 +199,7 @@ Healthcheck and runtime module diagnostic status.
     "status": "healthy",
     "uptime_seconds": 3600,
     "started_at": "2026-10-04T02:10:00.000Z",
-    "app_version": "1.2.1",
+    "app_version": "1.3.0",
     "platform": "windows",
     "port": 18080,
     "host": "127.0.0.1"

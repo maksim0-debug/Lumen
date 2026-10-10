@@ -51,7 +51,7 @@ class AppInfoService {
     }
   }
 
-  /// Returns the formatted application version string (e.g. "1.2.1+11" or "1.2.1").
+  /// Returns the formatted application version string (e.g. "1.3.0+12" or "1.3.0").
   static Future<String> getAppVersion() async {
     final info = await getPackageInfo();
     final ver = info.version;

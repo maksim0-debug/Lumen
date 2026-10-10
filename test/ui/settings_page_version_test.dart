@@ -35,7 +35,7 @@ void main() {
       PackageInfo(
         appName: 'Lumen',
         packageName: 'lumen',
-        version: '1.2.1',
+        version: '1.3.0',
         buildNumber: '10',
         buildSignature: '',
       ),
@@ -89,10 +89,10 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    final versionFinder = find.text('Lumen v1.2.1+10');
+    final versionFinder = find.text('Lumen v1.3.0+10');
     expect(versionFinder, findsOneWidget);
     // Local metadata is displayed with an idle updater and no release request.
-    expect(find.text('Поточна версія: v1.2.1+10'), findsOneWidget);
+    expect(find.text('Поточна версія: v1.3.0+10'), findsOneWidget);
 
     final authorFinder = find.text('Розробник: @maksim0-debug');
     expect(authorFinder, findsOneWidget);
