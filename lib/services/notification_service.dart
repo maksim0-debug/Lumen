@@ -22,9 +22,12 @@ class NotificationService {
     return _instance!;
   }
 
-  NotificationService._internal() {
+  NotificationService._internal()
+      : _notificationsPlugin = FlutterLocalNotificationsPlugin() {
     AppLogger.d("Конструктор викликано", tag: 'NotificationService');
   }
+
+  NotificationService.forTesting(this._notificationsPlugin);
 
   /// Базовий ID для миттєвих сповіщень по групах (діапазон 9000000..9000011).
   /// Повністю ізольований від запланованих сповіщень (діапазон 0..1199999).
@@ -33,8 +36,7 @@ class NotificationService {
       immediateGroupNotificationBaseId + 12;
   static const int testNotificationId = immediateGroupNotificationBaseId + 13;
 
-  final FlutterLocalNotificationsPlugin _notificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notificationsPlugin;
 
   bool _isInitialized = false;
   Future<void>? _initFuture;
@@ -324,10 +326,18 @@ class NotificationService {
   }
 
   Future<void> scheduleNotificationsForToday(FullSchedule fullSchedule,
-      {String? groupName, bool cancelExisting = true}) async {
-    if (!_isInitialized) await init(requestPermissions: false);
-
+      {String? groupName,
+      bool cancelExisting = true,
+      bool rethrowOnError = false}) async {
     if (!Platform.isAndroid && !Platform.isWindows) return;
+    if (!_isInitialized) await init(requestPermissions: false);
+    if (rethrowOnError && !_isInitialized) {
+      throw StateError('Notification service could not initialize');
+    }
+    (Object, StackTrace)? failure;
+    void recordFailure(Object error, StackTrace stack) {
+      failure ??= (error, stack);
+    }
 
     SharedPreferences? prefs;
     try {
@@ -336,6 +346,7 @@ class NotificationService {
       AppLogger.w(
           "Error getting SharedPreferences in scheduleNotificationsForToday: $e",
           tag: 'NotificationService');
+      if (rethrowOnError) rethrow;
     }
 
     final bool fallback = prefs == null ? false : true;
@@ -362,12 +373,19 @@ class NotificationService {
           for (var p in pending) {
             await _notificationsPlugin.cancel(p.id);
           }
-        } catch (e) {
+        } catch (e, stack) {
+          recordFailure(e, stack);
           AppLogger.e("Помилка скасування",
               tag: 'NotificationService', error: e);
         }
       } else {
-        await _notificationsPlugin.cancelAll();
+        try {
+          await _notificationsPlugin.cancelAll();
+        } catch (error, stack) {
+          recordFailure(error, stack);
+          AppLogger.e('Cannot cancel previous reminders',
+              tag: 'NotificationService', error: error);
+        }
       }
     }
 
@@ -418,6 +436,7 @@ class NotificationService {
             title: "$titlePrefixСкоро відключення",
             body: "О $startTimeStr світла не буде (до $endTimeStr)",
             time: dueTime1h,
+            onError: recordFailure,
           );
         }
       }
@@ -434,6 +453,7 @@ class NotificationService {
             body:
                 "Через 30 хвилин ($startTimeStr) вимкнуть світло (до $endTimeStr)",
             time: dueTime30m,
+            onError: recordFailure,
           );
         }
       }
@@ -449,6 +469,7 @@ class NotificationService {
             title: "$titlePrefixУвага!",
             body: "Відключення через 5 хв ($startTimeStr) до $endTimeStr",
             time: dueTime5m,
+            onError: recordFailure,
           );
         }
       }
@@ -485,11 +506,13 @@ class NotificationService {
               title: "$titlePrefixСкоро ввімкнення",
               body: "О $endTimeStr світло мають увімкнути$onUntilStr",
               time: dueTimeOn1h,
+              onError: recordFailure,
             );
           }
-        } catch (e) {
+        } catch (e, stack) {
           AppLogger.w("⚠️ Помилка планування включення 1h: $e",
               tag: 'NotificationService');
+          recordFailure(e, stack);
         }
       }
 
@@ -503,17 +526,24 @@ class NotificationService {
               body:
                   "Через 30 хвилин ($endTimeStr) світло мають увімкнути$onUntilStr",
               time: dueTimeOn30m,
+              onError: recordFailure,
             );
           }
-        } catch (e) {
+        } catch (e, stack) {
           AppLogger.w("⚠️ Помилка планування включення 30m: $e",
               tag: 'NotificationService');
+          recordFailure(e, stack);
         }
       }
     }
 
     AppLogger.i("Планування для $groupName завершено",
         tag: 'NotificationService');
+    if (rethrowOnError) {
+      if (failure case final captured?) {
+        Error.throwWithStackTrace(captured.$1, captured.$2);
+      }
+    }
   }
 
   /// Отримати числовий індекс групи (0..11) для детермінованих ID сповіщень.
@@ -608,6 +638,7 @@ class NotificationService {
     required String title,
     required String body,
     required tz.TZDateTime time,
+    void Function(Object, StackTrace)? onError,
   }) async {
     try {
       await _notificationsPlugin.zonedSchedule(
@@ -634,9 +665,10 @@ class NotificationService {
       );
       AppLogger.d("✅ Заплановано: ID=$id, time=$time",
           tag: 'NotificationService');
-    } catch (e) {
+    } catch (e, stack) {
       AppLogger.e("Помилка планування ID=$id",
           tag: 'NotificationService', error: e);
+      onError?.call(e, stack);
     }
   }
 

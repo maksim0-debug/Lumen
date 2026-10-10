@@ -24,6 +24,94 @@ beforeEach(async () => {
 });
 after(() => { global.fetch = realFetch; });
 const options = { topic: 'group_gpv1_1', group: 'GPV1.1', title: 'test', body: 'test', eventId: 'event', targetDate: '2026-10-06' };
+
+function snapshotFixture() {
+  const { ALL_GROUPS, calendarDate, nextCalendarDate, parseUpdateTime } = require('../src/schedule.ts');
+  return { v: 1, journalId: 'test-journal', sequence: 1, todayDate: calendarDate(),
+    tomorrowDate: nextCalendarDate(calendarDate()), sourceVersion: parseUpdateTime('10.10.2026 10:00'),
+    sourceUpdatedAt: '10.10.2026 10:00', alerts: 16,
+    groups: Object.fromEntries(ALL_GROUPS.map(g => [g, ['012340123401234012340123', '0'.repeat(24)]])) };
+}
+
+test('all-group sync is data-only, NORMAL priority, compact and self-contained', async () => {
+  const snapshot = snapshotFixture();
+  const result = await fcm.sendFcmTopicNotification(account, { ...options, topic: 'lumen_schedules_v1',
+    group: 'ALL', changeType: 'schedule_snapshot', snapshot });
+  assert.equal(result.success, true);
+  const message = messages[0].message;
+  assert.equal(message.notification, undefined);
+  assert.equal(message.android.priority, 'NORMAL');
+  assert.equal(message.android.collapse_key, 'schedule_snapshot');
+  assert.deepEqual(JSON.parse(message.data.snapshot), snapshot);
+  assert.ok(Buffer.byteLength(JSON.stringify(message.data), 'utf8') <= 2048);
+});
+
+test('group event retains its full snapshot while legacy payload stays compatible', async () => {
+  const snapshot = snapshotFixture(), group = 'GPV1.1', hash = snapshot.groups[group][0];
+  const event = { ...options, changeType: 'schedule_updated', snapshot, group,
+    sourceVersion: snapshot.sourceVersion, targetDate: snapshot.todayDate,
+    scheduleHash: hash, dayType: 'today',
+    eventId: `${group}:${snapshot.todayDate}:${snapshot.sourceVersion}:${hash}` };
+  assert.equal((await fcm.sendFcmTopicNotification(account, event)).success, true);
+  const legacy = messages.find(p => p.message.notification).message;
+  const current = messages.find(p => !p.message.notification).message;
+  assert.equal(legacy.data.snapshot, undefined);
+  assert.deepEqual(JSON.parse(current.data.snapshot), snapshot);
+  assert.equal(current.android.priority, 'HIGH');
+  assert.equal(current.android.collapse_key, undefined);
+});
+
+test('mismatched group snapshot cannot send either audience', async () => {
+  const snapshot = snapshotFixture();
+  const hash = '1'.repeat(24), group = 'GPV1.1';
+  const result = await fcm.sendFcmTopicNotification(account, {
+    ...options, changeType: 'schedule_updated', snapshot,
+    group, sourceVersion: snapshot.sourceVersion, targetDate: snapshot.todayDate,
+    scheduleHash: hash,
+    eventId: `${group}:${snapshot.todayDate}:${snapshot.sourceVersion}:${hash}`,
+  });
+  assert.equal(result.success, false);
+  assert.equal(result.retryable, false);
+  assert.equal(fcmCalls, 0);
+  assert.equal(oauthCalls, 0);
+});
+
+test('malformed calendar dates cannot enter a compact snapshot envelope', async () => {
+  const snapshot = snapshotFixture();
+  snapshot.todayDate = '2026-02-30'; snapshot.tomorrowDate = '2026-03-03';
+  const result = await fcm.sendFcmTopicNotification(account, {
+    ...options, topic: 'lumen_schedules_v1', changeType: 'schedule_snapshot', snapshot,
+  });
+  assert.equal(result.success, false);
+  assert.equal(fcmCalls, 0);
+});
+
+test('oversize optional snapshot becomes a recovery reference and partial data is rejected', async () => {
+  const snapshot = snapshotFixture();
+  const value = { ...options, topic: 'lumen_schedules_v1', group: 'ALL',
+    changeType: 'schedule_snapshot', snapshot, body: 'x'.repeat(1000) };
+  assert.equal((await fcm.sendFcmTopicNotification(account, value)).success, true);
+  assert.equal(messages[0].message.data.snapshot, undefined);
+  assert.equal(messages[0].message.data.snapshotSequence, '1');
+  const invalid = structuredClone(snapshot);
+  delete invalid.groups['GPV6.2'];
+  const calls = fcmCalls;
+  const rejected = await fcm.sendFcmTopicNotification(account, { ...value, snapshot: invalid });
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.retryable, false);
+  assert.equal(fcmCalls, calls);
+});
+
+test('isolated snapshot QA requires a unique restricted target', async () => {
+  const value = { ...options, topic: 'lumen_schedules_v1', group: 'ALL',
+    changeType: 'schedule_snapshot', snapshot: snapshotFixture() };
+  assert.equal((await fcm.sendFcmTopicNotification(account, { ...value, snapshotTestTopic: 'emergency_alerts' })).success, false);
+  assert.equal(fcmCalls, 0);
+  const topic = `lumen_snapshot_qa_${'a'.repeat(32)}`;
+  assert.equal((await fcm.sendFcmTopicNotification(account, { ...value, snapshotTestTopic: topic })).success, true);
+  assert.equal(messages[0].message.topic, topic);
+  assert.equal(messages[0].message.android.priority, 'HIGH');
+});
 test('parallel FCM sends share one OAuth exchange and retain event metadata', async () => {
   const results = await Promise.all(Array.from({ length: 12 }, () => fcm.sendFcmTopicNotification(account, options)));
   assert.ok(results.every(r => r.success)); assert.equal(oauthCalls, 1); assert.equal(fcmCalls, 12);

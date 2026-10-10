@@ -106,6 +106,14 @@ class HomeNotifier extends Notifier<HomeState> {
     _fcmSubscription = FcmService.onMessageStream.listen((message) async {
       if (!ref.mounted) return;
       if (FcmTestNotificationService.isTest(message.data)) return;
+      if (message.data['snapshot'] != null ||
+          message.data['type'] == 'schedule_snapshot') {
+        final schedules = await _scheduleSyncService.loadCachedData();
+        if (ref.mounted && schedules.isNotEmpty) {
+          await _applySyncedSchedules(schedules);
+        }
+        return;
+      }
       if (EmergencyPush.isEmergency(message.data)) {
         await refreshEmergencyStatus();
         if (ref.mounted &&
@@ -738,6 +746,11 @@ class HomeNotifier extends Notifier<HomeState> {
 
   Future<void> _applySnapshot(Map<String, FullSchedule> allData) async {
     if (!ref.mounted) return;
+    if (Platform.isAndroid) {
+      final current = await _scheduleSyncService.loadCachedData();
+      if (!ref.mounted) return;
+      if (current.isNotEmpty) allData = current;
+    }
     final currentIsHistory = state.isHistoryMode;
     state = state.copyWith(
       allSchedules: allData,
@@ -854,6 +867,18 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- LOAD CACHED DATA ---
+  Future<void> refreshReceivedSchedules() async {
+    try {
+      final schedules = await _scheduleSyncService.loadCachedData();
+      if (ref.mounted && schedules.isNotEmpty) {
+        await _applySyncedSchedules(schedules);
+      }
+    } catch (error) {
+      AppLogger.e('Cannot reload received schedules on resume',
+          tag: 'HomeNotifier', error: error);
+    }
+  }
+
   Future<void> loadCachedData() async {
     await refreshEmergencyStatus();
     if (!ref.mounted) return;

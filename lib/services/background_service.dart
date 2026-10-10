@@ -9,9 +9,21 @@ import 'notification_service.dart';
 import 'history_service.dart';
 import 'preferences_helper.dart';
 import 'schedule_change_notification_service.dart';
+import 'schedule_ingestion_service.dart';
+import 'worker_schedule_service.dart';
 import '../models/schedule_status.dart';
 
 const String taskUpdateSchedule = 'taskUpdateSchedule';
+const String taskApplySchedules = 'taskApplySchedules';
+
+Future<void> enqueueLocalScheduleWork() => Workmanager().registerOneOffTask(
+    'apply_received_schedules', taskApplySchedules,
+    // The installed Android adapter maps append to APPEND_OR_REPLACE, so a
+    // final drain cannot lose a new revision arriving while an older job exits.
+    existingWorkPolicy: ExistingWorkPolicy.append);
+
+Future<bool> applyPendingSchedules() => ScheduleIngestionService()
+    .applyPending((schedules) => applyBackgroundSchedules(schedules));
 
 /// FCM only queues recovery work; displaying a push never waits for DTEK/WAF.
 Future<void> enqueueScheduleRefresh() =>
@@ -22,57 +34,74 @@ Future<void> enqueueScheduleRefresh() =>
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) =>
-      AndroidFetchDiagnostics.instance.run(
-          source: inputData?['diagnostic_source'] as String? ??
-              'workmanager_legacy',
-          execution: 'workmanager',
-          fields: {'task': task},
-          action: () async {
-            try {
-              await HistoryService()
-                  .logAction('Бекграунд завдання запущено: $task');
-              if (task != taskUpdateSchedule) {
-                AndroidFetchDiagnostics.current?.event('worker_result', {
-                  'result': 'success',
-                  'reason': 'unrecognized_task',
-                });
-                return true;
-              }
-              final schedules =
-                  await ParserService.background().fetchAllSchedules();
-              if (schedules.isEmpty) {
-                AndroidFetchDiagnostics.current?.event(
-                    'worker_result',
-                    {
-                      'result': 'retry',
-                      'reason': 'empty_schedule',
-                    },
-                    level: AppLogLevel.warning);
-                AppLogger.w('Background schedule refresh returned no data',
-                    tag: 'Background');
-                return false;
-              }
-              await applyBackgroundSchedules(schedules);
-              await HistoryService().logAction('Бекграунд завдання завершено');
+  Workmanager().executeTask((task, inputData) async {
+    return AndroidFetchDiagnostics.instance.run(
+        source: inputData?['diagnostic_source'] as String? ??
+            (task == taskApplySchedules
+                ? 'apply_schedules'
+                : 'workmanager_legacy'),
+        execution: 'workmanager',
+        fields: {'task': task},
+        action: () async {
+          if (task == taskApplySchedules) return await applyPendingSchedules();
+          try {
+            await HistoryService()
+                .logAction('Бекграунд завдання запущено: $task');
+            if (task != taskUpdateSchedule) {
               AndroidFetchDiagnostics.current?.event('worker_result', {
                 'result': 'success',
-                'groups': schedules.length,
+                'reason': 'unrecognized_task',
               });
               return true;
-            } catch (error, stack) {
+            }
+            await applyPendingSchedules();
+            Map<String, FullSchedule> schedules;
+            try {
+              schedules = await WorkerScheduleService().fetch();
+              AndroidFetchDiagnostics.current?.event('worker_source', {
+                'source': 'worker_schedule_service',
+              });
+            } catch (error) {
+              AppLogger.w('Worker unavailable; using direct schedule parser',
+                  tag: 'Background', error: error.runtimeType);
+              AndroidFetchDiagnostics.current?.event('worker_source_fallback', {
+                'reason': error.runtimeType.toString(),
+              });
+              schedules = await ParserService.background().fetchAllSchedules();
+            }
+            if (schedules.isEmpty) {
               AndroidFetchDiagnostics.current?.event(
                   'worker_result',
                   {
                     'result': 'retry',
-                    ...AndroidFetchDiagnostics.errorFields(error),
+                    'reason': 'empty_schedule',
                   },
-                  level: AppLogLevel.error);
-              AppLogger.e('Background schedule refresh failed',
-                  tag: 'Background', error: error, stackTrace: stack);
+                  level: AppLogLevel.warning);
+              AppLogger.w('Background schedule refresh returned no data',
+                  tag: 'Background');
               return false;
             }
-          }));
+            await applyBackgroundSchedules(schedules);
+            await HistoryService().logAction('Бекграунд завдання завершено');
+            AndroidFetchDiagnostics.current?.event('worker_result', {
+              'result': 'success',
+              'groups': schedules.length,
+            });
+            return true;
+          } catch (error, stack) {
+            AndroidFetchDiagnostics.current?.event(
+                'worker_result',
+                {
+                  'result': 'retry',
+                  ...AndroidFetchDiagnostics.errorFields(error),
+                },
+                level: AppLogLevel.error);
+            AppLogger.e('Background schedule refresh failed',
+                tag: 'Background', error: error, stackTrace: stack);
+            return false;
+          }
+        });
+  });
 }
 
 /// Shared by periodic polling and FCM recovery, with injectable side effects.
@@ -110,6 +139,8 @@ Future<void> applyBackgroundSchedules(
   }
 
   // Complete independent refreshes before reporting failure to Workmanager.
+  await attempt('widget refresh',
+      () => (widgets ?? WidgetService()).updateWidget(schedules));
   await attempt(
       'change notifications',
       () => (changes ?? ScheduleChangeNotificationService())
@@ -130,11 +161,11 @@ Future<void> applyBackgroundSchedules(
       await attempt(
           'reminders for $group',
           () => notifier.scheduleNotificationsForToday(schedule,
-              groupName: group, cancelExisting: cancelExisting));
+              groupName: group,
+              cancelExisting: cancelExisting,
+              rethrowOnError: true));
     }
   });
-  await attempt('widget refresh',
-      () => (widgets ?? WidgetService()).updateWidget(schedules));
   if (failure case final captured?) {
     Error.throwWithStackTrace(captured.$1, captured.$2);
   }
@@ -162,6 +193,10 @@ class BackgroundManager {
     if (kIsWeb || (defaultTargetPlatform == TargetPlatform.windows)) return;
 
     try {
+      enqueueLocalScheduleWork().catchError((Object error) {
+        AppLogger.e('Cannot enqueue pending local schedule work',
+            tag: 'BackgroundManager', error: error);
+      });
       Workmanager().registerPeriodicTask(
         "periodic_update_task",
         taskUpdateSchedule,

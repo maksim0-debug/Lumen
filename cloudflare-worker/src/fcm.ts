@@ -3,6 +3,8 @@
  * Does not require external npm dependencies or heavy libraries.
  */
 
+import { fitsTopicPayload, SNAPSHOT_TOPIC, validateCompactSnapshot } from './snapshot';
+
 export interface ServiceAccount {
   project_id: string;
   client_email: string;
@@ -211,6 +213,8 @@ export interface FcmMessageOptions {
   observedAt?: number;
   expiresAt?: number;
   testAudience?: 'group' | 'emergency';
+  snapshot?: import('./snapshot').CompactSnapshot;
+  snapshotTestTopic?: string;
 }
 
 /**
@@ -234,6 +238,15 @@ export async function sendFcmTopicNotification(
       options.eventId !== `${options.group}:${options.targetDate}:${sourceVersion}:${options.scheduleHash}`) {
     return { success: false, error: 'Invalid schedule event', retryable: false };
   }
+  if (options.snapshot) {
+    try { validateCompactSnapshot(options.snapshot); }
+    catch { return { success: false, error: 'Invalid compact snapshot', retryable: false }; }
+    if (options.snapshot.sourceVersion !== sourceVersion ||
+        options.snapshot[options.dayType === 'tomorrow' ? 'tomorrowDate' : 'todayDate'] !== options.targetDate ||
+        options.snapshot.groups[options.group]?.[options.dayType === 'tomorrow' ? 1 : 0] !== options.scheduleHash) {
+      return { success: false, error: 'Event does not match its snapshot', retryable: false };
+    }
+  }
   const deliveredModes = [...(options.deliveredModes ?? [])];
   const missing = (['legacy', 'client'] as const).filter(mode => !deliveredModes.includes(mode));
   const results = await Promise.all(missing.map(async mode => ({ mode, result: await sendFcmMessage(
@@ -254,7 +267,19 @@ async function sendFcmMessage(
   try {
     const emergency = options.changeType === 'emergency_alert';
     const diagnostic = options.changeType === 'test';
-    const dataOnly = emergency || diagnostic || clientSchedule;
+    const snapshotSync = options.changeType === 'schedule_snapshot';
+    if (options.snapshotTestTopic && (!snapshotSync ||
+        !/^lumen_snapshot_qa_[a-f0-9]{32}$/.test(options.snapshotTestTopic))) {
+      return { success: false, error: 'Invalid isolated snapshot target', retryable: false };
+    }
+    const dataOnly = emergency || diagnostic || clientSchedule || snapshotSync;
+    if (options.snapshot) {
+      try { validateCompactSnapshot(options.snapshot); }
+      catch { return { success: false, error: 'Invalid compact snapshot', retryable: false }; }
+    }
+    if (snapshotSync && (!options.snapshot || options.topic !== SNAPSHOT_TOPIC)) {
+      return { success: false, error: 'Invalid snapshot sync', retryable: false };
+    }
     if (diagnostic && !['group', 'emergency'].includes(options.testAudience ?? '')) {
       return { success: false, error: 'Invalid test audience', retryable: false };
     }
@@ -283,7 +308,7 @@ async function sendFcmMessage(
           condition: `${options.testAudience === 'group'
             ? `('${options.topic}' in topics || '${groupToTopic(options.group, options.dayType, true)}' in topics)`
             : `'${options.topic}' in topics`} && '${DIAGNOSTIC_CLIENT_TOPIC}' in topics`,
-        } : { topic: clientSchedule ? groupToTopic(options.group, options.dayType, true) : options.topic }),
+        } : { topic: options.snapshotTestTopic ?? (clientSchedule ? groupToTopic(options.group, options.dayType, true) : options.topic) }),
         ...(!dataOnly ? { notification: {
           title: options.title,
           body: options.body,
@@ -316,9 +341,9 @@ async function sendFcmMessage(
           } : {}),
         },
         android: {
-          priority: 'HIGH',
+          priority: snapshotSync && !options.snapshotTestTopic ? 'NORMAL' : 'HIGH',
           ttl: `${ttl}s`,
-          ...(dataOnly ? (emergency ? { collapse_key: 'emergency_status' } : {}) : { notification: {
+          ...(dataOnly ? (snapshotSync ? { collapse_key: 'schedule_snapshot' } : emergency ? { collapse_key: 'emergency_status' } : {}) : { notification: {
             // Re-delivery after an uncertain acknowledgement replaces the same system notification.
             ...(options.eventId ? { tag: options.eventId } : {}),
             channel_id: 'schedule_channel',
@@ -334,6 +359,24 @@ async function sendFcmMessage(
         },
       },
     };
+
+    // Legacy clients keep their original payload. Updated clients can consume
+    // a frozen full publication without contacting DTEK.
+    if ((clientSchedule || snapshotSync) && options.snapshot) {
+      const data: Record<string, string> = payload.message.data;
+      data.snapshot = JSON.stringify(options.snapshot);
+      if (!fitsTopicPayload(data)) {
+        delete data.snapshot;
+        data.snapshotSequence = String(options.snapshot.sequence);
+        data.snapshotJournal = options.snapshot.journalId;
+      }
+    }
+    if (!fitsTopicPayload(payload.message.data) && emergency) {
+      delete payload.message.data.noticeText;
+    }
+    if (!fitsTopicPayload(payload.message.data)) {
+      return { success: false, error: 'Topic payload exceeds 2048 bytes', retryable: false };
+    }
 
     const response = await fetch(url, {
       signal: AbortSignal.timeout(8_000),

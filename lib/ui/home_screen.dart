@@ -1,6 +1,7 @@
 import '../services/schedule_clock.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -129,6 +130,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _ticker.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed && mounted) {
       setState(() {});
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        ref.read(homeNotifierProvider.notifier).refreshReceivedSchedules();
+      }
     }
   }
 

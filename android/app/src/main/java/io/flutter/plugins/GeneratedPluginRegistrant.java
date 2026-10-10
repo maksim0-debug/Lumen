@@ -56,6 +56,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin lumen_android_diagnostics, ua.maksim0.lumen.diagnostics.AndroidDiagnosticsPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new ua.maksim0.lumen.widgets.WidgetSnapshotPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin lumen_schedule_widgets, ua.maksim0.lumen.widgets.WidgetSnapshotPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin package_info_plus, dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin", e);

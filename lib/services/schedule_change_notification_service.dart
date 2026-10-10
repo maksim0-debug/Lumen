@@ -1,4 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import '../models/schedule_snapshot.dart';
 
 import '../models/schedule_change_event.dart';
 import '../models/schedule_status.dart';
@@ -70,6 +72,42 @@ class ScheduleChangeNotificationService {
               event.targetDate
           ? prefs.getString('prev_hash_${event.group}_${event.dayType}')
           : null;
+
+  /// Stage delivery decisions in the same transaction as the source snapshot.
+  Future<void> stageSnapshot(DatabaseExecutor txn, ScheduleSnapshot snapshot,
+      {bool fromPush = false,
+      ScheduleChangeEvent? trigger,
+      bool alreadyDisplayed = false}) async {
+    final prefs = await _preferences();
+    await prefs.reload();
+    await ScheduleChangeNotificationStore.createSchema(txn);
+    for (final group in PreferencesHelper.getActiveNotificationGroups(prefs)) {
+      final value = snapshot.schedules[group];
+      if (value == null) continue;
+      for (final dayType in ['today', 'tomorrow']) {
+        final event = ScheduleChangeEvent(
+            group: group,
+            targetDate:
+                dayType == 'today' ? snapshot.todayDate : snapshot.tomorrowDate,
+            sourceVersion: snapshot.sourceVersion,
+            dayType: dayType,
+            hash: (dayType == 'today' ? value.today : value.tomorrow)
+                .scheduleHash,
+            allowWithdrawal: true);
+        final observation = await _store.observeIn(txn, event,
+            nowMs: _now().millisecondsSinceEpoch,
+            fromPush: fromPush &&
+                (snapshot.alertsFor(group, dayType) || trigger?.id == event.id),
+            handled: !_allowed(prefs, event) ||
+                (alreadyDisplayed && trigger?.id == event.id),
+            legacyHash: _legacyHash(prefs, event));
+        if (observation == ScheduleNotificationObservation.rejected) {
+          throw const FormatException(
+              'Snapshot precedes known notification publication');
+        }
+      }
+    }
+  }
 
   Future<void> observeSchedules(Map<String, FullSchedule> schedules,
       {bool deliver = true}) async {

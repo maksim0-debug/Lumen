@@ -280,6 +280,7 @@ class HistoryService {
     required String todayDate,
     required String tomorrowDate,
     required String dtekUpdatedAt,
+    Future<void> Function(Transaction)? afterPersist,
   }) async {
     final db = await database;
     final incoming = ScheduleClock.parseVersion(dtekUpdatedAt);
@@ -350,19 +351,30 @@ class HistoryService {
             }
           }
           // An empty tomorrow is persisted as a tombstone; archived publications remain available.
-          if (day.$2.isEmpty &&
-              (rows.isEmpty || rows.first['schedule_code'] == '9' * 24)) {
+          if (day.$2.isEmpty && rows.isEmpty) {
             continue;
           }
-          if (rows.isNotEmpty &&
-              rows.first['schedule_code'] == day.$2.toEncodedString() &&
-              rows.first['dtek_updated_at'] == dtekUpdatedAt) {
+          Map<String, dynamic>? existing;
+          for (final row in rows) {
+            if (row['schedule_code'] != day.$2.toEncodedString()) continue;
+            try {
+              if (ScheduleClock.parseVersion(
+                      row['dtek_updated_at'] as String) ==
+                  incoming) {
+                existing = row;
+                break;
+              }
+            } on FormatException {
+              // Manual/time-only rows are separate from source publications.
+            }
+          }
+          if (existing != null) {
             await txn.insert(
                 'dtek_current_schedule',
                 {
                   'group_key': entry.key,
                   'target_date': day.$1,
-                  'history_id': rows.first['id'],
+                  'history_id': existing['id'],
                 },
                 conflictAlgorithm: ConflictAlgorithm.replace);
             continue;
@@ -392,6 +404,7 @@ class HistoryService {
             'fingerprint': fingerprint,
           },
           conflictAlgorithm: ConflictAlgorithm.replace);
+      await afterPersist?.call(txn);
     });
   }
 
@@ -448,9 +461,31 @@ class HistoryService {
     final rows = await db.query('schedule_history',
         where: 'group_key = ? AND target_date = ?',
         whereArgs: [group, date],
-        orderBy: 'id DESC',
-        limit: 1);
-    return rows.isEmpty ? null : rows.single;
+        orderBy: 'id DESC');
+    if (rows.isEmpty) return null;
+    var latest = rows.first;
+    int? version(Map<String, dynamic> row) {
+      try {
+        return ScheduleClock.parseVersion(row['dtek_updated_at'] as String);
+      } on FormatException {
+        return null;
+      }
+    }
+
+    // Archive recovery inserts old publications after new ones. Without a
+    // current pointer, use source chronology; retain legacy/manual ID ordering.
+    final firstVersion = version(latest);
+    if (firstVersion != null) {
+      var best = firstVersion;
+      for (final row in rows.skip(1)) {
+        final candidate = version(row);
+        if (candidate != null && candidate > best) {
+          latest = row;
+          best = candidate;
+        }
+      }
+    }
+    return latest;
   }
 
   Future<String?> getLatestUpdatedAt({
@@ -482,6 +517,26 @@ class HistoryService {
 
     final effectiveLatest = await _effectiveLatest(db, groupKey, dateStr);
     final orderedMaps = List<Map<String, dynamic>>.of(maps);
+    // Recovery can insert older publications after a newer live push. Keep
+    // source publications chronological while preserving legacy/manual slots.
+    int? sourceVersion(Map<String, dynamic> row) {
+      try {
+        return ScheduleClock.parseVersion(row['dtek_updated_at'] as String);
+      } on FormatException {
+        return null;
+      }
+    }
+
+    final sourceRows = orderedMaps
+        .where((row) => sourceVersion(row) != null)
+        .toList()
+      ..sort((a, b) => sourceVersion(a)!.compareTo(sourceVersion(b)!));
+    var sourceIndex = 0;
+    for (var i = 0; i < orderedMaps.length; i++) {
+      if (sourceVersion(orderedMaps[i]) != null) {
+        orderedMaps[i] = sourceRows[sourceIndex++];
+      }
+    }
     if (effectiveLatest != null) {
       orderedMaps.removeWhere((row) => row['id'] == effectiveLatest['id']);
       orderedMaps.add(effectiveLatest);

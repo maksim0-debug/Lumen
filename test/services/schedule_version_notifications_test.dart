@@ -23,7 +23,9 @@ class RecordingNotifications extends Fake implements NotificationService {
 
   @override
   Future<void> scheduleNotificationsForToday(FullSchedule schedule,
-      {String? groupName, bool cancelExisting = true}) async {}
+      {String? groupName,
+      bool cancelExisting = true,
+      bool rethrowOnError = false}) async {}
 }
 
 void main() {

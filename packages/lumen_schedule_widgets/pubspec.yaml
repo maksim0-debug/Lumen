@@ -1,0 +1,15 @@
+name: lumen_schedule_widgets
+description: Atomic, version-aware Android schedule widget updates.
+version: 1.0.0
+publish_to: none
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: ua.maksim0.lumen.widgets
+        pluginClass: WidgetSnapshotPlugin

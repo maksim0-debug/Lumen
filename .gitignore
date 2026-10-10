@@ -78,6 +78,7 @@ nuget.exe
 
 changes.txt
 .agents
+.agent
 release.jks
 
 # Cloudflare Worker & Secrets
@@ -85,6 +86,7 @@ release.jks
 # Generated APKs, isolated device QA projects, and local test evidence
 /artifacts/notification-device-qa/
 /artifacts/notification-qa/
+/artifacts/snapshot-device-qa/
 /android/.kotlin/
 cloudflare-worker/node_modules/
 .wrangler/

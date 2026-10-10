@@ -24,7 +24,7 @@ Background notification failures do not block independent reminder groups or wid
 
 The Worker persists the successfully accepted audience in its outbox. Partial-delivery retries send only to the remaining audience. Emergency alerts and diagnostics retain their separate behavior; group diagnostics target either schedule topic generation together with the diagnostic capability topic.
 
-Run the Flutter regression suite from the repository root with `dart .agents/tools/test_runner.dart`. `tool/run_schedule_notification_device_qa.ps1 -DeviceId <adb-device-id>` builds and runs an isolated Android package using the production parser, delivery state, FCM handlers and notification plugin. Its FCM inputs are deterministic fixtures, not live Google transport; the runner checks actual Android notification cards without modifying the installed Lumen application's data.
+Run the Flutter regression suite from the repository root with `flutter test`. `tool/run_schedule_notification_device_qa.ps1 -DeviceId <adb-device-id>` builds and runs an isolated Android package using the production parser, delivery state, FCM handlers and notification plugin. Its FCM inputs are deterministic fixtures, not live Google transport; the runner checks actual Android notification cards without modifying the installed Lumen application's data.
 
 ## Налаштування та оновлення
 
@@ -85,4 +85,4 @@ Emergency FCM messages use `type=emergency_alert`, `isEmergency`, `observedAt`, 
 
 DTEK does not provide an independent signed version for its notice. Capture ordering and cancellation confirmation reduce stale-source risk but cannot prove that arbitrary upstream HTML reflects the latest real-world status. FCM acceptance also does not prove device delivery; validate foreground/background delivery on a real Android device after deploying the matching client and Worker.
 
-Parser regression cases are small synthetic strings in `test/fixtures/emergency_status_cases.json`, shared by Dart, Worker and Python. The local `.agents/shutdowns2.txt` capture is ignored by Git and is not a test dependency.
+Parser regression cases are small synthetic strings in `test/fixtures/emergency_status_cases.json`, shared by Dart, Worker and Python. Tests do not depend on local website captures.

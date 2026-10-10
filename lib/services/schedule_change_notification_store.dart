@@ -58,70 +58,79 @@ class ScheduleChangeNotificationStore {
       bool fromPush = false,
       bool handled = false,
       String? legacyHash}) async {
-    return _transaction((txn) async {
-      final rows = await txn.query('schedule_notification_state',
-          where: _where, whereArgs: _args(event));
-      final old = rows.isEmpty ? null : rows.single;
-      if (old != null) {
-        final version = old['source_version'] as int;
-        if (event.sourceVersion < version) {
-          return ScheduleNotificationObservation.rejected;
-        }
-        if (event.sourceVersion == version &&
-            event.hash != old['schedule_hash']) {
-          throw const FormatException(
-              'Conflicting schedule notification version');
-        }
+    return _transaction((txn) => observeIn(txn, event,
+        nowMs: nowMs,
+        fromPush: fromPush,
+        handled: handled,
+        legacyHash: legacyHash));
+  }
+
+  Future<ScheduleNotificationObservation> observeIn(
+      DatabaseExecutor txn, ScheduleChangeEvent event,
+      {required int nowMs,
+      bool fromPush = false,
+      bool handled = false,
+      String? legacyHash}) async {
+    final rows = await txn.query('schedule_notification_state',
+        where: _where, whereArgs: _args(event));
+    final old = rows.isEmpty ? null : rows.single;
+    if (old != null) {
+      final version = old['source_version'] as int;
+      if (event.sourceVersion < version) {
+        return ScheduleNotificationObservation.rejected;
       }
-      final validLegacy =
-          legacyHash != null && RegExp(r'^[0-4]{24}$').hasMatch(legacyHash);
-      final previous =
-          old?['schedule_hash'] as String? ?? (validLegacy ? legacyHash : null);
-      final same = previous == event.hash;
-      final handledHash =
-          old?['handled_hash'] as String? ?? (validLegacy ? legacyHash : null);
-      final baseline = old == null && !fromPush && !validLegacy;
-      final consume = handled ||
-          baseline ||
-          event.isWithdrawal ||
-          handledHash == event.hash;
-      final next = <String, Object?>{
-        'group_key': event.group, 'target_date': event.targetDate,
-        'source_version': event.sourceVersion, 'schedule_hash': event.hash,
-        // Content-equivalent republications retain the pending transition.
-        'event_key': same && old != null ? old['event_key'] : event.id,
-        'handled_hash': consume ? event.hash : handledHash,
-        'handled_version': handled || baseline || event.isWithdrawal
-            ? event.sourceVersion
-            : old?['handled_version'] ?? 0,
-        'previous_hash': same && old != null ? old['previous_hash'] : previous,
-        'pending_since': consume
-            ? null
-            : ((same && old != null ? old['pending_since'] : null) ?? nowMs),
-        'claim_key': old?['claim_key'], 'claim_until': old?['claim_until'],
-      };
-      final result = next['pending_since'] == null
-          ? ScheduleNotificationObservation.settled
-          : ScheduleNotificationObservation.pending;
-      // Repeated polls and pushes must still expose pending recovery, but an
-      // identical settled observation needs neither a write nor a new claim.
-      if (old != null &&
-          next.entries.every((entry) => old[entry.key] == entry.value)) {
-        return result;
+      if (event.sourceVersion == version &&
+          event.hash != old['schedule_hash']) {
+        throw const FormatException(
+            'Conflicting schedule notification version');
       }
-      await txn.insert('schedule_notification_state', next,
-          conflictAlgorithm: ConflictAlgorithm.replace);
-      // State is bounded by calendar dates, not an evictable event-ID cache.
-      await txn.delete('schedule_notification_state',
-          where: 'target_date < ?',
-          whereArgs: [
-            DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true)
-                .subtract(const Duration(days: 7))
-                .toIso8601String()
-                .substring(0, 10)
-          ]);
+    }
+    final validLegacy =
+        legacyHash != null && RegExp(r'^[0-4]{24}$').hasMatch(legacyHash);
+    final previous =
+        old?['schedule_hash'] as String? ?? (validLegacy ? legacyHash : null);
+    final same = previous == event.hash;
+    final handledHash =
+        old?['handled_hash'] as String? ?? (validLegacy ? legacyHash : null);
+    final baseline = old == null && !fromPush && !validLegacy;
+    final consume =
+        handled || baseline || event.isWithdrawal || handledHash == event.hash;
+    final next = <String, Object?>{
+      'group_key': event.group, 'target_date': event.targetDate,
+      'source_version': event.sourceVersion, 'schedule_hash': event.hash,
+      // Content-equivalent republications retain the pending transition.
+      'event_key': same && old != null ? old['event_key'] : event.id,
+      'handled_hash': consume ? event.hash : handledHash,
+      'handled_version': handled || baseline || event.isWithdrawal
+          ? event.sourceVersion
+          : old?['handled_version'] ?? 0,
+      'previous_hash': same && old != null ? old['previous_hash'] : previous,
+      'pending_since': consume
+          ? null
+          : ((same && old != null ? old['pending_since'] : null) ?? nowMs),
+      'claim_key': old?['claim_key'], 'claim_until': old?['claim_until'],
+    };
+    final result = next['pending_since'] == null
+        ? ScheduleNotificationObservation.settled
+        : ScheduleNotificationObservation.pending;
+    // Repeated polls and pushes must still expose pending recovery, but an
+    // identical settled observation needs neither a write nor a new claim.
+    if (old != null &&
+        next.entries.every((entry) => old[entry.key] == entry.value)) {
       return result;
-    });
+    }
+    await txn.insert('schedule_notification_state', next,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    // State is bounded by calendar dates, not an evictable event-ID cache.
+    await txn.delete('schedule_notification_state',
+        where: 'target_date < ?',
+        whereArgs: [
+          DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true)
+              .subtract(const Duration(days: 7))
+              .toIso8601String()
+              .substring(0, 10)
+        ]);
+    return result;
   }
 
   Future<ScheduleNotificationClaim?> claim(ScheduleChangeEvent event,

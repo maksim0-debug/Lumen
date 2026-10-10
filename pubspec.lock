@@ -524,6 +524,13 @@ packages:
       relative: true
     source: path
     version: "0.0.1"
+  lumen_schedule_widgets:
+    dependency: "direct main"
+    description:
+      path: "packages/lumen_schedule_widgets"
+      relative: true
+    source: path
+    version: "1.0.0"
   matcher:
     dependency: transitive
     description:

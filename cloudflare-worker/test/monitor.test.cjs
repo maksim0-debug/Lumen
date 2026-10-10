@@ -7,12 +7,19 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 const fcm = require('../src/fcm.ts');
 const { ScheduleMonitor } = require('../src/monitor.ts');
 const { ALL_GROUPS, parseSnapshot, parseUpdateTime, readLimitedBody, MAX_HTML_BYTES } = require('../src/schedule.ts');
-let now, sent, outcome;
+let now, sent, outcome, snapshotSent, snapshotOutcome;
 const realNow = Date.now;
 beforeEach(() => {
   now = Date.parse('2026-10-06T12:00:00Z'); Date.now = () => now;
-  sent = []; outcome = { success: true, messageId: 'test' };
-  fcm.sendFcmTopicNotification = async (_, options) => { sent.push(options); return outcome; };
+  sent = []; snapshotSent = []; outcome = { success: true, messageId: 'test' };
+  snapshotOutcome = { success: true, messageId: 'snapshot-test' };
+  fcm.sendFcmTopicNotification = async (_, options) => {
+    if (options.changeType === 'schedule_snapshot') {
+      snapshotSent.push(structuredClone(options));
+      return snapshotOutcome;
+    }
+    sent.push(options); return outcome;
+  };
 });
 process.on('exit', () => { Date.now = realNow; });
 function fixture(update = '06.10.2026 10:00', status = 'yes', tomorrow = false) {
@@ -28,8 +35,15 @@ function fixture(update = '06.10.2026 10:00', status = 'yes', tomorrow = false) 
 const html = fact => `<script>DisconSchedule.fact = null; DisconSchedule.fact = ${JSON.stringify(fact)};</script>`;
 function setup(legacy = {}) {
   let record, alarm, writes = 0;
-  const storage = { get: async () => record && structuredClone(record),
-    put: async (_, value) => { record = structuredClone(value); writes++; },
+  const publications = new Map();
+  const storage = { get: async key => key === 'monitor-v1' ? record && structuredClone(record) : publications.get(key),
+    put: async (key, value) => {
+      if (key === 'monitor-v1') { record = structuredClone(value); writes++; }
+      else publications.set(key, structuredClone(value));
+    },
+    delete: async key => publications.delete(key),
+    list: async ({ prefix, start, limit }) => new Map([...publications.entries()]
+      .filter(([key]) => key.startsWith(prefix) && key >= start).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit)),
     setAlarm: async value => { alarm = value; }, deleteAlarm: async () => { alarm = undefined; },
     transaction: async task => task(storage) };
   const env = { SCHEDULE_KV: { get: async key => legacy[key] ?? null, put: async () => { throw Error('KV writes forbidden'); } },
@@ -468,4 +482,124 @@ test('calendar rollback cannot replace a newer-day baseline even with the same s
   const before = structuredClone(s.record()); now = Date.parse('2026-10-06T20:55:00Z');
   assert.equal((await s.send(fixture('07.10.2026 00:00', 'no'))).status, 'stale_snapshot');
   assert.deepEqual(s.record(), before);
+});
+
+test('journal publishes full snapshots even when only an unselected group changes', async () => {
+  const s = setup();
+  await s.send(fixture());
+  const next = fixture('06.10.2026 11:00');
+  next.data[next.today]['GPV6.2']['1'] = 'first';
+  await s.send(next);
+  assert.equal(snapshotSent.length, 2);
+  const publication = snapshotSent[1].snapshot;
+  assert.equal(Object.keys(publication.groups).length, 12);
+  assert.equal(publication.groups['GPV6.2'][0][0], '2');
+  assert.equal(publication.groups['GPV6.2'][1], null);
+  assert.equal(publication.alerts, 1 << 22);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].snapshot, publication);
+  await s.send(next);
+  assert.equal(snapshotSent.length, 2);
+});
+
+test('journal pages retain A B A, metadata-only publications and immutable retry snapshots', async () => {
+  const s = setup();
+  await s.send(fixture());
+  outcome = { success: false, error: 'transient', retryable: true };
+  await s.send(fixture('06.10.2026 11:00', 'no'));
+  // Group keys contain a dot and the retry must retain its original publication.
+  const frozen = structuredClone(s.record().groups['state_GPV1.1'].pending.options.snapshot);
+  await s.send(fixture('06.10.2026 12:00', 'no'));
+  assert.equal(s.record().groups['state_GPV1.1'].pending.options.snapshot.sequence, 2);
+  assert.deepEqual(s.record().groups['state_GPV1.1'].pending.options.snapshot, frozen);
+  outcome = { success: true, messageId: 'ok' };
+  await s.send(fixture('06.10.2026 13:00', 'yes'));
+  const first = await (await s.monitor.fetch(new Request('https://internal/api/v1/publications?limit=2'))).json();
+  assert.equal(first.hasMore, true);
+  assert.deepEqual(first.publications.map(p => p.sequence), [1, 2]);
+  const second = await (await s.monitor.fetch(new Request(`https://internal/api/v1/publications?after=${first.nextAfter}&limit=2`))).json();
+  assert.deepEqual(second.publications.map(p => p.groups['GPV1.1'][0]), ['1'.repeat(24), '0'.repeat(24)]);
+  assert.equal(second.hasMore, false);
+  assert.equal(second.gap, false);
+});
+
+test('stale, conflicting and dry-run sources cannot append journal records', async () => {
+  const s = setup();
+  await s.send(fixture('06.10.2026 12:00'));
+  await s.send(fixture('06.10.2026 11:00', 'no'));
+  await s.send(fixture('06.10.2026 12:00', 'no'));
+  await s.send(fixture('06.10.2026 13:00', 'no'), 'test', true);
+  const result = await (await s.monitor.fetch(new Request('https://internal/api/v1/publications'))).json();
+  assert.equal(result.publications.length, 1);
+  assert.equal(result.latestSequence, 1);
+  const invalid = await s.monitor.fetch(new Request('https://internal/api/v1/publications?after=-1'));
+  assert.equal(invalid.status, 400);
+  const reset = await (await s.monitor.fetch(new Request('https://internal/api/v1/publications?after=10'))).json();
+  assert.equal(reset.reset, true);
+  assert.equal(reset.gap, true);
+});
+
+test('journal retention is bounded and reports a gap instead of silently skipping history', async () => {
+  const { JOURNAL_LIMIT } = require('../src/snapshot.ts');
+  const s = setup();
+  const base = Date.parse('2026-10-06T07:00:00Z');
+  for (let i = 0; i <= JOURNAL_LIMIT; i++) {
+    const date = new Date(base + i * 1000);
+    const update = `06.10.2026 ${String(date.getUTCHours() + 3).padStart(2, '0')}:` +
+      `${String(date.getUTCMinutes()).padStart(2, '0')}:${String(date.getUTCSeconds()).padStart(2, '0')}`;
+    await s.send(fixture(update));
+  }
+  assert.equal((await s.storage.list({ prefix: 'publication:', start: '', limit: 10000 })).size, JOURNAL_LIMIT);
+  const result = await (await s.monitor.fetch(new Request('https://internal/api/v1/publications?after=0&limit=2'))).json();
+  assert.equal(result.gap, true);
+  assert.equal(result.oldestSequence, 2);
+  assert.deepEqual(result.publications.map(p => p.sequence), [2, 3]);
+});
+
+test('global snapshot outbox survives transient failures and retries after restart', async () => {
+  const s = setup();
+  snapshotOutcome = { success: false, retryable: true, error: 'FCM offline' };
+  assert.equal((await s.send(fixture())).status, 'delivery_pending');
+  assert.equal(s.record().pendingSnapshot.options.snapshot.sequence, 1);
+  const latest = await (await s.monitor.fetch(new Request('https://internal/api/v1/snapshot'))).json();
+  assert.equal(latest.snapshot.sequence, 1);
+  assert.equal(latest.lastCheckedAt, now);
+  now = s.record().pendingSnapshot.nextAttemptAt + 1;
+  snapshotOutcome = { success: true, messageId: 'retry' };
+  const restarted = new ScheduleMonitor({ storage: s.storage }, s.env);
+  await restarted.alarm();
+  assert.equal(snapshotSent.length, 2);
+  assert.deepEqual(snapshotSent[0].snapshot, snapshotSent[1].snapshot);
+  assert.equal(s.record().pendingSnapshot, undefined);
+  assert.equal(s.alarm(), undefined);
+});
+
+test('read-only API can return committed state while FCM delivery is stalled', async () => {
+  const s = setup();
+  let release;
+  snapshotOutcome = new Promise(resolve => { release = resolve; });
+  const sending = s.send(fixture());
+  await new Promise(resolve => setImmediate(resolve));
+  const reading = s.monitor.fetch(new Request('https://internal/api/v1/snapshot'));
+  const response = await Promise.race([reading,
+    new Promise(resolve => setTimeout(() => resolve(null), 500))]);
+  release({ success: true, messageId: 'released' });
+  await sending;
+  assert.ok(response, 'Recovery API waited for FCM network completion');
+  assert.equal((await response.json()).snapshot.sequence, 1);
+});
+
+test('new global publication replaces pending delivery while journal retains both', async () => {
+  const s = setup();
+  snapshotOutcome = { success: false, retryable: true, error: 'offline' };
+  await s.send(fixture());
+  await s.send(fixture('06.10.2026 11:00', 'no'));
+  assert.equal(s.record().pendingSnapshot.options.snapshot.sequence, 2);
+  assert.equal(sent.length, 12); // Urgent group alerts are independent.
+  snapshotOutcome = { success: false, retryable: false, error: 'permanent' };
+  now = s.record().pendingSnapshot.nextAttemptAt + 1;
+  await s.monitor.alarm();
+  assert.equal(s.record().pendingSnapshot, undefined);
+  const page = await (await s.monitor.fetch(new Request('https://internal/api/v1/publications'))).json();
+  assert.deepEqual(page.publications.map(p => p.sequence), [1, 2]);
 });

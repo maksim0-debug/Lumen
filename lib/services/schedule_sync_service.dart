@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
@@ -6,6 +7,7 @@ import 'android_fetch_diagnostics.dart';
 import 'history_service.dart';
 import 'parser_service.dart';
 import 'schedule_calculation_service.dart';
+import 'worker_schedule_service.dart';
 
 enum ScheduleSyncStatus {
   success,
@@ -108,10 +110,22 @@ class ScheduleSyncService {
 
   /// Завантаження свіжих даних з мережі через ParserService.
   Future<Map<String, FullSchedule>> fetchAllSchedules() async {
-    final allData = await _parser.fetchAllSchedules();
+    final allData = await _fetchSchedules();
     if (allData.isEmpty) throw Exception("Пустий список");
     lastFetchTime = DateTime.now();
     return allData;
+  }
+
+  Future<Map<String, FullSchedule>> _fetchSchedules() async {
+    if (Platform.isAndroid) {
+      try {
+        return await WorkerScheduleService().fetch();
+      } catch (error) {
+        AppLogger.w('Worker schedules unavailable; using DTEK parser',
+            tag: 'ScheduleSync', error: error.runtimeType);
+      }
+    }
+    return _parser.fetchAllSchedules();
   }
 
   Future<ParserFetchResult> fetchSnapshotAndPublish() async {
@@ -165,7 +179,7 @@ class ScheduleSyncService {
     _isFetching = true;
 
     try {
-      final allData = await _parser.fetchAllSchedules();
+      final allData = await _fetchSchedules();
       if (allData.isEmpty) throw Exception("Пустий список");
 
       lastFetchTime = DateTime.now();
@@ -231,7 +245,7 @@ class ScheduleSyncService {
 
       onBeforeFetch();
 
-      final allData = await _parser.fetchAllSchedules();
+      final allData = await _fetchSchedules();
       if (allData.isEmpty) {
         AndroidFetchDiagnostics.current
             ?.event('sync_empty_schedule', {}, level: AppLogLevel.warning);

@@ -3,6 +3,7 @@ import { FcmMessageOptions, getServiceAccount, groupToTopic, sendFcmTopicNotific
 import { ALL_GROUPS, calendarDate, formatDiffMessage, nextCalendarDate, parseSnapshot, parseUpdateTime,
   PayloadError, ScheduleDay, ScheduleSnapshot } from './schedule';
 import type { Env } from './index';
+import { compactSnapshot, JOURNAL_LIMIT, publicationKey, SNAPSHOT_TOPIC, validateCompactSnapshot, type CompactSnapshot } from './snapshot';
 
 export interface MonitoringReport {
   timestamp: string;
@@ -46,6 +47,9 @@ interface MonitorState {
   snapshot?: { calendarDate: string; version: number; fingerprint: string };
   emergency?: EmergencyState;
   pendingEmergency?: PendingMessage;
+  publication?: CompactSnapshot;
+  pendingSnapshot?: PendingMessage;
+  lastScheduleCheck?: number;
 }
 const STORAGE_KEY = 'monitor-v1';
 
@@ -70,6 +74,9 @@ export class ScheduleMonitor {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // Readers use a consistent storage transaction, independent of FCM network
+    // delivery. A slow group send cannot stall every client's recovery API.
+    if (request.method === 'GET') return this.readPublications(new URL(request.url));
     return this.enqueue(async () => {
       const input = await request.json() as { html: string; source: string; dryRun: boolean; observedAt?: number };
       const result = report(input.source, input.dryRun);
@@ -168,6 +175,62 @@ export class ScheduleMonitor {
       for (const group of ALL_GROUPS) delete next.groups[keyFor(group, 'tomorrow')];
     }
     next.snapshot = { calendarDate: today, version: snapshot.updateAt, fingerprint };
+    next.lastScheduleCheck = Date.now();
+    if (!stored.publication || stored.snapshot?.calendarDate !== today ||
+        stored.snapshot.version !== snapshot.updateAt || stored.snapshot.fingerprint !== fingerprint) {
+      const publication = compactSnapshot(snapshot, stored.publication?.journalId ?? crypto.randomUUID(),
+        (stored.publication?.sequence ?? 0) + 1);
+      for (const group of Object.values(next.groups)) {
+        const options = group.pending?.options;
+        if (options?.sourceVersion === publication.sourceVersion) {
+          publication.alerts |= 1 << (ALL_GROUPS.indexOf(options.group) * 2 + (options.dayType === 'tomorrow' ? 1 : 0));
+        }
+      }
+      next.publication = publication;
+      next.pendingSnapshot = { calendarDate: today, attempts: 0, nextAttemptAt: Date.now(), options: {
+        topic: SNAPSHOT_TOPIC, group: 'ALL', changeType: 'schedule_snapshot', title: '', body: '',
+        snapshot: publication, eventId: `${publication.journalId}:${publication.sequence}`,
+      } };
+      for (const group of Object.values(next.groups)) {
+        const options = group.pending?.options;
+        if (options && options.sourceVersion === publication.sourceVersion && !options.snapshot) {
+          options.snapshot = publication;
+        }
+      }
+    }
+  }
+
+  private async readPublications(url: URL): Promise<Response> {
+    return this.state.storage.transaction(async storage => {
+      const stored = await storage.get<MonitorState>(STORAGE_KEY);
+      const latest = stored?.publication;
+      if (latest) validateCompactSnapshot(latest);
+      const headers = { 'Cache-Control': 'no-store' };
+      if (url.pathname === '/api/v1/snapshot') {
+        return Response.json({ snapshot: latest ?? null, lastCheckedAt: stored?.lastScheduleCheck ?? null },
+          { status: latest ? 200 : 503, headers });
+      }
+      const rawAfter = url.searchParams.get('after') ?? '0';
+      const rawLimit = url.searchParams.get('limit') ?? '32';
+      if (!/^\d{1,16}$/.test(rawAfter) || !/^\d{1,3}$/.test(rawLimit) ||
+          !Number.isSafeInteger(Number(rawAfter)) || Number(rawLimit) < 1 || Number(rawLimit) > 64) {
+        return Response.json({ error: 'Invalid pagination' }, { status: 400, headers });
+      }
+      const after = Number(rawAfter), limit = Number(rawLimit);
+      const oldest = Math.max(1, (latest?.sequence ?? 0) - JOURNAL_LIMIT + 1);
+      const reset = after > (latest?.sequence ?? 0) ||
+        (url.searchParams.has('journalId') && url.searchParams.get('journalId') !== latest?.journalId);
+      const gap = reset || (after !== 0 && after < oldest - 1) || (after === 0 && oldest > 1);
+      const start = reset ? oldest : Math.max(oldest, after + 1);
+      const entries = latest ? await storage.list<CompactSnapshot>({
+        prefix: 'publication:', start: publicationKey(start), limit: limit + 1,
+      }) : new Map<string, CompactSnapshot>();
+      const publications = [...entries.values()].slice(0, limit);
+      return Response.json({ journalId: latest?.journalId ?? null, publications, gap, reset,
+        oldestSequence: latest ? oldest : 0, latestSequence: latest?.sequence ?? 0,
+        nextAfter: publications.at(-1)?.sequence ?? (reset ? 0 : after), hasMore: entries.size > limit,
+      }, { headers });
+    });
   }
 
   private async load(_snapshot?: ScheduleSnapshot): Promise<MonitorState> {
@@ -176,6 +239,7 @@ export class ScheduleMonitor {
       if (stored.schemaVersion !== 1 || !stored.groups || typeof stored.groups !== 'object') {
         throw new Error('Unsupported or corrupt monitor state');
       }
+      if (stored.publication) validateCompactSnapshot(stored.publication);
       if (stored.snapshot && (!Number.isSafeInteger(stored.snapshot.version) || stored.snapshot.version < 0 ||
           !/^\d{4}-\d{2}-\d{2}$/.test(stored.snapshot.calendarDate) || typeof stored.snapshot.fingerprint !== 'string')) {
         throw new Error('Corrupt snapshot metadata');
@@ -298,19 +362,48 @@ export class ScheduleMonitor {
 
   private async persist(stored: MonitorState): Promise<void> {
     const pending = [
+      ...(stored.pendingSnapshot ? [stored.pendingSnapshot.nextAttemptAt] : []),
       ...Object.values(stored.groups).flatMap(g => g.pending ? [g.pending.nextAttemptAt] : []),
       ...(stored.pendingEmergency ? [Math.min(stored.pendingEmergency.nextAttemptAt,
         stored.pendingEmergency.options.expiresAt!)] : []),
     ];
     await this.state.storage.transaction(async transaction => {
       await transaction.put(STORAGE_KEY, stored);
+      if (stored.publication) {
+        const key = publicationKey(stored.publication.sequence);
+        if (!await transaction.get(key)) await transaction.put(key, stored.publication);
+        if (stored.publication.sequence > JOURNAL_LIMIT) {
+          await transaction.delete(publicationKey(stored.publication.sequence - JOURNAL_LIMIT));
+        }
+      }
       if (pending.length > 0) await transaction.setAlarm(Math.max(Date.now() + 1000, Math.min(...pending)));
       else await transaction.deleteAlarm();
     });
   }
 
+  private async deliverSnapshot(stored: MonitorState, result: MonitoringReport): Promise<void> {
+    const account = getServiceAccount(this.env.FIREBASE_SERVICE_ACCOUNT);
+    if (stored.pendingSnapshot && stored.pendingSnapshot.nextAttemptAt <= Date.now()) {
+      const message = stored.pendingSnapshot;
+      const outcome = account ? await sendFcmTopicNotification(account, message.options)
+        : { success: false, error: 'FIREBASE_SERVICE_ACCOUNT is missing or invalid' };
+      if (outcome.success || outcome.retryable === false) {
+        delete stored.pendingSnapshot;
+        if (!outcome.success) {
+          result.errors.push(`snapshot: ${outcome.error}`);
+          result.status = 'delivery_failed';
+        }
+      } else {
+        message.nextAttemptAt = Date.now() + retryDelay(++message.attempts);
+        result.errors.push(`snapshot: ${outcome.error}`);
+      }
+    }
+  }
+
   private async deliver(stored: MonitorState, result: MonitoringReport): Promise<void> {
     const account = getServiceAccount(this.env.FIREBASE_SERVICE_ACCOUNT);
+    // Synchronization must not add a network timeout before urgent alerts.
+    const snapshotDelivery = this.deliverSnapshot(stored, result);
     if (stored.pendingEmergency && (stored.pendingEmergency.options.expiresAt! <= Date.now() ||
         stored.pendingEmergency.options.isEmergency !== stored.emergency?.active ||
         (stored.pendingEmergency.options.isPossible ?? false) !== (stored.emergency?.isPossible ?? false) ||
@@ -365,8 +458,9 @@ export class ScheduleMonitor {
         }
       }));
     }
+    await snapshotDelivery;
     await this.persist(stored);
-    if (Object.values(stored.groups).some(g => g.pending) || stored.pendingEmergency) result.status = 'delivery_pending';
+    if (Object.values(stored.groups).some(g => g.pending) || stored.pendingEmergency || stored.pendingSnapshot) result.status = 'delivery_pending';
   }
 
   async alarm(): Promise<void> {

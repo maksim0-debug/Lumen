@@ -2,6 +2,8 @@ import { DIAGNOSTIC_CLIENT_TOPIC, getServiceAccount, groupToTopic, sendFcmTopicN
 import { ALL_GROUPS, DTEK_URL, MAX_HTML_BYTES, PayloadError, readLimitedBody } from './schedule';
 import type { MonitoringReport } from './monitor';
 import { EMERGENCY_TOPIC } from './emergency';
+import { compactSnapshot, SNAPSHOT_TOPIC } from './snapshot';
+import { parseSnapshot } from './schedule';
 export { ALL_GROUPS } from './schedule';
 export { ScheduleMonitor } from './monitor';
 export type { MonitoringReport } from './monitor';
@@ -85,15 +87,41 @@ export default {
   },
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (['/api/v1/snapshot', '/api/v1/publications'].includes(url.pathname)) {
+      if (request.method !== 'GET') return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } });
+      const object = env.SCHEDULE_MONITOR.get(env.SCHEDULE_MONITOR.idFromName('dtek-krem'));
+      try { return await object.fetch(`https://monitor.internal${url.pathname}${url.search}`); }
+      catch { return Response.json({ error: 'Schedule service unavailable' }, { status: 503 }); }
+    }
     if (url.pathname === '/') return Response.json({ app: 'Lumen Schedule Monitor', interval: '5 minutes',
-      endpoints: ['/check', '/check-html', '/test-push'], authorization: 'X-Admin-Key or Bearer token',
+      endpoints: ['/check', '/check-html', '/test-push', '/test-snapshot', '/api/v1/snapshot', '/api/v1/publications'],
+      authorization: 'X-Admin-Key or Bearer token for administrative endpoints',
       maxHtmlBytes: MAX_HTML_BYTES });
-    if (!['/check', '/check-html', '/test-push'].includes(url.pathname)) return new Response('Not Found', { status: 404 });
+    if (!['/check', '/check-html', '/test-push', '/test-snapshot'].includes(url.pathname)) return new Response('Not Found', { status: 404 });
     if (!await isAuthorized(request, env)) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-    const allowed = url.pathname === '/check-html' ? ['POST'] : ['GET', 'POST'];
+    const allowed = ['/check-html', '/test-snapshot'].includes(url.pathname) ? ['POST'] : ['GET', 'POST'];
     if (!allowed.includes(request.method)) return Response.json({ error: 'Method Not Allowed' },
       { status: 405, headers: { Allow: allowed.join(', ') } });
     try {
+      if (url.pathname === '/test-snapshot') {
+        const topic = url.searchParams.get('topic') ?? '';
+        const sequence = Number(url.searchParams.get('sequence') ?? '1');
+        const alerts = Number(url.searchParams.get('alerts') ?? '0');
+        if (!/^lumen_snapshot_qa_[a-f0-9]{32}$/.test(topic) || !Number.isSafeInteger(sequence) || sequence < 1 ||
+            !Number.isInteger(alerts) || alerts < 0 || alerts > 0xffffff) {
+          return Response.json({ error: 'Invalid isolated snapshot test' }, { status: 400 });
+        }
+        const snapshot = compactSnapshot(parseSnapshot(await readLimitedBody(request.body)),
+          topic.slice('lumen_snapshot_qa_'.length), sequence);
+        snapshot.alerts = alerts;
+        const account = getServiceAccount(env.FIREBASE_SERVICE_ACCOUNT);
+        if (!account) return Response.json({ error: 'Firebase credentials unavailable' }, { status: 503 });
+        const outcome = await sendFcmTopicNotification(account, {
+          topic: SNAPSHOT_TOPIC, snapshotTestTopic: topic, group: 'ALL', changeType: 'schedule_snapshot',
+          title: '', body: '', snapshot, eventId: `${snapshot.journalId}:${sequence}`,
+        });
+        return Response.json({ outcome, sequence }, { status: outcome.success ? 200 : 502 });
+      }
       if (url.pathname === '/check') return reportResponse(await runMonitoringCheck(env));
       if (url.pathname === '/check-html') {
         const declared = request.headers.get('Content-Length');

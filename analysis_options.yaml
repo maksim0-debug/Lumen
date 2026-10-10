@@ -1,5 +1,6 @@
 analyzer:
   exclude:
+    - artifacts/snapshot-device-qa/**
     - build/**
     - android/**
     - ios/**

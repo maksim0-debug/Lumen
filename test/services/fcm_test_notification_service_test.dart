@@ -312,20 +312,23 @@ void main() {
   test('diagnostic capability supplements the actual enabled subscriptions',
       () async {
     expect(FcmService.topicsForPreferences(prefs), {
+      'lumen_schedules_v1',
       'group_gpv1_1_v2_tomorrow',
       'emergency_alerts',
       'lumen_diagnostics_v1',
     });
     await prefs.setBool('notify_tomorrow_schedule', false);
     expect(FcmService.topicsForPreferences(prefs), {
+      'lumen_schedules_v1',
       'emergency_alerts',
       'lumen_diagnostics_v1',
     });
     await prefs.setBool('notify_emergency_outages', false);
-    expect(FcmService.topicsForPreferences(prefs), isEmpty);
+    expect(FcmService.topicsForPreferences(prefs), {'lumen_schedules_v1'});
     await prefs.setBool('notify_schedule_change', true);
     await prefs.setStringList('notification_groups', ['GPV1.1', 'GPV3.2']);
     expect(FcmService.topicsForPreferences(prefs), {
+      'lumen_schedules_v1',
       'group_gpv1_1_v2',
       'group_gpv3_2_v2',
       'lumen_diagnostics_v1',

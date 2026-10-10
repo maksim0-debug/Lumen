@@ -27,6 +27,7 @@ class _Notifications implements NotificationService {
   final attempts = <String>[];
   final cancellations = <bool>[];
   bool? permissionRequest;
+  bool? strictErrors;
   _Notifications({this.initFailure, this.failingGroup});
 
   @override
@@ -37,7 +38,10 @@ class _Notifications implements NotificationService {
 
   @override
   Future<void> scheduleNotificationsForToday(FullSchedule schedule,
-      {String? groupName, bool cancelExisting = true}) async {
+      {String? groupName,
+      bool cancelExisting = true,
+      bool rethrowOnError = false}) async {
+    strictErrors = rethrowOnError;
     attempts.add(groupName!);
     cancellations.add(cancelExisting);
     if (groupName == failingGroup) throw StateError('Reminder failed');
@@ -89,6 +93,7 @@ void main() {
     expect(notifications.attempts, ['GPV2.1', 'GPV1.1']);
     expect(notifications.cancellations, [true, false]);
     expect(notifications.permissionRequest, false);
+    expect(notifications.strictErrors, true);
     expect(widgets.received, same(schedules));
   });
 

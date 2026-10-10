@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'achievement_service.dart';
 import 'app_logger.dart';
 import 'android_fetch_diagnostics.dart';
+import 'schedule_sync_service.dart';
 import 'parser_service.dart';
 import 'widget_service.dart';
 
@@ -20,8 +21,9 @@ Future<void> backgroundCallback(Uri? uri) async {
           } catch (_) {}
           final widgetService = WidgetService();
           try {
-            final parser = ParserService.background();
-            final allSchedules = await parser.fetchAllSchedules();
+            final allSchedules =
+                await ScheduleSyncService(parser: ParserService.background())
+                    .fetchAllSchedules();
             if (allSchedules.isNotEmpty) {
               AndroidFetchDiagnostics.current?.event('widget_fetch_result', {
                 'groups': allSchedules.length,
@@ -38,7 +40,6 @@ Future<void> backgroundCallback(Uri? uri) async {
                 'widget_fetch_error', AndroidFetchDiagnostics.errorFields(e),
                 level: AppLogLevel.error);
             AppLogger.e("Error refreshing widget", tag: 'Background', error: e);
-
             await widgetService.clearAllLoadingStates();
           }
         });

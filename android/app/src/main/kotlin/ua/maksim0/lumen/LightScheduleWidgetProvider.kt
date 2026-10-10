@@ -12,6 +12,7 @@ import android.view.View
 import android.widget.RemoteViews
 import es.antonborri.home_widget.HomeWidgetPlugin
 import java.util.Calendar
+import org.json.JSONObject
 
 abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
 
@@ -139,8 +140,22 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
                 }
             }
 
-            val scheduleString = widgetData.getString(scheduleKey, "") ?: ""
-            val lastUpdate = widgetData.getString("last_update_time", "--:--")
+            var scheduleString = widgetData.getString(scheduleKey, "") ?: ""
+            var lastUpdate = widgetData.getString("last_update_time", "--:--")
+            val snapshotRaw = widgetData.getString("schedule_snapshot", null)
+            if (snapshotRaw != null) {
+                val snapshot = JSONObject(snapshotRaw)
+                val currentDate = "%04d-%02d-%02d".format(
+                    calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH) + 1,
+                    calendar.get(Calendar.DAY_OF_MONTH))
+                val pair = snapshot.getJSONObject("groups").optJSONArray(selectedGroup)
+                scheduleString = when (currentDate) {
+                    snapshot.getString("todayDate") -> pair?.optString(0) ?: "9".repeat(24)
+                    snapshot.getString("tomorrowDate") -> pair?.optString(1) ?: "9".repeat(24)
+                    else -> "9".repeat(24)
+                }
+                lastUpdate = snapshot.getString("sourceUpdatedAt").substringAfterLast(' ')
+            }
 
             val views = RemoteViews(context.packageName, R.layout.widget_schedule)
 

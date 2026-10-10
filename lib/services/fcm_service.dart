@@ -12,6 +12,52 @@ import 'schedule_change_notification_service.dart';
 import 'background_service.dart';
 import '../models/emergency_status.dart';
 import 'emergency_notification_service.dart';
+import '../models/schedule_snapshot.dart';
+import '../models/schedule_change_event.dart';
+import 'schedule_ingestion_service.dart';
+
+/// Full snapshots are applied locally. Legacy events retain network recovery.
+@visibleForTesting
+Future<bool> handleSnapshotPush(Map<String, dynamic> data,
+    {ScheduleIngestionService? ingestion,
+    bool alreadyDisplayed = false,
+    Future<bool> Function()? applyLocal,
+    Future<void> Function()? enqueueLocal,
+    Future<void> Function()? recover}) async {
+  if (data['snapshot'] == null && data['type'] != 'schedule_snapshot') {
+    return false;
+  }
+  final service = ingestion ?? ScheduleIngestionService();
+  try {
+    final snapshot =
+        ScheduleSnapshot.parse(data['snapshot'], now: service.now());
+    final trigger = data['type'] == 'schedule_snapshot'
+        ? null
+        : ScheduleChangeEvent.fromPush(data, service.now());
+    await service.ingest(snapshot,
+        fromPush: true, trigger: trigger, alreadyDisplayed: alreadyDisplayed);
+  } on FormatException catch (error) {
+    AppLogger.w('Snapshot push rejected; scheduling API recovery',
+        tag: 'FCM', error: error);
+    await (recover ?? enqueueScheduleRefresh)();
+    return true;
+  } catch (error, stack) {
+    AppLogger.e('Cannot persist snapshot push',
+        tag: 'FCM', error: error, stackTrace: stack);
+    await (recover ?? enqueueScheduleRefresh)();
+    return true;
+  }
+  try {
+    if (!await (applyLocal ?? applyPendingSchedules)()) {
+      await (enqueueLocal ?? enqueueLocalScheduleWork)();
+    }
+  } catch (error, stack) {
+    AppLogger.e('Received schedules saved; local effects pending',
+        tag: 'FCM', error: error, stackTrace: stack);
+    await (enqueueLocal ?? enqueueLocalScheduleWork)();
+  }
+  return true;
+}
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) =>
@@ -38,6 +84,11 @@ Future<void> handleFcmBackgroundMessage(RemoteMessage message,
     }
     if (EmergencyPush.isEmergency(message.data)) {
       await EmergencyNotificationService().handlePush(message.data);
+      return;
+    }
+    if (await handleSnapshotPush(message.data,
+        alreadyDisplayed: message.notification != null,
+        recover: refreshSchedules)) {
       return;
     }
     AppLogger.i(
@@ -79,6 +130,7 @@ class FcmService {
 
   static const String emergencyTopic = "emergency_alerts";
   static const String diagnosticClientTopic = 'lumen_diagnostics_v1';
+  static const String scheduleSyncTopic = 'lumen_schedules_v1';
 
   /// Потік отриманих FCM-повідомлень для реактивного оновлення UI
   static Stream<RemoteMessage> get onMessageStream =>
@@ -99,7 +151,7 @@ class FcmService {
   static Set<String> topicsForPreferences(SharedPreferences prefs) {
     final notificationGroups =
         PreferencesHelper.getActiveNotificationGroups(prefs);
-    final topics = <String>{};
+    final topics = <String>{scheduleSyncTopic};
     if (prefs.getBool('notify_schedule_change') ?? true) {
       for (final group in notificationGroups) {
         topics.add(groupToTopic(group, versioned: true));
@@ -113,7 +165,9 @@ class FcmService {
     if (prefs.getBool('notify_emergency_outages') ?? true) {
       topics.add(emergencyTopic);
     }
-    if (topics.isNotEmpty) topics.add(diagnosticClientTopic);
+    if (topics.any((topic) => topic != scheduleSyncTopic)) {
+      topics.add(diagnosticClientTopic);
+    }
     return topics;
   }
 
@@ -127,6 +181,10 @@ class FcmService {
     }
     if (EmergencyPush.isEmergency(message.data)) {
       await EmergencyNotificationService().handlePush(message.data);
+      _messageStreamController.add(message);
+      return;
+    }
+    if (await handleSnapshotPush(message.data)) {
       _messageStreamController.add(message);
       return;
     }

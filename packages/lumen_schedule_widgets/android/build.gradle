@@ -1,0 +1,14 @@
+group 'ua.maksim0.lumen.widgets'
+version '1.0'
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'ua.maksim0.lumen.widgets'
+    compileSdk 35
+    defaultConfig { minSdk 21 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
