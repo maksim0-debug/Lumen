@@ -15,7 +15,6 @@ import '../services/desktop_tray_coordinator.dart';
 import '../services/desktop_sync_service.dart';
 import '../services/parser_service.dart';
 import '../services/visible_schedule_ticker.dart';
-import 'package:flutter/foundation.dart';
 import '../services/preferences_helper.dart';
 import '../services/schedule_calculation_service.dart';
 import '../utils/app_formatters.dart';

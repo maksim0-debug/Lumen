@@ -24,6 +24,8 @@ dependencies:
   # Для Android используем android_alarm_manager_plus или встроенный WorkManager напрямую
 
   home_widget: ^0.6.0
+  lumen_android_diagnostics:
+    path: packages/lumen_android_diagnostics
   lumen_schedule_widgets:
     path: packages/lumen_schedule_widgets
 
