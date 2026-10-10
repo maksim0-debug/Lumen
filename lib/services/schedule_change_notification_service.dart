@@ -19,6 +19,67 @@ class ScheduleChangeNotificationService {
   final Future<void> Function(ScheduleNotificationClaim) _show;
   final DateTime Function() _now;
   static const clientTopicSuffix = '_v2';
+  static Future<void> _settingsTail = Future.value();
+
+  /// Persist every transition, including off/on between two source refreshes.
+  /// Preference writes are idempotent; a failed SQL transaction is reconciled
+  /// from durable preferences before any later notification can be claimed.
+  Future<void> updatePreferences({
+    List<String>? groups,
+    String? selectedGroup,
+    bool? notifyToday,
+    bool? notifyTomorrow,
+  }) {
+    final savedGroups = groups == null ? null : List<String>.of(groups);
+    final result = _settingsTail.then((_) async {
+      // Commit the old policy first so a retry cannot mistake reactivation for
+      // first-install bootstrap after an external preference write succeeded.
+      await _store.withPreferences(
+          _preferences, _now(), (txn, prefs, policy) async {});
+      await _store.withPreferences(_preferences, _now(), (txn, prefs, _) async {
+        Future<void> write(Future<bool> operation) async {
+          if (!await operation) {
+            throw StateError('Cannot persist schedule notification settings');
+          }
+        }
+
+        try {
+          if (selectedGroup != null) {
+            final previous = prefs.getString('selected_group') ?? 'GPV2.1';
+            final currentGroups =
+                prefs.getStringList('notification_groups') ?? [];
+            if (savedGroups == null &&
+                (currentGroups.isEmpty ||
+                    (currentGroups.length == 1 &&
+                        currentGroups.contains(previous)))) {
+              await write(
+                  prefs.setStringList('notification_groups', [selectedGroup]));
+            }
+            await write(prefs.setString('selected_group', selectedGroup));
+          }
+          if (savedGroups != null) {
+            await write(
+                prefs.setStringList('notification_groups', savedGroups));
+          }
+          if (notifyToday != null) {
+            await write(prefs.setBool('notify_schedule_change', notifyToday));
+          }
+          if (notifyTomorrow != null) {
+            await write(
+                prefs.setBool('notify_tomorrow_schedule', notifyTomorrow));
+          }
+        } catch (_) {
+          // SharedPreferences may update its cache before a platform failure.
+          await prefs.reload();
+          rethrow;
+        }
+        await _store.synchronizePolicyIn(txn, prefs, _now());
+      });
+    });
+    _settingsTail =
+        result.then<void>((_) {}, onError: (Object error, StackTrace stack) {});
+    return result;
+  }
 
   static String topicFor(String group,
       {String dayType = 'today', bool versioned = true}) {
@@ -58,14 +119,6 @@ class ScheduleChangeNotificationService {
     );
   }
 
-  static bool _allowed(SharedPreferences prefs, ScheduleChangeEvent event) =>
-      PreferencesHelper.getActiveNotificationGroups(prefs)
-          .contains(event.group) &&
-      (prefs.getBool(event.dayType == 'tomorrow'
-              ? 'notify_tomorrow_schedule'
-              : 'notify_schedule_change') ??
-          true);
-
   static String? _legacyHash(
           SharedPreferences prefs, ScheduleChangeEvent event) =>
       prefs.getString('prev_date_${event.group}_${event.dayType}') ==
@@ -80,7 +133,7 @@ class ScheduleChangeNotificationService {
       bool alreadyDisplayed = false}) async {
     final prefs = await _preferences();
     await prefs.reload();
-    await ScheduleChangeNotificationStore.createSchema(txn);
+    final policy = await _store.synchronizePolicyIn(txn, prefs, _now());
     for (final group in PreferencesHelper.getActiveNotificationGroups(prefs)) {
       final value = snapshot.schedules[group];
       if (value == null) continue;
@@ -94,12 +147,11 @@ class ScheduleChangeNotificationService {
             hash: (dayType == 'today' ? value.today : value.tomorrow)
                 .scheduleHash,
             allowWithdrawal: true);
-        final observation = await _store.observeIn(txn, event,
+        final observation = await _store.observeConfiguredIn(txn, event, policy,
             nowMs: _now().millisecondsSinceEpoch,
             fromPush: fromPush &&
                 (snapshot.alertsFor(group, dayType) || trigger?.id == event.id),
-            handled: !_allowed(prefs, event) ||
-                (alreadyDisplayed && trigger?.id == event.id),
+            handled: alreadyDisplayed && trigger?.id == event.id,
             legacyHash: _legacyHash(prefs, event));
         if (observation == ScheduleNotificationObservation.rejected) {
           throw const FormatException(
@@ -111,80 +163,80 @@ class ScheduleChangeNotificationService {
 
   Future<void> observeSchedules(Map<String, FullSchedule> schedules,
       {bool deliver = true}) async {
-    final prefs = await _preferences();
-    await prefs.reload();
     final now = _now();
-    AndroidFetchDiagnostics.current?.event('notification_settings', {
-      'activeGroups': PreferencesHelper.getActiveNotificationGroups(prefs),
-      'notifyToday': prefs.getBool('notify_schedule_change') ?? true,
-      'notifyTomorrow': prefs.getBool('notify_tomorrow_schedule') ?? true,
-      'deliver': deliver,
-    });
-    (Object, StackTrace)? failure;
-    for (final group in PreferencesHelper.getActiveNotificationGroups(prefs)) {
-      final schedule = schedules[group];
-      if (schedule == null) continue;
-      for (final dayType in ['today', 'tomorrow']) {
-        final ScheduleChangeEvent event;
-        final bool allowed;
-        final ScheduleNotificationObservation observation;
-        try {
-          event =
-              ScheduleChangeEvent.fromSchedule(group, schedule, dayType, now);
-          allowed = _allowed(prefs, event);
-          observation = await _store.observe(event,
-              nowMs: now.millisecondsSinceEpoch,
-              handled: !allowed,
-              legacyHash: _legacyHash(prefs, event));
-        } on FormatException catch (error) {
-          AndroidFetchDiagnostics.current?.event(
-              'notification_snapshot_rejected',
-              {
-                'group': group,
-                'dayType': dayType,
-                ...AndroidFetchDiagnostics.errorFields(error),
-              },
-              level: AppLogLevel.warning);
-          // Conflicting source publications cannot advance the watermark or
-          // block independent groups/dates, widgets and reminders.
-          AppLogger.w(
-              'Ignoring unverifiable notification snapshot for $group/$dayType',
-              tag: 'ScheduleNotifications',
-              error: error);
-          continue;
-        } catch (error, stack) {
-          failure ??= (error, stack);
-          AppLogger.e(
-              'Cannot process schedule notification for $group/$dayType',
-              tag: 'ScheduleNotifications',
-              error: error,
-              stackTrace: stack);
-          continue;
+    final rejected = <(String, String, FormatException)>[];
+    final observations = await _store.withPreferences(_preferences, now,
+        (txn, prefs, policy) async {
+      rejected.clear();
+      AndroidFetchDiagnostics.current?.event('notification_settings', {
+        'activeGroups': PreferencesHelper.getActiveNotificationGroups(prefs),
+        'notifyToday': prefs.getBool('notify_schedule_change') ?? true,
+        'notifyTomorrow': prefs.getBool('notify_tomorrow_schedule') ?? true,
+        'deliver': deliver,
+      });
+      final results =
+          <(ScheduleChangeEvent, bool, ScheduleNotificationObservation)>[];
+      for (final group
+          in PreferencesHelper.getActiveNotificationGroups(prefs)) {
+        final schedule = schedules[group];
+        if (schedule == null) continue;
+        for (final dayType in ['today', 'tomorrow']) {
+          try {
+            final event =
+                ScheduleChangeEvent.fromSchedule(group, schedule, dayType, now);
+            final observation = await _store.observeConfiguredIn(
+                txn, event, policy,
+                nowMs: now.millisecondsSinceEpoch,
+                legacyHash: _legacyHash(prefs, event));
+            results.add((event, policy.allows(event), observation));
+          } on FormatException catch (error) {
+            // Validation occurs before state writes. A conflicting group/date
+            // cannot block independent publications in the same source batch.
+            rejected.add((group, dayType, error));
+          }
         }
-        if (!deliver ||
-            !allowed ||
-            event.isWithdrawal ||
-            observation != ScheduleNotificationObservation.pending) {
-          AndroidFetchDiagnostics.current?.event('notification_skipped', {
+      }
+      return results;
+    });
+    for (final (group, dayType, error) in rejected) {
+      AndroidFetchDiagnostics.current?.event(
+          'notification_snapshot_rejected',
+          {
             'group': group,
             'dayType': dayType,
-            'allowed': allowed,
-            'observation': observation.name,
-            'withdrawal': event.isWithdrawal,
-            'deliver': deliver,
-          });
-          continue;
-        }
-        try {
-          await _deliver(event);
-        } catch (error, stack) {
-          failure ??= (error, stack);
-          AppLogger.e(
-              'Cannot display schedule notification for $group/$dayType',
-              tag: 'ScheduleNotifications',
-              error: error,
-              stackTrace: stack);
-        }
+            ...AndroidFetchDiagnostics.errorFields(error),
+          },
+          level: AppLogLevel.warning);
+      AppLogger.w(
+          'Ignoring unverifiable notification snapshot for $group/$dayType',
+          tag: 'ScheduleNotifications',
+          error: error);
+    }
+    (Object, StackTrace)? failure;
+    for (final (event, allowed, observation) in observations) {
+      if (!deliver ||
+          !allowed ||
+          event.isWithdrawal ||
+          observation != ScheduleNotificationObservation.pending) {
+        AndroidFetchDiagnostics.current?.event('notification_skipped', {
+          'group': event.group,
+          'dayType': event.dayType,
+          'allowed': allowed,
+          'observation': observation.name,
+          'withdrawal': event.isWithdrawal,
+          'deliver': deliver,
+        });
+        continue;
+      }
+      try {
+        await _deliver(event);
+      } catch (error, stack) {
+        failure ??= (error, stack);
+        AppLogger.e(
+            'Cannot display schedule notification for ${event.group}/${event.dayType}',
+            tag: 'ScheduleNotifications',
+            error: error,
+            stackTrace: stack);
       }
     }
     if (failure case final captured?) {
@@ -198,14 +250,19 @@ class ScheduleChangeNotificationService {
       {bool alreadyDisplayed = false}) async {
     final now = _now();
     final event = ScheduleChangeEvent.fromPush(data, now);
-    final prefs = await _preferences();
-    await prefs.reload();
-    final allowed = _allowed(prefs, event);
-    final observation = await _store.observe(event,
-        nowMs: now.millisecondsSinceEpoch,
-        fromPush: true,
-        handled: alreadyDisplayed || !allowed,
-        legacyHash: _legacyHash(prefs, event));
+    final result = await _store.withPreferences(
+        _preferences,
+        now,
+        (txn, prefs, policy) async => (
+              policy.allows(event),
+              await _store.observeConfiguredIn(txn, event, policy,
+                  nowMs: now.millisecondsSinceEpoch,
+                  fromPush: true,
+                  handled: alreadyDisplayed,
+                  legacyHash: _legacyHash(prefs, event)),
+            ));
+    final allowed = result.$1;
+    final observation = result.$2;
     if (observation == ScheduleNotificationObservation.pending &&
         allowed &&
         !alreadyDisplayed) {
@@ -218,9 +275,9 @@ class ScheduleChangeNotificationService {
     // If a newer observation arrives while showing, release the lease and
     // deliver the current pending state instead of acknowledging the wrong hash.
     for (var i = 0; i < 4; i++) {
-      final prefs = await _preferences();
-      await prefs.reload();
-      if (!_allowed(prefs, event) ||
+      final allowed = await _store.withPreferences(_preferences, _now(),
+          (txn, prefs, policy) async => policy.allows(event));
+      if (!allowed ||
           event.targetDate !=
               DtekSnapshot.notificationDate(event.dayType, now: _now())) {
         return;
@@ -233,6 +290,10 @@ class ScheduleChangeNotificationService {
           'dayType': event.dayType,
         });
         return;
+      }
+      if (!await _store.isCurrentClaim(claim)) {
+        await _store.finish(claim, success: false);
+        continue;
       }
       try {
         AndroidFetchDiagnostics.current?.event('notification_show_start', {

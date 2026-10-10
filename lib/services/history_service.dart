@@ -61,7 +61,7 @@ class HistoryService {
 
     return await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await ScheduleChangeNotificationStore.createSchema(db);
         await db.execute('''
@@ -94,7 +94,7 @@ class HistoryService {
         ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 5) {
+        if (oldVersion < 6) {
           await ScheduleChangeNotificationStore.createSchema(db);
         }
         if (oldVersion < 2) {

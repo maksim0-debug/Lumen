@@ -15,6 +15,7 @@ import '../services/backup_service.dart';
 import '../services/fcm_service.dart';
 import '../services/power_monitor_service.dart';
 import '../services/preferences_helper.dart';
+import '../services/schedule_change_notification_service.dart';
 import '../services/achievement_service.dart';
 import '../services/darkness_theme_service.dart';
 import 'dialogs/shortcut_help_dialog.dart';
@@ -192,17 +193,32 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _saveSetting(String key, bool value) async {
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
-      await prefs.setBool(key, value);
+      if (Platform.isAndroid &&
+          (key == 'notify_schedule_change' ||
+              key == 'notify_tomorrow_schedule')) {
+        await ScheduleChangeNotificationService().updatePreferences(
+            notifyToday: key == 'notify_schedule_change' ? value : null,
+            notifyTomorrow: key == 'notify_tomorrow_schedule' ? value : null);
+        await FcmService().syncTopicSubscriptions();
+      } else {
+        await prefs.setBool(key, value);
+      }
     } catch (e) {
       AppLogger.e("Error saving setting $key", tag: 'SettingsPage', error: e);
     }
   }
 
   Future<void> _saveGroups() async {
+    final groups = List<String>.of(_notificationGroups);
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
-      await prefs.setStringList('notification_groups', _notificationGroups);
-      unawaited(FcmService().syncTopicSubscriptions());
+      if (Platform.isAndroid) {
+        await ScheduleChangeNotificationService()
+            .updatePreferences(groups: groups);
+      } else {
+        await prefs.setStringList('notification_groups', groups);
+      }
+      await FcmService().syncTopicSubscriptions();
     } catch (e) {
       AppLogger.e("Error saving groups", tag: 'SettingsPage', error: e);
     }
@@ -507,7 +523,6 @@ class _SettingsPageState extends State<SettingsPage> {
           (val) {
             setState(() => _notifyScheduleChange = val);
             _saveSetting('notify_schedule_change', val);
-            unawaited(FcmService().syncTopicSubscriptions());
           },
         ),
         _buildSwitchTile(
@@ -517,7 +532,6 @@ class _SettingsPageState extends State<SettingsPage> {
           (val) {
             setState(() => _notifyTomorrowSchedule = val);
             _saveSetting('notify_tomorrow_schedule', val);
-            unawaited(FcmService().syncTopicSubscriptions());
           },
         ),
         _buildSwitchTile(

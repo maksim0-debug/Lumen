@@ -55,4 +55,15 @@ void main() {
     expect(event(shiftedSix, 'tomorrow').body(six),
         'Змінився час відключень на завтра ⚡');
   });
+
+  test('publication and change titles distinguish today and tomorrow', () {
+    final hash = '1${'0' * 23}';
+    expect(event(hash, 'today').title(published: true),
+        'Опубліковано графік на СЬОГОДНІ! (Група 2.1)');
+    expect(event(hash, 'tomorrow').title(published: true),
+        'Опубліковано графік на ЗАВТРА! (Група 2.1)');
+    expect(event(hash, 'today').title(), 'Графік змінено! (Група 2.1)');
+    expect(event(hash, 'tomorrow').title(),
+        'Графік на ЗАВТРА змінено! (Група 2.1)');
+  });
 }

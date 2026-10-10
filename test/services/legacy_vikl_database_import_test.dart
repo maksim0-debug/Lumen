@@ -113,7 +113,7 @@ void main() {
       // 2. Verify schedule history was imported correctly
       final historyService = HistoryService();
       final migratedDatabase = await historyService.database;
-      expect(await migratedDatabase.getVersion(), 5);
+      expect(await migratedDatabase.getVersion(), 6);
       expect(
           await migratedDatabase.query('schedule_notification_state'), isEmpty,
           reason:

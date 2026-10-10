@@ -91,8 +91,8 @@ class ScheduleChangeEvent {
 
   String title({bool published = false}) {
     final name = AppFormatters.formatGroupName(group);
-    if (published && dayType == 'tomorrow') {
-      return 'Опубліковано графік на ЗАВТРА! ($name)';
+    if (published) {
+      return 'Опубліковано графік на ${dayType == 'tomorrow' ? 'ЗАВТРА' : 'СЬОГОДНІ'}! ($name)';
     }
     return 'Графік${dayType == 'tomorrow' ? ' на ЗАВТРА' : ''} змінено! ($name)';
   }

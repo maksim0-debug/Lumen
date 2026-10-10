@@ -303,6 +303,32 @@ void main() {
         contains(FcmService.scheduleSyncTopic));
   });
   test(
+      'snapshot push after group reactivation deduplicates the cached baseline and preserves future changes',
+      () async {
+    final initial = snapshot(1, '0' * 24, tomorrow: false);
+    await ingestion.ingest(initial);
+    await ingestion.applyPending(ingestion.changes.observeSchedules);
+    await ingestion.changes.updatePreferences(groups: ['GPV1.1']);
+    final changed = snapshot(2, '1' * 24, tomorrow: false);
+    await ingestion.ingest(changed, fromPush: true);
+    await ingestion.applyPending(ingestion.changes.observeSchedules);
+    expect(shown, hasLength(1));
+    expect(shown.single, startsWith('GPV1.1:'));
+    await ingestion.changes.updatePreferences(groups: ['GPV1.1', 'GPV2.1']);
+    await handleSnapshotPush(push(changed),
+        ingestion: ingestion,
+        applyLocal: () =>
+            ingestion.applyPending(ingestion.changes.observeSchedules));
+    expect(shown, hasLength(1));
+    final next = snapshot(3, '01${'0' * 22}', tomorrow: false);
+    await ingestion.ingest(next, fromPush: true);
+    await ingestion.applyPending(ingestion.changes.observeSchedules);
+    expect(shown, hasLength(3));
+    expect(shown.skip(1).map((id) => id.split(':').first).toSet(),
+        {'GPV1.1', 'GPV2.1'});
+    expect((await history.getLastKnownSchedules()).length, 12);
+  });
+  test(
       'API backfills missed A B A while keeping current A and no historical alerts',
       () async {
     final values = [

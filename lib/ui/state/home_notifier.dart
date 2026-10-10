@@ -296,15 +296,28 @@ class HomeNotifier extends Notifier<HomeState> {
 
     try {
       final prefs = await PreferencesHelper.getSafeInstance();
-      await prefs.setString('selected_group', newGroup);
+      if (Platform.isAndroid) {
+        await ScheduleChangeNotificationService()
+            .updatePreferences(selectedGroup: newGroup);
+        await prefs.reload();
+      } else {
+        await prefs.setString('selected_group', newGroup);
+      }
 
       List<String> notifGroups =
           prefs.getStringList('notification_groups') ?? [];
       if (notifGroups.isEmpty ||
           (notifGroups.length == 1 &&
               notifGroups.contains(state.currentGroup))) {
-        await prefs.setStringList('notification_groups', [newGroup]);
+        if (!Platform.isAndroid) {
+          await prefs.setStringList('notification_groups', [newGroup]);
+        }
         state = state.copyWith(notificationGroups: [newGroup]);
+      }
+      if (Platform.isAndroid) {
+        state = state.copyWith(
+            notificationGroups:
+                PreferencesHelper.getActiveNotificationGroups(prefs));
       }
       unawaited(FcmService().syncTopicSubscriptions());
     } catch (e) {
