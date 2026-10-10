@@ -32,6 +32,82 @@ Future<void> enqueueScheduleRefresh() =>
         existingWorkPolicy: ExistingWorkPolicy.keep,
         constraints: Constraints(networkType: NetworkType.connected));
 
+Future<Map<String, FullSchedule>> _fetchBackgroundSchedules() async {
+  try {
+    final schedules = await WorkerScheduleService().fetch();
+    AndroidFetchDiagnostics.current?.event('worker_source', {
+      'source': 'worker_schedule_service',
+    });
+    return schedules;
+  } catch (error) {
+    AppLogger.w('Worker unavailable; using direct schedule parser',
+        tag: 'Background', error: error.runtimeType);
+    AndroidFetchDiagnostics.current?.event('worker_source_fallback', {
+      'reason': error.runtimeType.toString(),
+    });
+    return ParserService.background().fetchAllSchedules();
+  }
+}
+
+/// A successful source refresh completes the network job. Failed local effects
+/// leave persisted work intact for the next periodic poll or push; they
+/// must not cause WorkManager to download the same source on every retry.
+Future<bool> refreshBackgroundSchedules({
+  Future<bool> Function()? applyPending,
+  Future<Map<String, FullSchedule>> Function()? fetchSchedules,
+  Future<void> Function(Map<String, FullSchedule>)? applySchedules,
+}) async {
+  var pendingComplete = false;
+  try {
+    pendingComplete = await (applyPending ?? applyPendingSchedules)();
+  } catch (error, stack) {
+    AndroidFetchDiagnostics.current?.event(
+        'pending_local_work_error', AndroidFetchDiagnostics.errorFields(error),
+        level: AppLogLevel.error);
+    AppLogger.e('Pending local effects failed; continuing schedule recovery',
+        tag: 'Background', error: error, stackTrace: stack);
+  }
+  final schedules = await (fetchSchedules ?? _fetchBackgroundSchedules)();
+  if (schedules.isEmpty) {
+    AndroidFetchDiagnostics.current?.event(
+        'worker_result',
+        {
+          'result': 'retry',
+          'reason': 'empty_schedule',
+        },
+        level: AppLogLevel.warning);
+    AppLogger.w('Background schedule refresh returned no data',
+        tag: 'Background');
+    return false;
+  }
+  var effectsComplete = false;
+  try {
+    await (applySchedules ?? applyBackgroundSchedules)(schedules);
+    effectsComplete = true;
+  } catch (error, stack) {
+    AppLogger.e('New schedules recovered; local effects remain pending',
+        tag: 'Background', error: error, stackTrace: stack);
+    AndroidFetchDiagnostics.current?.event(
+        'local_work_deferred', AndroidFetchDiagnostics.errorFields(error),
+        level: AppLogLevel.error);
+  }
+  AndroidFetchDiagnostics.current?.event('worker_schedules_applied', {
+    'groups': schedules.length,
+    'pendingComplete': pendingComplete,
+    'effectsComplete': effectsComplete,
+  });
+  if (!pendingComplete || !effectsComplete) {
+    AndroidFetchDiagnostics.current?.event(
+        'worker_result',
+        {
+          'result': 'success',
+          'reason': 'local_work_deferred',
+        },
+        level: AppLogLevel.warning);
+  }
+  return true;
+}
+
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
@@ -54,38 +130,10 @@ void callbackDispatcher() {
               });
               return true;
             }
-            await applyPendingSchedules();
-            Map<String, FullSchedule> schedules;
-            try {
-              schedules = await WorkerScheduleService().fetch();
-              AndroidFetchDiagnostics.current?.event('worker_source', {
-                'source': 'worker_schedule_service',
-              });
-            } catch (error) {
-              AppLogger.w('Worker unavailable; using direct schedule parser',
-                  tag: 'Background', error: error.runtimeType);
-              AndroidFetchDiagnostics.current?.event('worker_source_fallback', {
-                'reason': error.runtimeType.toString(),
-              });
-              schedules = await ParserService.background().fetchAllSchedules();
-            }
-            if (schedules.isEmpty) {
-              AndroidFetchDiagnostics.current?.event(
-                  'worker_result',
-                  {
-                    'result': 'retry',
-                    'reason': 'empty_schedule',
-                  },
-                  level: AppLogLevel.warning);
-              AppLogger.w('Background schedule refresh returned no data',
-                  tag: 'Background');
-              return false;
-            }
-            await applyBackgroundSchedules(schedules);
+            if (!await refreshBackgroundSchedules()) return false;
             await HistoryService().logAction('Бекграунд завдання завершено');
             AndroidFetchDiagnostics.current?.event('worker_result', {
               'result': 'success',
-              'groups': schedules.length,
             });
             return true;
           } catch (error, stack) {

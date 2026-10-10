@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:lumen/models/schedule_snapshot.dart';
 import 'package:lumen/services/fcm_service.dart';
+import 'package:lumen/services/background_service.dart';
 import 'package:lumen/services/history_service.dart';
 import 'package:lumen/services/parser_service.dart';
 import 'package:lumen/services/schedule_change_notification_service.dart';
@@ -215,6 +216,42 @@ void main() {
     expect(shown.length, 1);
     expect((await db.query('schedule_local_work')).single['processed'], 1);
   });
+  test(
+      'successful refresh leaves failed local revisions durable and recoverable',
+      () async {
+    await ingestion.ingest(snapshot(1, '0' * 24));
+    var fetches = 0;
+    expect(
+        await refreshBackgroundSchedules(
+          applyPending: () => ingestion
+              .applyPending((_) async => throw StateError('local effect')),
+          fetchSchedules: () async {
+            fetches++;
+            await ingestion.ingest(snapshot(2, '1' * 24));
+            return history.getLastKnownSchedules();
+          },
+          applySchedules: (_) => ingestion
+              .applyPending((_) async => throw StateError('local effect')),
+        ),
+        true);
+    expect(fetches, 1);
+    final pending = (await db.query('schedule_local_work')).single;
+    expect(pending['revision'], 2);
+    expect(pending['processed'], 0);
+    expect(pending['claim_until'], 0);
+    expect((await db.query('schedule_history')).length, 48);
+    expect(
+        await ingestion.applyPending((schedules) async {
+          expect(schedules.length, 12);
+          expect(
+              schedules.values.every((s) => s.today.scheduleHash == '1' * 24),
+              true);
+        }),
+        true);
+    expect((await db.query('schedule_local_work')).single['processed'], 2);
+    expect(fetches, 1);
+  });
+
   test(
       'new revision during local work is drained without acknowledging the wrong revision',
       () async {

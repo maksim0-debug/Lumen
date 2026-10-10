@@ -129,9 +129,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _ticker.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed && mounted) {
       setState(() {});
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        ref.read(homeNotifierProvider.notifier).refreshReceivedSchedules();
-      }
     }
   }
 

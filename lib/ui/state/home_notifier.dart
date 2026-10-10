@@ -46,7 +46,10 @@ class HomeNotifier extends Notifier<HomeState> {
   final HistoryService? _customHistoryService;
   final EmergencyStatusService? _customEmergencyStatusService;
 
+  final DateTime Function() _now;
+
   HomeNotifier({
+    DateTime Function()? now,
     NotificationService? notifier,
     ScheduleNotificationCoordinator? scheduleNotificationCoordinator,
     ScheduleSyncService? scheduleSyncService,
@@ -54,7 +57,8 @@ class HomeNotifier extends Notifier<HomeState> {
     AchievementService? achievementService,
     HistoryService? historyService,
     EmergencyStatusService? emergencyStatusService,
-  })  : _customNotifier = notifier,
+  })  : _now = now ?? ScheduleClock.now,
+        _customNotifier = notifier,
         _customScheduleNotificationCoordinator =
             scheduleNotificationCoordinator,
         _customScheduleSyncService = scheduleSyncService,
@@ -83,6 +87,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
   @override
   HomeState build() {
+    _displayedScheduleDay = ScheduleClock.day(_now());
     _notifier = _customNotifier ?? NotificationService();
     _scheduleNotificationCoordinator = _customScheduleNotificationCoordinator ??
         ScheduleNotificationCoordinator(notifier: _notifier);
@@ -731,33 +736,88 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   Future<void> _scheduleApplyTail = Future.value();
-  Map<String, FullSchedule>? _lastApplied;
+  late DateTime _displayedScheduleDay;
 
-  Future<void> _applySyncedSchedules(Map<String, FullSchedule> allData) {
+  Future<void> _applySyncedSchedules(Map<String, FullSchedule> allData,
+      {bool fromCache = false}) {
     final result = _scheduleApplyTail.then((_) async {
-      if (!ref.mounted || identical(_lastApplied, allData)) return;
-      await _applySnapshot(allData);
-      if (ref.mounted) _lastApplied = allData;
+      if (!ref.mounted) return;
+      await _applySnapshot(allData, fromCache: fromCache);
     });
     _scheduleApplyTail =
         result.then<void>((_) {}, onError: (Object error, StackTrace stack) {});
     return result;
   }
 
-  Future<void> _applySnapshot(Map<String, FullSchedule> allData) async {
+  bool _matchesDisplayedSchedules(Map<String, FullSchedule> schedules) {
+    if (schedules.length != state.allSchedules.length) return false;
+    for (final entry in schedules.entries) {
+      final displayed = state.allSchedules[entry.key];
+      if (displayed == null ||
+          displayed.lastUpdatedSource != entry.value.lastUpdatedSource ||
+          displayed.today.scheduleHash != entry.value.today.scheduleHash ||
+          displayed.tomorrow.scheduleHash !=
+              entry.value.tomorrow.scheduleHash) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _hasNewerPublication(Map<String, FullSchedule> schedules) {
+    int? newest(Map<String, FullSchedule> data) {
+      int? version;
+      for (final schedule in data.values) {
+        try {
+          final candidate =
+              ScheduleClock.parseVersion(schedule.lastUpdatedSource);
+          if (version == null || candidate > version) version = candidate;
+        } on FormatException {
+          // An unknown source time cannot prove that a publication is newer.
+        }
+      }
+      return version;
+    }
+
+    final previous = newest(state.allSchedules);
+    final received = newest(schedules);
+    return previous != null && received != null && received > previous;
+  }
+
+  Future<void> _applySnapshot(Map<String, FullSchedule> allData,
+      {bool fromCache = false}) async {
     if (!ref.mounted) return;
     if (Platform.isAndroid) {
       final current = await _scheduleSyncService.loadCachedData();
       if (!ref.mounted) return;
       if (current.isNotEmpty) allData = current;
     }
+    final day = ScheduleClock.day(_now());
+    final sameDay = DateUtils.isSameDay(_displayedScheduleDay, day);
+    // SQLite reloads may only rotate today/tomorrow after midnight. They do
+    // not establish a new source publication or a successful network check.
+    if (fromCache && sameDay && _matchesDisplayedSchedules(allData)) return;
+    if (!fromCache &&
+        sameDay &&
+        identical(state.allSchedules, allData) &&
+        !state.isCachedData &&
+        state.statusColor == Colors.green) {
+      return;
+    }
+    final isCachedData =
+        fromCache && (!sameDay || !_hasNewerPublication(allData));
+    _displayedScheduleDay = day;
     final currentIsHistory = state.isHistoryMode;
     state = state.copyWith(
       allSchedules: allData,
-      isCachedData: false,
-      wasUpdated: true,
+      isCachedData: isCachedData,
+      wasUpdated: !isCachedData,
       isLoading: currentIsHistory ? state.isLoading : false,
-      statusColor: currentIsHistory ? state.statusColor : Colors.green,
+      statusColor: currentIsHistory
+          ? state.statusColor
+          : isCachedData
+              ? Colors.orange
+              : Colors.green,
     );
     recalculateDisplayData();
 
@@ -767,6 +827,7 @@ class HomeNotifier extends Notifier<HomeState> {
       await updateStatusDate();
     }
 
+    if (isCachedData) return;
     await _scheduleNotificationCoordinator.handleScheduleUpdate(
       allSchedules: allData,
       currentGroup: state.currentGroup,
@@ -780,6 +841,8 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   Future<void> refreshAfterResume() async {
+    await refreshReceivedSchedules();
+    if (!ref.mounted) return;
     try {
       final recent = await _scheduleSyncService.parser.recentAndroidSnapshot();
       if (!ref.mounted) return;
@@ -871,7 +934,7 @@ class HomeNotifier extends Notifier<HomeState> {
     try {
       final schedules = await _scheduleSyncService.loadCachedData();
       if (ref.mounted && schedules.isNotEmpty) {
-        await _applySyncedSchedules(schedules);
+        await _applySyncedSchedules(schedules, fromCache: true);
       }
     } catch (error) {
       AppLogger.e('Cannot reload received schedules on resume',
@@ -890,6 +953,7 @@ class HomeNotifier extends Notifier<HomeState> {
           ? "З пам'яті: ${current.lastUpdatedSource}"
           : "З пам'яті (дані завантажено)";
 
+      _displayedScheduleDay = ScheduleClock.day(_now());
       state = state.copyWith(
         allSchedules: cached,
         isLoading: false,

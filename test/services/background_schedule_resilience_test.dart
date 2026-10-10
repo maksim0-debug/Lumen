@@ -54,9 +54,11 @@ class _Notifications implements NotificationService {
 class _Widgets implements WidgetService {
   final Object? failure;
   Map<String, FullSchedule>? received;
+  int updates = 0;
   _Widgets({this.failure});
   @override
   Future<void> updateWidget(Map<String, FullSchedule> schedules) async {
+    updates++;
     received = schedules;
     if (failure != null) throw failure!;
   }
@@ -77,6 +79,128 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({
         'notification_groups': ['GPV2.1', 'GPV1.1'],
       }));
+
+  test('pending reminder failure cannot block fetching and applying new graphs',
+      () async {
+    final calls = <String>[];
+    Map<String, FullSchedule>? applied;
+    final complete = await refreshBackgroundSchedules(
+      applyPending: () async {
+        calls.add('pending');
+        throw StateError('Exact alarms denied');
+      },
+      fetchSchedules: () async {
+        calls.add('fetch');
+        return schedules;
+      },
+      applySchedules: (value) async {
+        calls.add('apply');
+        applied = value;
+      },
+    );
+    expect(calls, ['pending', 'fetch', 'apply']);
+    expect(applied, same(schedules));
+    expect(complete, true,
+        reason: 'Local work must not retry the network refresh');
+  });
+
+  test('busy pending work permits source recovery without a network retry',
+      () async {
+    Map<String, FullSchedule>? applied;
+    expect(
+        await refreshBackgroundSchedules(
+          applyPending: () async => false,
+          fetchSchedules: () async => schedules,
+          applySchedules: (value) async => applied = value,
+        ),
+        true);
+    expect(applied, same(schedules));
+  });
+
+  test('completed local work and new graphs finish without retry', () async {
+    Map<String, FullSchedule>? applied;
+    expect(
+        await refreshBackgroundSchedules(
+          applyPending: () async => true,
+          fetchSchedules: () async => schedules,
+          applySchedules: (value) async => applied = value,
+        ),
+        true);
+    expect(applied, same(schedules));
+  });
+
+  test('empty source requests retry without applying an empty graph', () async {
+    var applied = false;
+    expect(
+        await refreshBackgroundSchedules(
+          applyPending: () async => true,
+          fetchSchedules: () async => {},
+          applySchedules: (_) async => applied = true,
+        ),
+        false);
+    expect(applied, false);
+  });
+
+  test('source failure remains visible after a pending effects failure',
+      () async {
+    final failure = StateError('Source unavailable');
+    var applied = false;
+    await expectLater(
+        refreshBackgroundSchedules(
+          applyPending: () async => throw StateError('Exact alarms denied'),
+          fetchSchedules: () async => throw failure,
+          applySchedules: (_) async => applied = true,
+        ),
+        throwsA(same(failure)));
+    expect(applied, false);
+  });
+
+  test('new graph effects failure does not repeat a successful source fetch',
+      () async {
+    expect(
+        await refreshBackgroundSchedules(
+          applyPending: () async => true,
+          fetchSchedules: () async => schedules,
+          applySchedules: (_) async => throw StateError('Widget failed'),
+        ),
+        true);
+  });
+
+  test(
+      'real effect pipeline refreshes widgets after repeated reminder initialization failure',
+      () async {
+    final notifications =
+        _Notifications(initFailure: StateError('Exact alarms denied'));
+    final widgets = _Widgets();
+    var fetches = 0;
+    var effects = 0;
+    Future<void> apply(Map<String, FullSchedule> value) async {
+      effects++;
+      await applyBackgroundSchedules(value,
+          changes: _Changes(null),
+          notifications: notifications,
+          widgets: widgets);
+    }
+
+    expect(
+        await refreshBackgroundSchedules(
+          applyPending: () async {
+            await apply(schedules);
+            return true;
+          },
+          fetchSchedules: () async {
+            fetches++;
+            return schedules;
+          },
+          applySchedules: apply,
+        ),
+        true);
+    expect(fetches, 1);
+    expect(effects, 2);
+    expect(widgets.received, same(schedules));
+    expect(widgets.updates, 2);
+    expect(notifications.permissionRequest, false);
+  });
 
   test(
       'notification failure still refreshes reminders and widget, then fails for retry',
