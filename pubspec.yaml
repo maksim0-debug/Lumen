@@ -12,7 +12,7 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  http: ^1.2.0
+  http: ^1.6.0
   html: ^0.15.4
   intl: ^0.20.3
 
@@ -48,6 +48,8 @@ dependencies:
   file_picker: ^10.3.10
   permission_handler: ^12.0.1
   flutter_riverpod: ^3.4.3
+  url_launcher: ^6.3.3
+  pub_semver: ^2.2.0
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +60,8 @@ dev_dependencies:
 
   path_provider_platform_interface: any
   plugin_platform_interface: any
+  shared_preferences_platform_interface: ^2.4.1
+  url_launcher_platform_interface: ^2.3.2
 flutter:
   uses-material-design: true
   assets:

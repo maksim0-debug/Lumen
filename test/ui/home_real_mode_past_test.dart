@@ -16,6 +16,8 @@ import 'package:lumen/models/schedule_status.dart';
 import 'package:lumen/models/schedule_view_mode.dart';
 import 'package:lumen/services/achievement_service.dart';
 import 'package:lumen/ui/home_screen.dart';
+import 'package:lumen/ui/state/app_update_notifier.dart';
+import '../helpers/idle_app_update_notifier.dart';
 import 'package:lumen/ui/state/home_notifier.dart';
 import 'package:lumen/ui/widgets/home/real_mode_grid_cell.dart';
 import 'package:lumen/ui/widgets/home/schedule_intervals_list.dart';
@@ -83,7 +85,9 @@ void main() {
         // Notice: custom_power_monitor_url is not set!
       });
 
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1200);
@@ -154,7 +158,9 @@ void main() {
         'power_monitor_enabled': true,
       });
 
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1200);
@@ -200,7 +206,9 @@ void main() {
         'power_monitor_enabled': true,
       });
 
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1200);
@@ -269,7 +277,9 @@ void main() {
         'power_monitor_enabled': true,
       });
 
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1200);
@@ -316,7 +326,9 @@ void main() {
         'power_monitor_enabled': true,
       });
 
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1200);

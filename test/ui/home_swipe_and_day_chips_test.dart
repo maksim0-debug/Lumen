@@ -10,6 +10,8 @@ import 'package:lumen/models/data_source_mode.dart';
 import 'package:lumen/models/schedule_view_mode.dart';
 import 'package:lumen/services/achievement_service.dart';
 import 'package:lumen/ui/home_screen.dart';
+import 'package:lumen/ui/state/app_update_notifier.dart';
+import '../helpers/idle_app_update_notifier.dart';
 import 'package:lumen/ui/state/home_notifier.dart';
 import 'package:lumen/ui/widgets/home/data_source_toggle.dart';
 
@@ -59,7 +61,9 @@ void main() {
     testWidgets(
         'ChoiceChip "Вчора" is removed; only "Минуле", "Сьогодні", "Завтра" exist',
         (tester) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1000);
@@ -82,7 +86,9 @@ void main() {
 
     testWidgets('When viewMode is yesterday, "Минуле" chip is selected',
         (tester) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1000);
@@ -120,7 +126,9 @@ void main() {
     testWidgets(
         'Swiping left (<-) advances day forward, swiping right (->) moves day backward',
         (tester) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1000);
@@ -169,7 +177,9 @@ void main() {
     testWidgets(
         'Swiping over DataSourceToggle switches DataSourceMode and preserves ScheduleViewMode',
         (tester) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1000);
@@ -223,7 +233,9 @@ void main() {
     testWidgets(
         'Slow drag over DataSourceToggle switches DataSourceMode without high fling velocity',
         (tester) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1000);
@@ -268,7 +280,9 @@ void main() {
     testWidgets(
         'Slow drag (without high fling velocity) advances day forward and backward based on distance',
         (tester) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        appUpdateProvider.overrideWith(IdleAppUpdateNotifier.new)
+      ]);
       addTearDown(container.dispose);
 
       tester.view.physicalSize = const Size(800, 1000);

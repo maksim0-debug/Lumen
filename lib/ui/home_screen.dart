@@ -20,9 +20,11 @@ import '../services/schedule_calculation_service.dart';
 import '../utils/app_formatters.dart';
 import 'achievements_screen.dart';
 import 'analytics_screen.dart';
+import 'dialogs/app_update_dialog.dart';
 import 'dialogs/hour_detail_dialog.dart';
 import 'dialogs/shortcut_help_dialog.dart';
 import 'dialogs/version_picker_sheet.dart';
+import 'state/app_update_notifier.dart';
 import 'helpers/horizontal_swipe_detector.dart';
 import 'logs_page.dart';
 import 'settings_page.dart';
@@ -80,8 +82,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(homeNotifierProvider.notifier).loadPreferencesAndData();
       ref.read(homeNotifierProvider.notifier).initPowerMonitor();
+      unawaited(ref.read(appUpdateProvider.notifier).checkSilently());
     });
   }
 
@@ -128,6 +132,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _ticker.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(ref.read(appUpdateProvider.notifier).checkSilently());
       setState(() {});
     }
   }
@@ -727,24 +732,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         onSwipeRight: () => notifier.navigateDate(-1),
         child: Scaffold(
           appBar: AppBar(
-            title: DropdownButton<String>(
-              value: state.currentGroup,
-              dropdownColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
-              icon: Icon(Icons.arrow_drop_down,
-                  color: isDark ? Colors.orange : Colors.deepPurple),
-              underline: Container(),
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: isDark ? Colors.white : Colors.black87),
-              onChanged: (newGroup) async {
-                await notifier.changeGroup(newGroup);
-              },
-              items: ParserService.allGroups.map((String value) {
-                return DropdownMenuItem(
-                    value: value,
-                    child: Text(AppFormatters.formatGroupName(value)));
-              }).toList(),
+            title: ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxWidth: MediaQuery.textScalerOf(context).scale(200)),
+              child: DropdownButton<String>(
+                isExpanded: true,
+                alignment: Alignment.center,
+                value: state.currentGroup,
+                dropdownColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
+                icon: Icon(Icons.arrow_drop_down,
+                    color: isDark ? Colors.orange : Colors.deepPurple),
+                underline: Container(),
+                style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black87),
+                onChanged: (newGroup) async {
+                  await notifier.changeGroup(newGroup);
+                },
+                items: ParserService.allGroups.map((String value) {
+                  return DropdownMenuItem(
+                      value: value,
+                      alignment: Alignment.center,
+                      child: Text(AppFormatters.formatGroupName(value),
+                          maxLines: 1, overflow: TextOverflow.ellipsis));
+                }).toList(),
+              ),
             ),
             centerTitle: true,
             actions: [
@@ -772,6 +785,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   tooltip: 'Гарячі клавіші (F1)',
                   onPressed: () => ShortcutHelpDialog.show(context),
                 ),
+              Consumer(
+                builder: (context, ref, child) {
+                  final updateState = ref.watch(appUpdateProvider);
+                  if (!updateState.shouldShowBadge ||
+                      updateState.updateInfo == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return IconButton(
+                    icon: Badge(
+                      label: const Text(
+                        'NEW',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      textColor: Theme.of(context).colorScheme.onPrimary,
+                      child: Icon(
+                        Icons.system_update_rounded,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    tooltip:
+                        'Доступне оновлення Lumen v${updateState.updateInfo!.latestVersion}',
+                    onPressed: () => AppUpdateDialog.show(
+                      context,
+                      updateState.updateInfo!,
+                    ),
+                  );
+                },
+              ),
               IconButton(
                 icon: Icon(Icons.settings,
                     color: isDark ? Colors.white : Colors.black87),
@@ -888,11 +933,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text(state.statusMessage,
-                            style: TextStyle(
-                                color: state.statusColor,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
+                        Flexible(
+                            child: Text(state.statusMessage,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: state.statusColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold))),
                         if (state.historyVersions.isNotEmpty)
                           const Icon(Icons.arrow_drop_down,
                               color: Colors.grey, size: 16),

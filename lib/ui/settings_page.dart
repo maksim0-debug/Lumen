@@ -28,6 +28,9 @@ import 'shortcuts/shortcut_registry.dart';
 import '../services/history_service.dart';
 import 'widgets/schedule_version_filter_tile.dart';
 import 'widgets/settings_card.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dialogs/app_update_dialog.dart';
+import 'state/app_update_notifier.dart';
 
 class SettingsPage extends StatefulWidget {
   final VoidCallback? onThemeChanged;
@@ -66,6 +69,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _cardBackupExpanded = false;
   bool _cardLocalApiExpanded = false;
   bool _cardLogsExpanded = false;
+  bool _cardUpdateExpanded = true;
 
   final TextEditingController _customUrlController = TextEditingController();
   final TextEditingController _portController = TextEditingController();
@@ -171,6 +175,8 @@ class _SettingsPageState extends State<SettingsPage> {
               prefs.getBool('settings_card_local_api_expanded') ?? false;
           _cardLogsExpanded =
               prefs.getBool('settings_card_logs_expanded') ?? false;
+          _cardUpdateExpanded =
+              prefs.getBool('settings_card_update_expanded') ?? true;
         }
 
         _isLoading = false;
@@ -329,6 +335,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       Platform.isLinux ||
                       Platform.isMacOS)
                     _buildLocalApiCard(),
+                  _buildUpdateCard(),
                   _buildLogsCard(),
                   const SizedBox(height: 16),
                   _buildFooterInfo(),
@@ -1089,6 +1096,117 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ],
     );
+  }
+
+  Widget _buildUpdateCard() {
+    return Consumer(
+      builder: (context, ref, child) {
+        final updateState = ref.watch(appUpdateProvider);
+        final info = updateState.updateInfo;
+        final hasUpdate = info != null && info.hasUpdate;
+        final isSkipped = hasUpdate && updateState.isIgnored;
+        final isChecking = updateState.status == AppUpdateStatus.checking;
+
+        return SettingsCard(
+          key: const ValueKey('card_update'),
+          title: "Оновлення програми",
+          subtitle: isSkipped
+              ? "Версію v${info.latestVersion} пропущено"
+              : hasUpdate
+                  ? "Доступна нова версія v${info.latestVersion}"
+                  : "Останні випуски Lumen на GitHub",
+          icon: Icons.system_update_alt_rounded,
+          persistenceKey: 'settings_card_update_expanded',
+          initiallyExpanded: _cardUpdateExpanded,
+          children: [
+            ListTile(
+              leading: Icon(
+                isSkipped
+                    ? Icons.notifications_off_outlined
+                    : hasUpdate
+                        ? Icons.new_releases_rounded
+                        : Icons.check_circle_outline_rounded,
+                color: isSkipped
+                    ? Theme.of(context).colorScheme.onSurfaceVariant
+                    : hasUpdate
+                        ? Colors.orangeAccent
+                        : Colors.green,
+              ),
+              title: Text(
+                isSkipped
+                    ? "Версію v${info.latestVersion} пропущено"
+                    : hasUpdate
+                        ? "Доступне оновлення: v${info.latestVersion}"
+                        : "Поточна версія: ${_formatDisplayVersion(info?.currentVersion)}",
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                updateState.status == AppUpdateStatus.error
+                    ? (updateState.errorMessage ?? "Помилка перевірки")
+                    : (isSkipped
+                        ? "Нагадування вимкнено. Натисніть для перегляду випуску"
+                        : hasUpdate
+                            ? "Натисніть для перегляду опису випуску"
+                            : (updateState.status == AppUpdateStatus.idle ||
+                                    updateState.status ==
+                                        AppUpdateStatus.checking
+                                ? "Очікування перевірки останніх випусків..."
+                                : "Використовується актуальна версія")),
+              ),
+              trailing: isChecking
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.refresh_rounded),
+                      tooltip: "Перевірити оновлення зараз",
+                      onPressed: () async {
+                        final res = await ref
+                            .read(appUpdateProvider.notifier)
+                            .checkManually();
+                        if (!context.mounted) return;
+                        if (res != null && res.hasUpdate) {
+                          AppUpdateDialog.show(context, res);
+                        } else if (res != null) {
+                          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content:
+                                  Text("Встановлено останню версію Lumen!"),
+                              duration: Duration(seconds: 2),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                  "Не вдалося перевірити оновлення. Спробуйте пізніше."),
+                              duration: Duration(seconds: 3),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+              onTap:
+                  hasUpdate ? () => AppUpdateDialog.show(context, info) : null,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _formatDisplayVersion(String? remoteCurrent) {
+    final v = _appVersion.isNotEmpty ? _appVersion : remoteCurrent;
+    if (v != null && v.isNotEmpty && v != '0.0.0' && v != 'Unknown') {
+      return v.startsWith('v') || v.startsWith('V') ? v : 'v$v';
+    }
+    return '...';
   }
 
   Widget _buildLogsCard() {

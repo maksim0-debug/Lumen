@@ -34,6 +34,37 @@ const _policy = ParserFetchPolicy(
   pollAttempts: 40,
 );
 
+/// Observes the real coordinator without changing its lease or sharing logic.
+class _ObservedFetchCoordinator extends AndroidFetchCoordinator {
+  final Completer<void> joined;
+
+  _ObservedFetchCoordinator(super.database, this.joined)
+      : super(pollInterval: const Duration(milliseconds: 5));
+
+  @override
+  Future<T> run<T>({
+    required String target,
+    required Duration waitTimeout,
+    required Duration leaseDuration,
+    required Future<T> Function() fetch,
+    required String Function(T) encode,
+    required T? Function(String) decode,
+    void Function(String stage, Map<String, Object?> fields)? observe,
+  }) =>
+      super.run<T>(
+        target: target,
+        waitTimeout: waitTimeout,
+        leaseDuration: leaseDuration,
+        fetch: fetch,
+        encode: encode,
+        decode: decode,
+        observe: (stage, fields) {
+          observe?.call(stage, fields);
+          if (stage == 'fetch_wait' && !joined.isCompleted) joined.complete();
+        },
+      );
+}
+
 class _Paths extends PathProviderPlatform {
   final String directory;
   _Paths(this.directory);
@@ -735,6 +766,7 @@ void main() {
     test('Two separate parsers share one real HTTP response and all 12 groups',
         () async {
       final started = Completer<void>();
+      final joined = Completer<void>();
       final release = Completer<void>();
       respond = (request, _) async {
         started.complete();
@@ -745,19 +777,31 @@ void main() {
         await request.response.close();
       };
       final db = await HistoryService().database;
-      ParserService coordinated() => ParserService.forTesting(
-          target: target,
-          policy: _policy,
-          coordinator: AndroidFetchCoordinator(() async => db,
-              pollInterval: const Duration(milliseconds: 5)),
-          httpClientFactory: () => HttpOverrides.runWithHttpOverrides(
-              HttpClient.new, _SocketOverrides()));
+      ParserService coordinated({bool waiter = false}) =>
+          ParserService.forTesting(
+              target: target,
+              // This case tests sharing, not a 250ms transport deadline. Keep the
+              // real response open until the second parser has joined the lease.
+              policy: const ParserFetchPolicy(
+                totalTimeout: Duration(seconds: 3),
+                httpTimeout: Duration(seconds: 2),
+                controllerTimeout: Duration(milliseconds: 300),
+              ),
+              coordinator: waiter
+                  ? _ObservedFetchCoordinator(() async => db, joined)
+                  : AndroidFetchCoordinator(() async => db,
+                      pollInterval: const Duration(milliseconds: 5)),
+              httpClientFactory: () => HttpOverrides.runWithHttpOverrides(
+                  HttpClient.new, _SocketOverrides()));
       final owner = coordinated().fetchSnapshot();
       await started.future;
-      final other = coordinated();
+      final other = coordinated(waiter: true);
       final waiter = other.fetchSnapshot();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      release.complete();
+      try {
+        await joined.future.timeout(const Duration(seconds: 1));
+      } finally {
+        release.complete();
+      }
       final results = await Future.wait([owner, waiter]);
       expect(httpRequests, hasLength(1));
       expect(results.map((r) => r.schedules.length), [12, 12]);

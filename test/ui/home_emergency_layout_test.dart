@@ -1,13 +1,16 @@
 import 'dart:io';
+import '../helpers/idle_app_update_notifier.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lumen/services/achievement_service.dart';
+import 'package:lumen/models/app_update_info.dart';
 import 'package:lumen/services/history_service.dart';
 import 'package:lumen/ui/home_screen.dart';
 import 'package:lumen/ui/state/home_notifier.dart';
+import 'package:lumen/ui/state/app_update_notifier.dart';
 import 'package:lumen/ui/widgets/home/countdown_card.dart';
 import 'package:lumen/ui/widgets/home/data_source_toggle.dart';
 import 'package:lumen/ui/widgets/home/emergency_alert_banner.dart';
@@ -51,6 +54,22 @@ class _LayoutHomeNotifier extends HomeNotifier {
   Future<void> initPowerMonitor() async {}
 }
 
+class _AvailableUpdateNotifier extends IdleAppUpdateNotifier {
+  @override
+  AppUpdateState build() => const AppUpdateState(
+        status: AppUpdateStatus.available,
+        updateInfo: AppUpdateInfo(
+          currentVersion: '1.2.1',
+          latestVersion: '1.3.0',
+          releaseTitle: 'Lumen v1.3.0',
+          releaseNotes: 'Release notes',
+          releaseUrl:
+              'https://github.com/maksim0-debug/Lumen/releases/tag/v1.3.0',
+          hasUpdate: true,
+        ),
+      );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory tempDir;
@@ -80,6 +99,8 @@ void main() {
       {required TargetPlatform platform,
       required Size size,
       required bool monitoring,
+      bool includeAppBar = false,
+      double textScale = 1,
       bool emergency = true,
       Brightness brightness = Brightness.dark}) async {
     tester.view.physicalSize = const Size(1000, 1000);
@@ -89,6 +110,9 @@ void main() {
     final container = ProviderContainer(overrides: [
       homeNotifierProvider.overrideWith(() =>
           _LayoutHomeNotifier(monitoring: monitoring, emergency: emergency)),
+      appUpdateProvider.overrideWith(includeAppBar
+          ? _AvailableUpdateNotifier.new
+          : IdleAppUpdateNotifier.new),
     ]);
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(
@@ -99,20 +123,42 @@ void main() {
       ),
     ));
     await tester.pump();
-    // Exercise the actual home body separately from the unrelated app bar,
-    // whose group title overflows with Flutter's square test font on phones.
-    final body = tester.widget<Scaffold>(find.byType(Scaffold)).body!;
+    // Keep body layout coverage isolated from the toolbar. Dedicated cases
+    // below exercise the full toolbar with an available update.
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold));
+    final body = scaffold.body!;
     tester.view.physicalSize = size;
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
         theme: ThemeData(brightness: brightness, platform: platform),
-        home: Scaffold(body: body),
+        home: Builder(
+            builder: (context) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(textScale)),
+                  child:
+                      includeAppBar ? const HomeScreen() : Scaffold(body: body),
+                )),
       ),
     ));
     await tester.pump();
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final width in [320.0, 375.0]) {
+    testWidgets('home toolbar fits with an available update at width $width',
+        (tester) async {
+      await pumpHome(tester,
+          platform: TargetPlatform.android,
+          size: Size(width, 812),
+          monitoring: false,
+          textScale: 1.5,
+          includeAppBar: true);
+      expect(tester.takeException(), isNull);
+      expect(find.byType(DropdownButton<String>), findsOneWidget);
+      expect(find.byTooltip('Доступне оновлення Lumen v1.3.0'), findsOneWidget);
     });
   }
 
