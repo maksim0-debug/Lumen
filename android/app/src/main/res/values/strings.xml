@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Люмен</string>
     <string name="widget_description">Графік відключень світла</string>
+    <string name="widget_refresh_description">Відкрити застосунок і перевірити графік</string>
 </resources>

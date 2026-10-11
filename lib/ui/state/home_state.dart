@@ -15,6 +15,7 @@ class HomeState {
   final String currentGroup;
   final List<String> notificationGroups;
   final bool isLoading;
+  final bool isRefreshing;
   final String statusMessage;
   final Color statusColor;
   final ScheduleViewMode viewMode;
@@ -45,6 +46,7 @@ class HomeState {
     this.currentGroup = "GPV2.1",
     this.notificationGroups = const [],
     this.isLoading = true,
+    this.isRefreshing = false,
     this.statusMessage = "Завантаження...",
     this.statusColor = Colors.grey,
     this.viewMode = ScheduleViewMode.today,
@@ -141,6 +143,7 @@ class HomeState {
     String? currentGroup,
     List<String>? notificationGroups,
     bool? isLoading,
+    bool? isRefreshing,
     String? statusMessage,
     Color? statusColor,
     ScheduleViewMode? viewMode,
@@ -175,6 +178,7 @@ class HomeState {
       currentGroup: currentGroup ?? this.currentGroup,
       notificationGroups: notificationGroups ?? this.notificationGroups,
       isLoading: isLoading ?? this.isLoading,
+      isRefreshing: isRefreshing ?? this.isRefreshing,
       statusMessage: statusMessage ?? this.statusMessage,
       statusColor: statusColor ?? this.statusColor,
       viewMode: viewMode ?? this.viewMode,

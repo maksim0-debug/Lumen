@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:home_widget/home_widget.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -12,14 +11,9 @@ import 'background_service.dart';
 import 'desktop_sync_service.dart';
 import 'fcm_service.dart';
 import 'notification_service.dart';
-import 'widget_background_callback.dart';
 
 class PlatformInitService {
   static Future<void> init() async {
-    if (Platform.isAndroid) {
-      HomeWidget.registerInteractivityCallback(backgroundCallback);
-    }
-
     if (Platform.isWindows) {
       try {
         await windowManager.ensureInitialized();

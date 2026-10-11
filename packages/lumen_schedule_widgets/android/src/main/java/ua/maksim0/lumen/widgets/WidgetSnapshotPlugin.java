@@ -84,13 +84,18 @@ public final class WidgetSnapshotPlugin implements FlutterPlugin, MethodChannel.
                 !pair.getString(1).matches("[0-49]{24}")) throw new IllegalArgumentException();
             editor.putString("schedule_" + group, pair.getString(0));
             editor.putString("schedule_tomorrow_" + group, pair.getString(1));
-            editor.putBoolean("is_loading_" + (i + 1), false);
+            editor.remove("is_loading_" + (i + 1));
         }
         editor.putString("schedule_snapshot", snapshot.toString());
         final String update = snapshot.getString("sourceUpdatedAt");
         editor.putString("last_update_time", update.substring(update.lastIndexOf(' ') + 1));
         editor.putString("last_update_date", today);
         if (!editor.commit()) throw new IllegalStateException("Widget commit failed");
+        refreshWidgets(context);
+    }
+
+    /** Redraw cached graphs, including widgets left loading by an older app. */
+    public static void refreshWidgets(Context context) {
         final AppWidgetManager manager = AppWidgetManager.getInstance(context);
         for (int i = 1; i <= 12; i++) {
             final ComponentName provider = new ComponentName(context.getPackageName(),

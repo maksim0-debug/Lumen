@@ -1,5 +1,6 @@
 import '../services/schedule_clock.dart';
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,7 @@ import '../services/desktop_tray_coordinator.dart';
 import '../services/desktop_sync_service.dart';
 import '../services/parser_service.dart';
 import '../services/visible_schedule_ticker.dart';
+import '../services/widget_refresh_service.dart';
 import '../services/preferences_helper.dart';
 import '../services/schedule_calculation_service.dart';
 import '../utils/app_formatters.dart';
@@ -34,6 +36,7 @@ import 'shortcuts/shortcut_registry.dart';
 import 'state/home_notifier.dart';
 import 'state/schedule_version_preferences.dart';
 import 'widgets/home/countdown_card.dart';
+import 'widgets/home/manual_refresh_indicator.dart';
 import 'widgets/home/darkness_stage_banner.dart';
 import 'widgets/home/data_source_toggle.dart';
 import 'widgets/home/displayed_schedule_acknowledgment.dart';
@@ -64,6 +67,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   int _lastAutoRefreshMinute = -1;
   int _lastRenderedMinute = -1;
   late final VisibleScheduleTicker _ticker;
+  WidgetRefreshService? _widgetRefreshService;
 
   @override
   void initState() {
@@ -84,10 +88,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(homeNotifierProvider.notifier).loadPreferencesAndData();
+      unawaited(_initializeHome());
       ref.read(homeNotifierProvider.notifier).initPowerMonitor();
       unawaited(ref.read(appUpdateProvider.notifier).checkSilently());
     });
+  }
+
+  Future<void> _initializeHome() async {
+    final notifier = ref.read(homeNotifierProvider.notifier);
+    try {
+      // Native Android capability is independent of theme/platform overrides.
+      await notifier.loadPreferencesAndData(
+          refreshSchedules: !Platform.isAndroid);
+      if (!mounted || !Platform.isAndroid) return;
+      final service = WidgetRefreshService(onRefresh: () async {
+        if (!mounted) return;
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        await notifier.refreshFromWidget();
+      });
+      _widgetRefreshService = service;
+      final refreshed = await service.start();
+      if (mounted && !refreshed) await notifier.loadData();
+    } catch (error, stack) {
+      AppLogger.e('Cannot initialize home screen',
+          tag: 'Home', error: error, stackTrace: stack);
+    }
   }
 
   void _onMinute(DateTime current) {
@@ -125,6 +150,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _focusNode.dispose();
     _desktopTrayCoordinator.dispose();
     _ticker.dispose();
+    _widgetRefreshService?.dispose();
     _achievementService.onAchievementUnlocked = null;
     super.dispose();
   }
@@ -979,16 +1005,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     ),
                   ],
                   Expanded(
-                    child: state.isLoading
-                        ? const Center(
-                            child:
-                                CircularProgressIndicator(color: Colors.orange))
-                        : RefreshIndicator(
-                            color: Colors.orange,
-                            onRefresh: () async {
-                              await notifier.refresh(silent: true);
-                            },
-                            child: ListView(
+                    child: ManualRefreshIndicator(
+                      operation:
+                          state.isRefreshing ? notifier.refreshOperation : null,
+                      onRefresh: () async {
+                        await notifier.refresh(silent: true);
+                      },
+                      child: state.isLoading && !state.isRefreshing
+                          ? const Center(
+                              child: CircularProgressIndicator(
+                                  color: Colors.orange))
+                          : ListView(
                               physics: const AlwaysScrollableScrollPhysics(),
                               children: [
                                 Padding(
@@ -1004,7 +1031,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                                   ),
                               ],
                             ),
-                          ),
+                    ),
                   ),
                 ],
               ),

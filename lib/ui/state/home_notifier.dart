@@ -672,7 +672,7 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- LOAD PREFERENCES & DATA ---
-  Future<void> loadPreferencesAndData() async {
+  Future<void> loadPreferencesAndData({bool refreshSchedules = true}) async {
     await refreshEmergencyStatus();
     if (!ref.mounted) return;
     SharedPreferences? prefs;
@@ -698,6 +698,7 @@ class HomeNotifier extends Notifier<HomeState> {
 
     await updateNotificationsOnly();
     if (!ref.mounted) return;
+    if (!refreshSchedules) return;
 
     if (state.isHistoryMode) {
       if (groupChanged) {
@@ -902,6 +903,7 @@ class HomeNotifier extends Notifier<HomeState> {
       isHistoryMode: state.isHistoryMode,
       onCooldownSkipped: () async {
         await updateStatusDate();
+        if (!ref.mounted) return;
         if (state.isLoading) {
           state = state.copyWith(isLoading: false);
         }
@@ -910,9 +912,10 @@ class HomeNotifier extends Notifier<HomeState> {
         if (state.allSchedules.isEmpty) {
           await loadCachedData();
         }
-        return true;
+        return ref.mounted;
       },
       onFetchStart: () {
+        if (!ref.mounted) return;
         if (!state.isHistoryMode) {
           state = state.copyWith(
             isLoading: state.allSchedules.isEmpty ? true : state.isLoading,
@@ -924,6 +927,7 @@ class HomeNotifier extends Notifier<HomeState> {
         }
       },
       onBeforeFetch: () {
+        if (!ref.mounted) return;
         if (state.allSchedules.isNotEmpty) {
           final oldStats = Map<String, int>.from(state.lastUpdateOldStats)
             ..addAll(_scheduleSyncService.computeOldStats(state.allSchedules));
@@ -932,6 +936,7 @@ class HomeNotifier extends Notifier<HomeState> {
       },
       onFetchSuccess: _applySyncedSchedules,
       onFetchError: (e) {
+        if (!ref.mounted) return;
         if (!state.isHistoryMode) {
           state = state.copyWith(
             isLoading: false,
@@ -1244,7 +1249,79 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- REFRESH ---
-  Future<void> refresh({bool silent = false}) async {
+  Future<void>? _widgetRefreshFuture;
+  Future<void>? _manualRefreshFuture;
+  int _activeManualRefreshes = 0;
+
+  Future<void>? get refreshOperation =>
+      _widgetRefreshFuture ?? _manualRefreshFuture;
+
+  Future<void> _trackManualRefresh(Future<void> Function() action) async {
+    ++_activeManualRefreshes;
+    state = state.copyWith(isRefreshing: true);
+    try {
+      await action();
+    } finally {
+      --_activeManualRefreshes;
+      if (ref.mounted) {
+        state = state.copyWith(isRefreshing: _activeManualRefreshes > 0);
+      }
+    }
+  }
+
+  Future<void> refreshFromWidget() =>
+      _widgetRefreshFuture ??= _trackManualRefresh(_refreshFromWidget)
+          .whenComplete(() => _widgetRefreshFuture = null);
+
+  Future<void> _refreshFromWidget() async {
+    // Invalidate archive reads before any await so they cannot restore history.
+    ++_historyLoadRequestId;
+    ++_realOutageLoadRequestId;
+    state = state.copyWith(
+      viewMode: ScheduleViewMode.today,
+      clearHistoryDate: true,
+      clearHistorySchedule: true,
+      historyVersions: const [],
+      selectedVersionIndex: -1,
+      isLoading: false,
+      statusMessage: 'Оновлення...',
+      statusColor: Colors.orange,
+    );
+    recalculateDisplayData();
+    try {
+      await _achievementService.trackWidgetOpen();
+    } catch (error, stack) {
+      AppLogger.w('Cannot record widget achievement; continuing refresh',
+          tag: 'Home',
+          error: error,
+          stackTrace: stack,
+          persistToHistory: false);
+    }
+    if (!ref.mounted) return;
+    // Wait for ownership to end; failure of an earlier request must not cancel
+    // this independent user request.
+    try {
+      await _manualRefreshFuture;
+    } catch (error, stack) {
+      AppLogger.w('Previous manual refresh failed; continuing widget refresh',
+          tag: 'Home',
+          error: error,
+          stackTrace: stack,
+          persistToHistory: false);
+    }
+    if (!ref.mounted) return;
+    await _scheduleSyncService.waitForIdle();
+    if (!ref.mounted) return;
+    await refresh();
+  }
+
+  Future<void> refresh({bool silent = false}) => _manualRefreshFuture ??=
+      _trackManualRefresh(() => _refresh(silent: silent))
+          .whenComplete(() => _manualRefreshFuture = null);
+
+  Future<void> _refresh({required bool silent}) async {
+    await _scheduleSyncService.waitForIdle();
+    if (!ref.mounted) return;
     _achievementService.trackRefresh();
     if (state.isHistoryMode) {
       final targetDate = state.displayDate;

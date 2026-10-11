@@ -68,6 +68,14 @@ class ScheduleSyncService {
   }
 
   bool _isFetching = false;
+  Completer<void>? _fetchCompleted;
+
+  Future<void> waitForIdle() async {
+    while (_isFetching) {
+      await _fetchCompleted!.future;
+    }
+  }
+
   DateTime? lastFetchTime;
 
   static const Duration defaultCooldown = Duration(seconds: 30);
@@ -177,6 +185,7 @@ class ScheduleSyncService {
     }
 
     _isFetching = true;
+    _fetchCompleted = Completer<void>();
 
     try {
       final allData = await _fetchSchedules();
@@ -190,6 +199,7 @@ class ScheduleSyncService {
       return ScheduleSyncResult.failure(e);
     } finally {
       _isFetching = false;
+      _fetchCompleted!.complete();
     }
   }
 
@@ -232,6 +242,7 @@ class ScheduleSyncService {
     }
 
     _isFetching = true;
+    _fetchCompleted = Completer<void>();
 
     try {
       if (!silent) {
@@ -277,6 +288,7 @@ class ScheduleSyncService {
       AppLogger.e("Error loading data", tag: 'Main', error: e);
     } finally {
       _isFetching = false;
+      _fetchCompleted!.complete();
     }
   }
 }

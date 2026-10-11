@@ -7,8 +7,6 @@ import 'services/android_fetch_diagnostics.dart';
 import 'services/platform_init_service.dart';
 import 'app.dart';
 
-export 'services/widget_background_callback.dart' show backgroundCallback;
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AndroidFetchDiagnostics.instance.startLifecycleLogging();

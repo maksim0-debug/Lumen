@@ -36,7 +36,7 @@ class ParserFetchPolicy {
     this.maxReloads = 2,
   });
 
-  // FCM only enqueues this work. Allow a bounded WorkManager/widget browser
+  // FCM only enqueues this work. Allow a bounded WorkManager browser
   // fetch to finish a slow page, without keeping a permanent service alive.
   static const background = ParserFetchPolicy(
       isBackground: true,

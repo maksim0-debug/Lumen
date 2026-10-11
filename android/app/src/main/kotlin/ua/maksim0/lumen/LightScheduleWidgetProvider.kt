@@ -38,33 +38,11 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
         super.onReceive(context, intent)
         
         if (intent.action == ACTION_REFRESH) {
-            val widgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
-            if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
-                // 1. Set loading state
-                val widgetData = HomeWidgetPlugin.getData(context)
-                
-                val groupIndexMap = mapOf(
-                    "GPV1.1" to 1, "GPV1.2" to 2,
-                    "GPV2.1" to 3, "GPV2.2" to 4,
-                    "GPV3.1" to 5, "GPV3.2" to 6,
-                    "GPV4.1" to 7, "GPV4.2" to 8,
-                    "GPV5.1" to 9, "GPV5.2" to 10,
-                    "GPV6.1" to 11, "GPV6.2" to 12
-                )
-                val index = groupIndexMap[groupName] ?: 1
-                
-                widgetData.edit().putBoolean("is_loading_$index", true).apply()
-                
-                // 2. Update widget to show spinner
-                val appWidgetManager = AppWidgetManager.getInstance(context)
-                updateAppWidget(context, appWidgetManager, widgetId)
-
-                // 3. Trigger background refresh in Dart
-                val backgroundIntent = Intent(context, es.antonborri.home_widget.HomeWidgetBackgroundReceiver::class.java)
-                backgroundIntent.action = "es.antonborri.home_widget.action.BACKGROUND"
-                backgroundIntent.data = Uri.parse("homeWidget://refresh")
-                context.sendBroadcast(backgroundIntent)
-            }
+            // Support PendingIntents installed by an older version until redraw.
+            onUpdate(context, AppWidgetManager.getInstance(context),
+                AppWidgetManager.getInstance(context).getAppWidgetIds(
+                    android.content.ComponentName(context, this::class.java)))
+            context.startActivity(widgetRefreshIntent(context))
         } else if (intent.action == ACTION_MIDNIGHT_UPDATE) {
              val appWidgetManager = AppWidgetManager.getInstance(context)
              val ids = appWidgetManager.getAppWidgetIds(android.content.ComponentName(context, this::class.java))
@@ -75,6 +53,13 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
              scheduleMidnightUpdate(context)
         }
     }
+
+    private fun widgetRefreshIntent(context: Context) =
+        Intent(context, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_WIDGET_REFRESH
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
 
     private fun scheduleMidnightUpdate(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -112,17 +97,6 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
         try {
             val widgetData = HomeWidgetPlugin.getData(context)
             
-            val groupIndexMap = mapOf(
-                "GPV1.1" to 1, "GPV1.2" to 2,
-                "GPV2.1" to 3, "GPV2.2" to 4,
-                "GPV3.1" to 5, "GPV3.2" to 6,
-                "GPV4.1" to 7, "GPV4.2" to 8,
-                "GPV5.1" to 9, "GPV5.2" to 10,
-                "GPV6.1" to 11, "GPV6.2" to 12
-            )
-            val index = groupIndexMap[groupName] ?: 1
-            val isLoading = widgetData.getBoolean("is_loading_$index", false)
-
             val selectedGroup = groupName
             var scheduleKey = "schedule_$selectedGroup"
             
@@ -163,29 +137,19 @@ abstract class BaseLightScheduleWidgetProvider : AppWidgetProvider() {
             views.setTextViewText(R.id.widget_group_name, "Група $displayGroup")
             views.setTextViewText(R.id.widget_update_time, lastUpdate)
 
-            // Loading State
-            if (isLoading) {
-                views.setViewVisibility(R.id.widget_refresh_button, View.GONE)
-                views.setViewVisibility(R.id.widget_loading_bar, View.VISIBLE)
-            } else {
-                views.setViewVisibility(R.id.widget_refresh_button, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_loading_bar, View.GONE)
+            // Manual refresh runs visibly in the app; never persist a spinner.
+            views.setViewVisibility(R.id.widget_refresh_button, View.VISIBLE)
+            views.setViewVisibility(R.id.widget_loading_bar, View.GONE)
+            val refreshIntent = widgetRefreshIntent(context).apply {
+                data = Uri.parse("lumen://widget/refresh/$appWidgetId")
             }
-
-            // Refresh Click
-            val refreshIntent = Intent(context, this::class.java).apply {
-                action = ACTION_REFRESH
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                data = Uri.parse("customScheme://widget/id/$appWidgetId")
-            }
-            val refreshPendingIntent = PendingIntent.getBroadcast(
+            val refreshPendingIntent = PendingIntent.getActivity(
                 context,
                 appWidgetId,
                 refreshIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.widget_refresh_button, refreshPendingIntent)
-
 
             views.removeAllViews(R.id.widget_grid)
 

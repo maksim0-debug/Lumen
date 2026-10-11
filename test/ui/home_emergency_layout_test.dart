@@ -48,7 +48,7 @@ class _LayoutHomeNotifier extends HomeNotifier {
   }
 
   @override
-  Future<void> loadPreferencesAndData() async {}
+  Future<void> loadPreferencesAndData({bool refreshSchedules = true}) async {}
 
   @override
   Future<void> initPowerMonitor() async {}

@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:lumen_schedule_widgets/lumen_schedule_widgets.dart';
 import '../utils/app_formatters.dart';
-import 'package:home_widget/home_widget.dart';
 import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'android_fetch_diagnostics.dart';
@@ -54,40 +53,6 @@ class WidgetService {
       AppLogger.e('Помилка оновлення віджетів',
           tag: 'WidgetService', error: error);
       rethrow;
-    }
-  }
-
-  Future<void> clearAllLoadingStates() async {
-    if (!Platform.isAndroid) return;
-    try {
-      for (int i = 1; i <= 12; i++) {
-        await HomeWidget.saveWidgetData<bool>('is_loading_$i', false);
-      }
-
-      final providers = [
-        'LightScheduleWidgetProvider',
-        'LightScheduleWidgetProvider2',
-        'LightScheduleWidgetProvider3',
-        'LightScheduleWidgetProvider4',
-        'LightScheduleWidgetProvider5',
-        'LightScheduleWidgetProvider6',
-        'LightScheduleWidgetProvider7',
-        'LightScheduleWidgetProvider8',
-        'LightScheduleWidgetProvider9',
-        'LightScheduleWidgetProvider10',
-        'LightScheduleWidgetProvider11',
-        'LightScheduleWidgetProvider12',
-      ];
-
-      for (var provider in providers) {
-        await HomeWidget.updateWidget(
-          qualifiedAndroidName: 'ua.maksim0.lumen.$provider',
-        );
-      }
-      AppLogger.d("🔄 Стан завантаження скинуто", tag: 'WidgetService');
-    } catch (e) {
-      AppLogger.e("Помилка скидання завантаження",
-          tag: 'WidgetService', error: e);
     }
   }
 }

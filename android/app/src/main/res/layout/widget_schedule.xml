@@ -49,7 +49,7 @@
                     android:src="@android:drawable/ic_popup_sync"
                     android:scaleType="fitCenter"
                     android:padding="4dp"
-                    android:contentDescription="Refresh"
+                    android:contentDescription="@string/widget_refresh_description"
                     android:tint="#FFFFFF" />
                 
                 <ProgressBar
