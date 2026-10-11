@@ -534,16 +534,32 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- 4. SELECT VERSION ---
+  ({String message, Color color}) _versionStatus(ScheduleVersion version) {
+    final message = version.isCorrupt
+        ? "Пошкоджені дані графіка: ${version.timeString}${state.isCachedData ? " (З пам'яті)" : ""}"
+        : version.isUnavailable
+            ? "Графік відсутній: ${version.timeString}${state.isCachedData ? " (З пам'яті)" : ""}"
+            : "${state.isCachedData ? "З пам'яті" : "Оновлено ДТЕК"}: ${version.timeString}";
+    return (
+      message: message,
+      color: state.isCachedData
+          ? Colors.orange
+          : version.isUnavailable || version.isCorrupt
+              ? Colors.grey
+              : Colors.green,
+    );
+  }
+
   void selectVersion(int index) {
     if (index < 0 || index >= state.historyVersions.length) return;
     index = state.versionProjection.representativeFor(index);
     final selectedVer = state.historyVersions[index];
+    final status = _versionStatus(selectedVer);
     state = state.copyWith(
       selectedVersionIndex: index,
       historySchedule: selectedVer.toSchedule(),
-      statusMessage: !state.isHistoryMode
-          ? "Оновлено ДТЕК: ${selectedVer.timeString}"
-          : state.statusMessage,
+      statusMessage: state.isHistoryMode ? state.statusMessage : status.message,
+      statusColor: state.isHistoryMode ? state.statusColor : status.color,
     );
     recalculateDisplayData();
   }
@@ -1070,13 +1086,26 @@ class HomeNotifier extends Notifier<HomeState> {
     String msg = "Оновлено ДТЕК: Невідомо";
     Color color = Colors.grey;
 
-    if (state.historyVersions.isNotEmpty) {
-      final version = (state.selectedVersionIndex >= 0 &&
-              state.selectedVersionIndex < state.historyVersions.length)
-          ? state.historyVersions[state.selectedVersionIndex]
-          : state.historyVersions.last;
-      msg = "Оновлено ДТЕК: ${version.timeString}";
-      color = Colors.green;
+    final version = (state.selectedVersionIndex >= 0 &&
+            state.selectedVersionIndex < state.historyVersions.length)
+        ? state.historyVersions[state.selectedVersionIndex]
+        : state.historyVersions.lastOrNull;
+    if (version != null &&
+        (version.isUnavailable ||
+            version.isCorrupt ||
+            (state.currentDisplaySchedule != null &&
+                !state.currentDisplaySchedule!.isEmpty))) {
+      final status = _versionStatus(version);
+      state = state.copyWith(
+          statusMessage: status.message, statusColor: status.color);
+      return;
+    }
+
+    if (state.currentDisplaySchedule == null ||
+        state.currentDisplaySchedule!.isEmpty) {
+      msg = state.viewMode == ScheduleViewMode.tomorrow
+          ? 'Графік на завтра відсутній'
+          : 'Графік відсутній';
     } else if (updateTime != null) {
       msg = "Оновлено ДТЕК: $updateTime";
       color = Colors.green;

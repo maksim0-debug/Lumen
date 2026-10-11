@@ -122,9 +122,9 @@ def main():
         ("duplicate_B", 2, 2, b, True, 16, 48),
         ("stale_A", 1, 1, a, True, 0, 48),
         ("newer_A_after_B", 3, 3, a, True, 16, 72),
-        ("withdraw_tomorrow", 4, 4, a, False, 0, 96),
-        ("republish_tomorrow", 5, 5, a, True, 32, 120),
-        ("same_version_conflict", 6, 5, b, True, 16, 120),
+        ("withdraw_tomorrow", 4, 4, a, False, 0, 84),
+        ("republish_tomorrow", 5, 5, a, True, 32, 108),
+        ("same_version_conflict", 6, 5, b, True, 16, 108),
     ]
     cold = None
     if args.cold_background_only or args.reminder_failure_only:
@@ -134,7 +134,8 @@ def main():
                       8 if args.reminder_failure_only else 7,
                       21 if args.reminder_failure_only else 19, a,
                       cold["current"]["GPV2.1"][1] != "9" * 24,
-                      0, cold["historyRows"] + 24)]
+                      0, cold["historyRows"] +
+                      (24 if cold["current"]["GPV2.1"][1] != "9" * 24 else 12))]
         adb("shell", "input", "keyevent", "3")
         if args.cold_background_only:
             adb("shell", "am", "kill", PACKAGE)

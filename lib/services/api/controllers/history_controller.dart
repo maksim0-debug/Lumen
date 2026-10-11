@@ -48,6 +48,12 @@ class HistoryController {
           'version_number': i + 1,
           'saved_at': v.savedAt.toUtc().toIso8601String(),
           'time_string': v.timeString,
+          'is_available': !v.isUnavailable && !v.isCorrupt,
+          'entry_type': v.isCorrupt
+              ? 'invalid'
+              : v.isUnavailable
+                  ? 'unavailable'
+                  : 'publication',
           'outage_minutes': v.outageMinutes,
           'outage_formatted': v.outageString,
           'schedule_code': v.hash,

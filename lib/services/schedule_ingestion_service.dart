@@ -7,6 +7,7 @@ import '../models/schedule_status.dart';
 import 'history_service.dart';
 import 'schedule_change_notification_service.dart';
 import 'schedule_clock.dart';
+import 'schedule_day_store.dart';
 
 /// SQLite is authoritative across foreground and background isolates.
 class ScheduleIngestionService {
@@ -43,6 +44,7 @@ class ScheduleIngestionService {
     final db = await history.database;
     await createCursorSchema(db);
     await db.transaction((txn) async {
+      await ScheduleDayStore.createSchema(txn);
       final cursor = await txn.query('schedule_journal_cursor',
           where: 'endpoint=?', whereArgs: [endpoint]);
       if ((cursor.isNotEmpty &&
@@ -58,19 +60,16 @@ class ScheduleIngestionService {
             (snapshot.tomorrowDate, e.value.tomorrow)
           ]) {
             final rows = await txn.query('schedule_history',
-                where: 'group_key=? AND target_date=? AND dtek_updated_at=?',
-                whereArgs: [e.key, day.$1, snapshot.sourceUpdatedAt]);
-            if (rows.any((r) => r['schedule_code'] != day.$2.scheduleHash)) {
-              throw const FormatException('Conflicting archived publication');
-            }
-            if (rows.isEmpty) {
-              await txn.insert('schedule_history', {
-                'group_key': e.key,
-                'target_date': day.$1,
-                'schedule_code': day.$2.scheduleHash,
-                'dtek_updated_at': snapshot.sourceUpdatedAt,
-              });
-            }
+                where: 'group_key=? AND target_date=?',
+                whereArgs: [e.key, day.$1]);
+            await ScheduleDayStore.record(txn,
+                group: e.key,
+                targetDate: day.$1,
+                snapshotDate: snapshot.todayDate,
+                version: snapshot.sourceVersion,
+                updatedAt: snapshot.sourceUpdatedAt,
+                schedule: day.$2,
+                historyRows: rows);
           }
         }
       }

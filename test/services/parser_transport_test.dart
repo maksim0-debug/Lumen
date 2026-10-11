@@ -334,6 +334,8 @@ void main() {
       'schedule_history',
       'dtek_snapshot_state',
       'dtek_current_schedule',
+      'dtek_day_observations',
+      'dtek_current_day_state',
       'emergency_status',
       'app_logs'
     ]) {

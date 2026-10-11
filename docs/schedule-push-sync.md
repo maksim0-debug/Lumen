@@ -77,9 +77,33 @@ from replacing newer data, including after a manual edit. Providers select graph
 by explicit calendar date and stop reusing yesterday's tomorrow after it expires.
 Foreground FCM and Android resume reload the authoritative cache for the UI.
 
-SQLite's existing version remains 5: additive internal tables are created lazily,
-and older app versions can ignore them. Deploy the Worker before distributing the
-new app. An older Worker/app remains usable through legacy events/parser fallback.
+SQLite's schema version remains 6. Availability tables are additive and do not
+rewrite or delete existing `schedule_history` records:
+
+- `dtek_day_observations` records source observations, including absent tomorrow,
+  with the snapshot calendar date and source version;
+- `dtek_current_day_state` records the live state even before the first tomorrow
+  publication, preventing older backfill from reviving a withdrawn graph;
+- new `schedule_history` rows represent published graphs, including genuine
+  zero-outage graphs. Initial and repeated absence are not publications;
+- a withdrawal remains a visible availability boundary between real graphs,
+  preserving `A -> absent -> A`. Legacy empty history rows are retained on disk
+  but no longer appear as initial zero-outage publications.
+
+JSON exports include portable `source_observations` without SQLite identities.
+Import restores archive observations without changing live source watermarks,
+current pointers or notification delivery. Legacy history JSON also preserves
+the original source timestamp when available.
+
+History API entries expose `is_available` and `entry_type` (`publication` or
+`unavailable`). An unavailable entry is labeled `Графік відсутній`; a genuine
+published graph with zero planned outage minutes retains `0г`.
+Corrupt legacy history codes remain on disk and are labeled
+`Пошкоджені дані графіка`; the history API marks them unavailable with
+`entry_type: invalid`. They are not treated as source withdrawal events.
+
+Deploy the Worker before distributing the initial snapshot-capable app. An older
+Worker remains usable through the existing parser fallback.
 Rolling back Worker code leaves journal entries intact; preserve the monitor state
 and its journal together if restoring server storage.
 

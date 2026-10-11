@@ -11,6 +11,12 @@ enum LightStatus {
 enum SlotStatus { on, off, maybe, unknown }
 
 class DailySchedule {
+  static const emptyCode = '999999999999999999999999';
+  static final _validCode = RegExp(r'^[0-49]{24}$');
+
+  static bool isValidCode(Object? code) =>
+      code is String && _validCode.hasMatch(code);
+
   final List<LightStatus> hours;
   DailySchedule(this.hours);
 
@@ -182,6 +188,11 @@ class ScheduleVersion {
 
   DailySchedule toSchedule() => DailySchedule.fromEncodedString(hash);
 
+  /// An availability event, never a published zero-outage schedule.
+  bool get isUnavailable => hash == DailySchedule.emptyCode;
+
+  bool get isCorrupt => !DailySchedule.isValidCode(hash);
+
   String get timeString {
     final timeStr =
         "${savedAt.hour.toString().padLeft(2, '0')}:${savedAt.minute.toString().padLeft(2, '0')}";
@@ -191,6 +202,8 @@ class ScheduleVersion {
   }
 
   String get outageString {
+    if (isCorrupt) return 'Пошкоджені дані графіка';
+    if (isUnavailable) return 'Графік відсутній';
     final hours = outageMinutes ~/ 60;
     final mins = outageMinutes % 60;
     if (mins == 0) return "$hoursг";
@@ -201,6 +214,7 @@ class ScheduleVersion {
         'hash': hash,
         'savedAt': savedAt.toIso8601String(),
         'outageMinutes': outageMinutes,
+        if (sourceUpdatedAt != null) 'sourceUpdatedAt': sourceUpdatedAt,
       };
 
   factory ScheduleVersion.fromJson(Map<String, dynamic> json) {
@@ -208,6 +222,9 @@ class ScheduleVersion {
       hash: json['hash'] as String,
       savedAt: DateTime.parse(json['savedAt'] as String),
       outageMinutes: json['outageMinutes'] as int,
+      sourceUpdatedAt: json['sourceUpdatedAt'] as String?,
+      isManual:
+          (json['sourceUpdatedAt'] as String?)?.endsWith('(Manual)') ?? false,
     );
   }
 

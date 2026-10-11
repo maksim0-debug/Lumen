@@ -21,15 +21,13 @@ class ScheduleVersionProjection {
 }
 
 class ScheduleVersionFilter {
-  static final _validCode = RegExp(r'^[0-49]{24}$');
-
   /// Only adjacent, trustworthy automatic publications can be collapsed.
   static bool _isRepeat(ScheduleVersion previous, ScheduleVersion current) =>
       !previous.isManual &&
       !current.isManual &&
       previous.hasReliableTimestamp &&
       current.hasReliableTimestamp &&
-      _validCode.hasMatch(previous.hash) &&
+      !previous.isCorrupt &&
       previous.hash == current.hash;
 
   static ScheduleVersionProjection project(

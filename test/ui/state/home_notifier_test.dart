@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,24 +13,36 @@ import 'package:lumen/models/schedule_view_mode.dart';
 import 'package:lumen/ui/state/home_notifier.dart';
 
 import 'package:lumen/services/achievement_service.dart';
+import 'package:lumen/services/history_service.dart';
 
 class MockPathProviderPlatform extends Fake
     with MockPlatformInterfaceMixin
     implements PathProviderPlatform {
+  MockPathProviderPlatform(this.path);
+  final String path;
   @override
   Future<String?> getApplicationDocumentsPath() async {
-    return '.';
+    return path;
   }
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory scratch;
+  final originalPaths = PathProviderPlatform.instance;
 
   setUpAll(() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
-    PathProviderPlatform.instance = MockPathProviderPlatform();
+    scratch = await Directory.systemTemp.createTemp('lumen-home-state-');
+    PathProviderPlatform.instance = MockPathProviderPlatform(scratch.path);
     await AchievementService().loadAllStates();
+  });
+
+  tearDownAll(() async {
+    await (await HistoryService().database).close();
+    PathProviderPlatform.instance = originalPaths;
+    await scratch.delete(recursive: true);
   });
 
   setUp(() {
@@ -223,4 +237,3 @@ void main() {
     });
   });
 }
-

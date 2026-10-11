@@ -53,7 +53,7 @@ void main() {
     expect((await db.query('schedule_history')).length, 1);
   });
   test(
-      'withdrawn tomorrow persists an empty latest version and older publication cannot revive it',
+      'withdrawn tomorrow persists availability separately and older publication cannot revive it',
       () async {
     final both = FullSchedule(
         today: DailySchedule.fromEncodedString('0' * 24),
@@ -64,7 +64,16 @@ void main() {
         where: 'target_date = ?',
         whereArgs: ['2026-10-07'],
         orderBy: 'id DESC');
-    expect(rows.first['schedule_code'], '9' * 24);
+    expect(rows, hasLength(1));
+    expect(rows.single['schedule_code'], '1' * 24);
+    final states = await db.query('dtek_current_day_state',
+        where: 'target_date=?', whereArgs: ['2026-10-07']);
+    expect(states.single['schedule_code'], '9' * 24);
+    expect(states.single['history_id'], isNull);
+    final versions =
+        await history.getVersionsForDate(DateTime(2026, 10, 7), 'GPV1.1');
+    expect(versions.last.isUnavailable, true);
+    expect(versions.last.outageString, 'Графік відсутній');
     await expectLater(
         save({'GPV1.1': both}, '06.10.2026 11:00'), throwsFormatException);
   });

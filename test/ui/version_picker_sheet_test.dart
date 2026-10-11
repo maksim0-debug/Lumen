@@ -45,6 +45,33 @@ void main() {
     VersionPickerSheet.resetOpenState();
   });
 
+  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+    testWidgets(
+        'withdrawal label differs from published zero on ${platform.name}',
+        (tester) async {
+      await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+        theme: ThemeData(platform: platform),
+        home: Scaffold(
+            body: VersionPickerSheet(
+          versions: [
+            sampleVersions.last,
+            ScheduleVersion.fromSchedule(DailySchedule.empty(),
+                at: DateTime(2026, 10, 1, 8)),
+            sampleVersions.first,
+          ],
+          selectedVersionIndex: 2,
+          onVersionSelected: (_) {},
+        )),
+      )));
+      await tester.pumpAndSettle();
+      expect(find.text('(Графік відсутній)'), findsOneWidget);
+      expect(find.text('(0г)'), findsOneWidget);
+      expect(find.text('(24г)'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   group('VersionPickerSheet keyboard hint visibility', () {
     const expectations = {
       TargetPlatform.android: false,

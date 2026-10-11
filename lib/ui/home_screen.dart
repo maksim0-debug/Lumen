@@ -656,7 +656,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                      'Версія графіка: ${ver.timeString} (${ver.outageString})',
+                      ver.isUnavailable
+                          ? 'Графік відсутній: ${ver.timeString}'
+                          : 'Версія графіка: ${ver.timeString} (${ver.outageString})',
                     ),
                     duration: const Duration(seconds: 1),
                     behavior: SnackBarBehavior.floating,
