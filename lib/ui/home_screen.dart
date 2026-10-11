@@ -772,8 +772,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 alignment: Alignment.center,
                 value: state.currentGroup,
                 dropdownColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
-                icon: Icon(Icons.arrow_drop_down,
-                    color: isDark ? Colors.orange : Colors.deepPurple),
+                icon: const SizedBox.shrink(),
+                // Keep the arrow beside the label while retaining the bounded
+                // dropdown width for narrow toolbars and larger text scales.
+                selectedItemBuilder: (context) => ParserService.allGroups
+                    .map((value) => Align(
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  AppFormatters.formatGroupName(value),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(Icons.arrow_drop_down,
+                                  size: 24,
+                                  color: isDark
+                                      ? Colors.orange
+                                      : Colors.deepPurple),
+                            ],
+                          ),
+                        ))
+                    .toList(),
                 underline: Container(),
                 style: TextStyle(
                     fontSize: 20,

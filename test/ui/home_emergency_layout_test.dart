@@ -52,6 +52,11 @@ class _LayoutHomeNotifier extends HomeNotifier {
 
   @override
   Future<void> initPowerMonitor() async {}
+
+  @override
+  Future<void> changeGroup(String? newGroup) async {
+    if (newGroup != null) state = state.copyWith(currentGroup: newGroup);
+  }
 }
 
 class _AvailableUpdateNotifier extends IdleAppUpdateNotifier {
@@ -81,6 +86,11 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('lumen_emergency_layout_');
     PathProviderPlatform.instance = _TestPathProvider(tempDir.path);
     await AchievementService().loadAllStates();
+    // Complete the unrelated session achievement outside widget fake time so
+    // repeated HomeScreen mounts do not leave an asynchronous SQLite timer.
+    for (var session = 0; session < 5; session++) {
+      await AchievementService().trackAppSession();
+    }
   });
 
   tearDownAll(() async {
@@ -100,6 +110,7 @@ void main() {
       required Size size,
       required bool monitoring,
       bool includeAppBar = false,
+      bool availableUpdate = true,
       double textScale = 1,
       bool emergency = true,
       Brightness brightness = Brightness.dark}) async {
@@ -110,7 +121,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       homeNotifierProvider.overrideWith(() =>
           _LayoutHomeNotifier(monitoring: monitoring, emergency: emergency)),
-      appUpdateProvider.overrideWith(includeAppBar
+      appUpdateProvider.overrideWith(includeAppBar && availableUpdate
           ? _AvailableUpdateNotifier.new
           : IdleAppUpdateNotifier.new),
     ]);
@@ -146,6 +157,74 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  for (final width in [320.0, 375.0, 430.0]) {
+    for (final availableUpdate in [false, true]) {
+      for (final textScale in [1.0, 1.5, 2.0]) {
+        for (final brightness in Brightness.values) {
+          testWidgets(
+              'home group arrow stays close at width $width update=$availableUpdate scale=$textScale $brightness',
+              (tester) async {
+            await pumpHome(tester,
+                platform: TargetPlatform.android,
+                size: Size(width, 812),
+                monitoring: false,
+                emergency: false,
+                includeAppBar: true,
+                availableUpdate: availableUpdate,
+                textScale: textScale,
+                brightness: brightness);
+            final dropdown = find.byType(DropdownButton<String>);
+            final label =
+                find.descendant(of: dropdown, matching: find.byType(Text));
+            final arrow = find.descendant(
+                of: dropdown, matching: find.byIcon(Icons.arrow_drop_down));
+            final labelRect = tester.getRect(label);
+            final arrowRect = tester.getRect(arrow);
+            expect(arrowRect.left - labelRect.right, closeTo(4, 0.1));
+            expect(labelRect.width, greaterThan(0));
+            expect(labelRect.left, greaterThanOrEqualTo(0));
+            final refreshRect =
+                tester.getRect(find.byTooltip('Оновити (R / F5)'));
+            expect(arrowRect.right, lessThanOrEqualTo(refreshRect.left));
+            for (final icon in [
+              Icons.refresh,
+              Icons.analytics_outlined,
+              Icons.settings,
+              if (availableUpdate) Icons.system_update_rounded
+            ]) {
+              final rect = tester.getRect(find.byIcon(icon));
+              expect(rect.left, greaterThanOrEqualTo(0));
+              expect(rect.right, lessThanOrEqualTo(width));
+            }
+            expect(find.text('NEW'),
+                availableUpdate ? findsOneWidget : findsNothing);
+            expect(tester.takeException(), isNull);
+          });
+        }
+      }
+    }
+  }
+
+  testWidgets('compact group selector opens and updates the selected group',
+      (tester) async {
+    await pumpHome(tester,
+        platform: TargetPlatform.android,
+        size: const Size(375, 812),
+        monitoring: false,
+        emergency: false,
+        includeAppBar: true);
+    final dropdown = find.byType(DropdownButton<String>);
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    final group = find.widgetWithText(DropdownMenuItem<String>, 'Група 3.1');
+    await tester.ensureVisible(group);
+    await tester.tap(group);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: dropdown, matching: find.text('Група 3.1')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   for (final width in [320.0, 375.0]) {
     testWidgets('home toolbar fits with an available update at width $width',
