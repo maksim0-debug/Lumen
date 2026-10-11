@@ -156,19 +156,56 @@ class EmergencyStatusService {
           current.active != status.active) {
         return false;
       }
+      // UI may have rendered the same status after the claim was acquired.
+      // Recheck its durable receipt before starting the external OS call.
+      final receipts = await database.query('emergency_status',
+          columns: ['notified_at'], where: 'id = 1');
+      if (receipts.isEmpty ||
+          status.changedAt <= (receipts.single['notified_at'] as int)) {
+        return false;
+      }
       await show().timeout(const Duration(seconds: 10));
       displayed = true;
       return true;
     } finally {
-      await database.update(
-          'emergency_status',
-          {
-            if (displayed) 'notified_at': status.changedAt,
-            'claim_version': 0,
-            'claim_until': 0,
-          },
-          where: 'id = 1 AND claim_version = ? AND claim_until = ?',
-          whereArgs: [status.changedAt, claimedUntil]);
+      // A newer banner can be acknowledged while an older display finishes.
+      // Completing that older claim must never move the receipt backwards.
+      await database.rawUpdate(
+          'UPDATE emergency_status SET '
+          'notified_at = MAX(notified_at, ?), claim_version = 0, claim_until = 0 '
+          'WHERE id = 1 AND claim_version = ? AND claim_until = ?',
+          [displayed ? status.changedAt : 0, status.changedAt, claimedUntil]);
     }
+  }
+
+  /// Acknowledges an emergency status that was already observed and displayed
+  /// to the user (e.g. in active UI). Marks [notified_at] to prevent subsequent
+  /// duplicate or delayed notifications for the same status transition.
+  Future<bool> acknowledge(EmergencyStatus status) async {
+    if (status.changedAt <= 0) return false;
+    final database = await _open();
+    return database.transaction((transaction) async {
+      final rows = await transaction.query('emergency_status', where: 'id = 1');
+      if (rows.isEmpty) return false;
+      final current = _decode(rows);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (current.changedAt != status.changedAt ||
+          current.active != status.active ||
+          current.isPossible != status.isPossible ||
+          !current.isFreshAt(now)) {
+        return false;
+      }
+      final currentNotified = rows.single['notified_at'] as int? ?? 0;
+      if (status.changedAt <= currentNotified) return true;
+      // A rendered banner is an independent successful display. Preserve any
+      // OS claim, but record the receipt immediately even if that show fails.
+      // Claim completion uses MAX, so it cannot erase this UI receipt.
+      await transaction.update(
+        'emergency_status',
+        {'notified_at': status.changedAt},
+        where: 'id = 1',
+      );
+      return true;
+    });
   }
 }

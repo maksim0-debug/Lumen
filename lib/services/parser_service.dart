@@ -147,9 +147,7 @@ class ParserService {
   Future<ParserFetchResult> fetchSnapshot() =>
       AndroidFetchDiagnostics.instance.run(
         source: 'parser_direct',
-        execution: identical(_policy, ParserFetchPolicy.background)
-            ? 'background_parser'
-            : 'main_parser',
+        execution: _policy.isBackground ? 'background_parser' : 'main_parser',
         action: _fetchSnapshot,
       );
 
@@ -329,7 +327,8 @@ class ParserService {
         observation != null && observation.isValidAt(now) ? observation : null;
     if (emergency != null) {
       try {
-        await (emergencyService ?? EmergencyStatusService()).observe(emergency);
+        final statusService = emergencyService ?? EmergencyStatusService();
+        await statusService.observe(emergency);
       } catch (error) {
         AppLogger.w('Cannot persist emergency observation',
             tag: 'Parser', error: error);

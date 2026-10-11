@@ -58,7 +58,11 @@ class EmergencyNotificationService {
     return true;
   }
 
-  Future<void> notifyStatus(EmergencyStatus status) async {
+  Future<void> notifyLatest({bool rethrowOnError = false}) async =>
+      notifyStatus(await statusService.read(), rethrowOnError: rethrowOnError);
+
+  Future<void> notifyStatus(EmergencyStatus status,
+      {bool rethrowOnError = false}) async {
     try {
       if (status.active == null ||
           !status.isFreshAt(DateTime.now().millisecondsSinceEpoch) ||
@@ -71,10 +75,13 @@ class EmergencyNotificationService {
               _show?.call(status.active!) ??
               _showNotification(status.active!, status.isPossible));
       final latest = await statusService.read();
-      if (latest.changedAt > status.changedAt) await notifyStatus(latest);
+      if (latest.changedAt > status.changedAt) {
+        await notifyStatus(latest, rethrowOnError: rethrowOnError);
+      }
     } catch (error, stack) {
       AppLogger.e('Cannot display emergency notification',
           tag: 'Emergency', error: error, stackTrace: stack);
+      if (rethrowOnError) rethrow;
     }
   }
 }

@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/data_source_mode.dart';
 import '../../models/emergency_status.dart';
 import '../../services/emergency_status_service.dart';
-import '../../services/emergency_notification_service.dart';
 import '../../models/hour_segment.dart';
 import '../../models/power_event.dart';
 import '../../models/schedule_status.dart';
@@ -170,10 +169,16 @@ class HomeNotifier extends Notifier<HomeState> {
   PowerMonitorService get powerMonitor => _powerMonitor;
   NotificationService get notifier => _notifier;
   AchievementService get achievementService => _achievementService;
+  EmergencyStatus get emergencyStatus => _emergencyStatus;
+
+  Future<bool> acknowledgeDisplayedEmergency(EmergencyStatus status) =>
+      _emergencyService.acknowledge(status);
 
   Future<void> refreshEmergencyStatus() async {
     final status = await _emergencyService.read();
-    if (ref.mounted) _applyEmergencyStatus(status);
+    if (ref.mounted) {
+      _applyEmergencyStatus(status);
+    }
   }
 
   void _applyEmergencyStatus(EmergencyStatus status) {
@@ -186,10 +191,6 @@ class HomeNotifier extends Notifier<HomeState> {
       isEmergencyStatusStale:
           !status.isFreshAt(DateTime.now().millisecondsSinceEpoch),
     );
-    if (Platform.isWindows && status.active != null) {
-      unawaited(EmergencyNotificationService(statusService: _emergencyService)
-          .notifyStatus(status));
-    }
   }
 
   // --- RECALCULATE DISPLAY DATA ---

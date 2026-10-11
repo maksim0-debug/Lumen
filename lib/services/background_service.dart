@@ -11,6 +11,8 @@ import 'preferences_helper.dart';
 import 'schedule_change_notification_service.dart';
 import 'schedule_ingestion_service.dart';
 import 'worker_schedule_service.dart';
+import 'emergency_notification_service.dart';
+import 'emergency_status_service.dart';
 import '../models/schedule_status.dart';
 
 const String taskUpdateSchedule = 'taskUpdateSchedule';
@@ -45,7 +47,13 @@ Future<Map<String, FullSchedule>> _fetchBackgroundSchedules() async {
     AndroidFetchDiagnostics.current?.event('worker_source_fallback', {
       'reason': error.runtimeType.toString(),
     });
-    return ParserService.background().fetchAllSchedules();
+    try {
+      return await ParserService.background().fetchAllSchedules();
+    } finally {
+      // A status-only page still deserves delivery after the parser has
+      // accepted its result and released its transport deadline/resources.
+      await EmergencyNotificationService().notifyLatest();
+    }
   }
 }
 
@@ -158,6 +166,8 @@ Future<void> applyBackgroundSchedules(
   ScheduleChangeNotificationService? changes,
   NotificationService? notifications,
   WidgetService? widgets,
+  EmergencyNotificationService? emergencyNotifications,
+  EmergencyStatusService? emergencyStatus,
 }) async {
   (Object, StackTrace)? failure;
   Future<void> attempt(String operation, Future<void> Function() action) async {
@@ -193,6 +203,16 @@ Future<void> applyBackgroundSchedules(
       'change notifications',
       () => (changes ?? ScheduleChangeNotificationService())
           .observeSchedules(schedules));
+  await attempt('emergency notifications', () async {
+    final statusService = emergencyStatus ?? EmergencyStatusService();
+    final status = await statusService.read();
+    if (status.active != null &&
+        status.isFreshAt(DateTime.now().millisecondsSinceEpoch)) {
+      final notifier = emergencyNotifications ??
+          EmergencyNotificationService(statusService: statusService);
+      await notifier.notifyStatus(status, rethrowOnError: true);
+    }
+  });
   await attempt('reminder initialization', () async {
     final prefs = await PreferencesHelper.getSafeInstance();
     await prefs.reload();

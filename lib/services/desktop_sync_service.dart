@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'app_logger.dart';
 import 'parser_service.dart';
 import 'schedule_sync_service.dart';
+import 'emergency_notification_service.dart';
 
 class DesktopAdminConfig {
   static const defaultWorkerUrl =
@@ -77,19 +78,23 @@ class DesktopSyncService {
         interval = const Duration(minutes: 5),
         requestTimeout = const Duration(seconds: 75),
         _fetch = ScheduleSyncService().fetchSnapshotAndPublish,
+        _notifyEmergency = EmergencyNotificationService().notifyLatest,
         _loadConfig = DesktopAdminConfig.loadFromFile;
 
   @visibleForTesting
   DesktopSyncService.forTesting({
     required Future<ParserFetchResult> Function() fetch,
     required Future<DesktopAdminConfig?> Function() loadConfig,
+    Future<void> Function()? notifyEmergency,
     this.startDelay = const Duration(seconds: 20),
     this.interval = const Duration(minutes: 5),
     this.requestTimeout = const Duration(seconds: 75),
   })  : _fetch = fetch,
+        _notifyEmergency = notifyEmergency ?? (() async {}),
         _loadConfig = loadConfig;
 
   final Future<ParserFetchResult> Function() _fetch;
+  final Future<void> Function() _notifyEmergency;
   final Future<DesktopAdminConfig?> Function() _loadConfig;
   final Duration startDelay;
   final Duration interval;
@@ -116,21 +121,48 @@ class DesktopSyncService {
     if (!isSupported || _isSyncing) return;
     _isSyncing = true;
     final generation = _generation;
+    Future<void>? emergencyDelivery;
     try {
       final result = await _fetch().timeout(const Duration(seconds: 90));
       if (generation != _generation ||
           (result.schedules.isEmpty && result.emergency == null)) {
         return;
       }
-      final config = await _loadConfig().timeout(const Duration(seconds: 10));
-      if (generation != _generation || config == null || result.html == null) {
-        return;
-      }
-      await pushToWorker(config, result.html!);
+      // Both effects consume an already accepted fetch. A slow Worker must
+      // not delay the local alert, nor may an OS display delay publication.
+      final publication = _publishFetchedResult(result, generation);
+      emergencyDelivery = _deliverEmergency(generation);
+      await publication;
     } catch (error) {
       AppLogger.w('Desktop synchronization failed: $error', tag: 'DesktopSync');
     } finally {
-      _isSyncing = false;
+      try {
+        // Source failure must not strand a previously stored delivery failure.
+        // notifyLatest independently rejects expired/already acknowledged data;
+        // this retry does not treat the failed fetch as a new observation.
+        await (emergencyDelivery ?? _deliverEmergency(generation));
+      } finally {
+        _isSyncing = false;
+      }
+    }
+  }
+
+  Future<void> _publishFetchedResult(
+      ParserFetchResult result, int generation) async {
+    final config = await _loadConfig().timeout(const Duration(seconds: 10));
+    if (generation != _generation || config == null || result.html == null) {
+      return;
+    }
+    await pushToWorker(config, result.html!);
+  }
+
+  Future<void> _deliverEmergency(int generation) async {
+    if (generation != _generation) return;
+    try {
+      await _notifyEmergency();
+    } catch (error, stack) {
+      AppLogger.e('Desktop emergency notification failed',
+          tag: 'DesktopSync', error: error, stackTrace: stack);
     }
   }
 

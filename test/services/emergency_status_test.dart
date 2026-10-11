@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:lumen/services/emergency_status_service.dart';
 import 'package:lumen/services/emergency_notification_service.dart';
 import 'package:lumen/services/parser_service.dart';
 import 'package:lumen/services/schedule_clock.dart';
+import 'package:lumen/services/desktop_sync_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -479,6 +481,362 @@ void main() {
       expect(rejected.html, isNot(contains('DisconSchedule.fact')));
       expect(rejected.emergency!.active, true);
     }
+  });
+
+  test('acknowledge updates notified_at and suppresses duplicate notifications',
+      () async {
+    final active = await service.observe(EmergencyObservation(true, now));
+    var shownCount = 0;
+    final notifications = EmergencyNotificationService(
+        statusService: service,
+        enabled: () async => true,
+        show: (_) async => shownCount++);
+
+    // Acknowledge the active status as seen in UI:
+    await service.acknowledge(active);
+
+    // Verify in DB that notified_at is updated:
+    final row = (await db.query('emergency_status', where: 'id = 1')).single;
+    expect(row['notified_at'], active.changedAt);
+
+    // deliverNotification should now return false and show 0 notifications:
+    await notifications.notifyStatus(active);
+    expect(shownCount, 0);
+
+    // Now status transitions to false (cancellation):
+    final cancelled = await service
+        .observe(EmergencyObservation(false, now + 1000, confirmed: true));
+    expect(cancelled.changedAt, now + 1000);
+
+    // Cancelled status is unacknowledged, so notifyStatus will deliver it:
+    await notifications.notifyStatus(cancelled);
+    expect(shownCount, 1);
+
+    // Acknowledging the cancellation suppresses any subsequent delivery:
+    await service.acknowledge(cancelled);
+    await notifications.notifyStatus(cancelled);
+    expect(shownCount, 1);
+  });
+
+  test(
+      'parsing stores observations and delivery is a separate completed-fetch effect',
+      () async {
+    const htmlWithEmergency =
+        "<div id='modal-attention'><p>Введені екстрені відключення</p></div>";
+    var shown = <bool>[];
+    final notifications = EmergencyNotificationService(
+        statusService: service,
+        enabled: () async => true,
+        show: (active) async => shown.add(active));
+
+    // Parsing never waits for a system display, in either execution policy.
+    final foregroundParser = ParserService();
+    await foregroundParser.parseFetchedPage('null',
+        originalHtml: htmlWithEmergency,
+        observedAt: now,
+        emergencyService: service);
+
+    expect(shown, isEmpty);
+    final stored = await service.read();
+    expect(stored.active, true);
+
+    // A background cancellation is stored before a separate delivery attempt.
+    const htmlCancelled =
+        "<div id='modal-attention'><p>Екстрені відключення скасовано. Графіки діють.</p></div>";
+    final backgroundParser = ParserService.background();
+    await backgroundParser.parseFetchedPage('null',
+        originalHtml: htmlCancelled,
+        observedAt: now + 500,
+        emergencyService: service);
+
+    expect(shown, isEmpty);
+    await notifications.notifyLatest();
+    expect(shown, [false]);
+  });
+
+  test('visible UI acknowledgment preserves an in-flight OS claim', () async {
+    final active = await service.observe(EmergencyObservation(true, now));
+    // Simulate active in-flight claim by deliverNotification:
+    final claimUntil = DateTime.now().millisecondsSinceEpoch + 30000;
+    await db.update(
+        'emergency_status',
+        {
+          'claim_version': active.changedAt,
+          'claim_until': claimUntil,
+        },
+        where: 'id = 1');
+
+    // A rendered banner is a valid receipt even if an OS display owns a lease.
+    expect(await service.acknowledge(active), true);
+
+    final row = (await db.query('emergency_status', where: 'id = 1')).single;
+    expect(row['notified_at'], active.changedAt);
+    expect(row['claim_version'], active.changedAt);
+    expect(row['claim_until'], claimUntil);
+  });
+
+  test('failed in-flight OS display cannot erase a receipt for the same banner',
+      () async {
+    final active = await service.observe(EmergencyObservation(true, now));
+    final started = Completer<void>();
+    final release = Completer<void>();
+    final delivery = service.deliverNotification(active, () async {
+      started.complete();
+      await release.future;
+      throw StateError('OS display failed');
+    });
+    // Register the error assertion before releasing the asynchronous display.
+    final failed = expectLater(delivery, throwsStateError);
+    await started.future;
+    final acknowledged = await service.acknowledge(active);
+    release.complete();
+    await failed;
+    expect(acknowledged, true);
+    final row = (await db.query('emergency_status')).single;
+    expect(row['notified_at'], active.changedAt);
+    expect(row['claim_version'], 0);
+    expect(row['claim_until'], 0);
+    var shown = 0;
+    expect(
+        await service.deliverNotification(active, () async => shown++), false);
+    expect(shown, 0);
+  });
+
+  test('a UI receipt after claiming skips an OS display that has not started',
+      () async {
+    final active = await service.observe(EmergencyObservation(true, now));
+    final readStarted = Completer<void>();
+    final continueRead = Completer<void>();
+    var opens = 0;
+    final deliveryService = EmergencyStatusService.forTesting(() async {
+      if (++opens == 2) {
+        readStarted.complete();
+        await continueRead.future;
+      }
+      return db;
+    });
+    var shown = 0;
+    final delivery =
+        deliveryService.deliverNotification(active, () async => shown++);
+    await readStarted.future;
+    expect((await db.query('emergency_status')).single['claim_version'],
+        active.changedAt);
+    final acknowledged = await service.acknowledge(active);
+    continueRead.complete();
+    expect(await delivery, false);
+    expect(acknowledged, true);
+    expect(shown, 0);
+    final row = (await db.query('emergency_status')).single;
+    expect(row['notified_at'], active.changedAt);
+    expect(row['claim_until'], 0);
+  });
+
+  test('desktop source failure retries only fresh unacknowledged cached events',
+      () async {
+    final active = await service.observe(EmergencyObservation(true, now));
+    var displays = 0;
+    var configLoads = 0;
+    final notifier = EmergencyNotificationService(
+      statusService: service,
+      enabled: () async => true,
+      show: (_) async {
+        if (++displays == 1) throw StateError('First OS display failed');
+      },
+    );
+    await notifier.notifyLatest();
+    expect((await db.query('emergency_status')).single['notified_at'], 0);
+    final desktop = DesktopSyncService.forTesting(
+      fetch: () async => throw const SocketException('Fixture offline'),
+      loadConfig: () async {
+        configLoads++;
+        return null;
+      },
+      notifyEmergency: notifier.notifyLatest,
+    );
+    try {
+      await desktop.syncNow();
+      expect(displays, 2);
+      expect((await db.query('emergency_status')).single['notified_at'],
+          active.changedAt);
+      await desktop.syncNow();
+      expect(displays, 2, reason: 'Already delivered cache must not repeat');
+      expect(configLoads, 0, reason: 'Failed fetch cannot publish');
+    } finally {
+      desktop.dispose();
+    }
+
+    final oldTime = now - const Duration(minutes: 31).inMilliseconds;
+    await db.update('emergency_status', {
+      'payload': jsonEncode(EmergencyStatus(
+              active: true,
+              changedAt: oldTime,
+              observedAt: oldTime,
+              seenAt: oldTime)
+          .toJson()),
+      'notified_at': 0,
+    });
+    final staleNotifier = EmergencyNotificationService(
+      statusService: EmergencyStatusService.forTesting(() async => db),
+      enabled: () async => true,
+      show: (_) async => displays++,
+    );
+    final staleDesktop = DesktopSyncService.forTesting(
+      fetch: () async => const ParserFetchResult({}, null),
+      loadConfig: () async {
+        configLoads++;
+        return null;
+      },
+      notifyEmergency: staleNotifier.notifyLatest,
+    );
+    try {
+      await staleDesktop.syncNow();
+      expect(displays, 2,
+          reason: 'An expired cached event must not be delivered');
+      expect(configLoads, 0, reason: 'Empty fetch cannot publish');
+    } finally {
+      staleDesktop.dispose();
+    }
+  });
+
+  test('an obsolete displayed status cannot acknowledge the current transition',
+      () async {
+    final old = await service.observe(EmergencyObservation(true, now));
+    final current = await service
+        .observe(EmergencyObservation(false, now + 1, confirmed: true));
+    expect(await service.acknowledge(old), false);
+    expect((await db.query('emergency_status')).single['notified_at'], 0);
+    final shown = <bool>[];
+    await EmergencyNotificationService(
+      statusService: service,
+      enabled: () async => true,
+      show: (active) async => shown.add(active),
+    ).notifyLatest();
+    expect(shown, [current.active]);
+  });
+
+  test('old display completion preserves a newer UI acknowledgment', () async {
+    final old = await service.observe(EmergencyObservation(true, now));
+    final started = Completer<void>();
+    final release = Completer<void>();
+    final delivery = service.deliverNotification(old, () async {
+      started.complete();
+      await release.future;
+    });
+    await started.future;
+    final current = await service
+        .observe(EmergencyObservation(true, now + 1, isPossible: true));
+    expect(await service.acknowledge(current), true);
+    release.complete();
+    expect(await delivery, true);
+    expect((await db.query('emergency_status')).single['notified_at'],
+        current.changedAt);
+    var shown = 0;
+    expect(
+        await service.deliverNotification(current, () async => shown++), false);
+    expect(shown, 0);
+  });
+
+  test('failed delivery stays retryable until a real display succeeds',
+      () async {
+    await service.observe(EmergencyObservation(true, now));
+    var attempts = 0;
+    final notifications = EmergencyNotificationService(
+      statusService: service,
+      enabled: () async => true,
+      show: (_) async {
+        if (++attempts == 1) throw StateError('OS display failed');
+      },
+    );
+    await expectLater(
+        notifications.notifyLatest(rethrowOnError: true), throwsStateError);
+    // Cache reads, including hidden-window ticks, must not acknowledge delivery.
+    await service.read();
+    final failed = (await db.query('emergency_status')).single;
+    expect(failed['notified_at'], 0);
+    expect(failed['claim_until'], 0);
+    await notifications.notifyLatest();
+    expect(attempts, 2);
+    expect((await db.query('emergency_status')).single['notified_at'], now);
+  });
+
+  test('a slow notification cannot consume the schedule parsing deadline',
+      () async {
+    final today = ScheduleClock.day(ScheduleClock.now());
+    final stamp = today.millisecondsSinceEpoch ~/ 1000;
+    final fact = {
+      'today': stamp,
+      'update': '${today.day}.${today.month}.${today.year} 00:00',
+      'data': {
+        '$stamp': {
+          for (final group in ParserService.allGroups)
+            group: {for (var hour = 1; hour <= 24; hour++) '$hour': 'yes'}
+        }
+      }
+    };
+    var persisted = false;
+    var current = true;
+    final release = Completer<void>();
+    final started = Completer<void>();
+    final notifications = EmergencyNotificationService(
+      statusService: service,
+      enabled: () async => true,
+      show: (_) async {
+        started.complete();
+        await release.future;
+      },
+    );
+    final result = await ParserService.background().parseFetchedPage(
+      jsonEncode(fact),
+      originalHtml:
+          "<div id='modal-attention'>Введені екстрені відключення</div>",
+      emergencyService: service,
+      observedAt: now,
+      isCurrent: () => current,
+      persistSchedules: (_) async => persisted = true,
+    );
+    expect(persisted, true);
+    expect(result.schedules.length, 12);
+    expect(result.html, contains('DisconSchedule.fact'));
+    final delivery = notifications.notifyLatest();
+    await started.future;
+    current = false;
+    expect(result.schedules.length, 12);
+    release.complete();
+    await delivery;
+    expect((await db.query('emergency_status')).single['notified_at'], now);
+  });
+
+  test(
+      'completed background observation remains deliverable with a changes listener',
+      () async {
+    const htmlWithEmergency =
+        "<div id='modal-attention'><p>Введені екстрені відключення</p></div>";
+    var shown = <bool>[];
+    final notifications = EmergencyNotificationService(
+        statusService: service,
+        enabled: () async => true,
+        show: (active) async => shown.add(active));
+
+    // Simulate HomeNotifier stream listener updating UI state:
+    final receivedUpdates = <EmergencyStatus>[];
+    final firstUpdate = Completer<EmergencyStatus>();
+    final sub = service.changes.listen((status) {
+      receivedUpdates.add(status);
+      if (!firstUpdate.isCompleted) firstUpdate.complete(status);
+    });
+
+    final backgroundParser = ParserService.background();
+    await backgroundParser.parseFetchedPage('null',
+        originalHtml: htmlWithEmergency,
+        observedAt: now,
+        emergencyService: service);
+
+    await firstUpdate.future;
+    await sub.cancel();
+    expect(receivedUpdates, isNotEmpty);
+    expect(shown, isEmpty);
+    await notifications.notifyLatest();
+    expect(shown, [true]);
   });
 }
 

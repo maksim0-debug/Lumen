@@ -37,6 +37,7 @@ import 'widgets/home/countdown_card.dart';
 import 'widgets/home/darkness_stage_banner.dart';
 import 'widgets/home/data_source_toggle.dart';
 import 'widgets/home/displayed_schedule_acknowledgment.dart';
+import 'widgets/home/displayed_emergency_acknowledgment.dart';
 import 'widgets/home/emergency_alert_banner.dart';
 import 'widgets/home/predicted_mode_grid_cell.dart';
 import 'widgets/home/real_mode_grid_cell.dart';
@@ -279,11 +280,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   Widget _buildDarknessStageBar() => const DarknessStageBanner();
 
-  Widget _buildEmergencyAlertBanner(HomeState state) => EmergencyAlertBanner(
-        isActive: true,
-        isStale: state.isEmergencyStatusStale,
-        isPossible: state.isEmergencyPossible,
-        noticeText: state.emergencyNoticeText,
+  Widget _buildEmergencyAlertBanner(HomeState state, HomeNotifier notifier) =>
+      DisplayedEmergencyAcknowledgment(
+        status: notifier.emergencyStatus,
+        onAcknowledge: notifier.acknowledgeDisplayedEmergency,
+        child: EmergencyAlertBanner(
+          isActive: true,
+          isStale: state.isEmergencyStatusStale,
+          isPossible: state.isEmergencyPossible,
+          noticeText: state.emergencyNoticeText,
+        ),
       );
 
   Widget _buildDataSourceToggle(HomeState state, HomeNotifier notifier,
@@ -294,7 +300,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         onModeChanged: notifier.switchMode,
         powerStatus: state.powerStatus,
         leadingNotice: !isMobile && state.isEmergencyActive
-            ? _buildEmergencyAlertBanner(state)
+            ? _buildEmergencyAlertBanner(state, notifier)
             : null,
       );
 
@@ -949,7 +955,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   if (isMobile && state.isEmergencyActive)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                      child: Center(child: _buildEmergencyAlertBanner(state)),
+                      child: Center(
+                          child: _buildEmergencyAlertBanner(state, notifier)),
                     ),
                   if (!state.isLoading) ...[
                     if (state.viewMode == ScheduleViewMode.today) ...[

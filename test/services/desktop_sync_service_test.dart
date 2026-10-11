@@ -41,6 +41,65 @@ void main() {
     }
   });
   setUp(() => HttpOverrides.global = null);
+  test(
+      'local emergency delivery follows publication and survives config failure',
+      () async {
+    final calls = <String>[];
+    final client = DesktopSyncService.forTesting(
+      fetch: () async {
+        calls.add('fetch');
+        return ParserFetchResult({}, 'status-only',
+            emergency: EmergencyObservation(
+                true, DateTime.now().millisecondsSinceEpoch));
+      },
+      loadConfig: () async {
+        calls.add('config');
+        throw StateError('Config unavailable');
+      },
+      notifyEmergency: () async => calls.add('notify'),
+    );
+    await client.syncNow();
+    expect(calls, ['fetch', 'config', 'notify']);
+    expect(client.isSyncing, false);
+    client.dispose();
+  });
+
+  test('failed emergency delivery cannot leave desktop sync locked', () async {
+    var deliveries = 0;
+    final client = DesktopSyncService.forTesting(
+      fetch: () async => const ParserFetchResult({}, null),
+      loadConfig: () async => null,
+      notifyEmergency: () async {
+        deliveries++;
+        throw StateError('OS unavailable');
+      },
+    );
+    await client.syncNow();
+    await client.syncNow();
+    expect(deliveries, 2);
+    expect(client.isSyncing, false);
+    client.dispose();
+  });
+
+  test('slow Worker setup cannot delay a local emergency notification',
+      () async {
+    final config = Completer<DesktopAdminConfig?>();
+    final delivered = Completer<void>();
+    final client = DesktopSyncService.forTesting(
+      fetch: () async => ParserFetchResult({}, 'status-only',
+          emergency: EmergencyObservation(
+              true, DateTime.now().millisecondsSinceEpoch)),
+      loadConfig: () => config.future,
+      notifyEmergency: () async => delivered.complete(),
+    );
+    final sync = client.syncNow();
+    await delivered.future;
+    expect(client.isSyncing, true);
+    config.complete(null);
+    await sync;
+    expect(client.isSyncing, false);
+    client.dispose();
+  });
   DesktopSyncService service({Duration timeout = const Duration(seconds: 1)}) =>
       DesktopSyncService.forTesting(
           fetch: () async => const ParserFetchResult({}, null),

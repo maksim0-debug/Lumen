@@ -6,6 +6,7 @@ import 'package:html/dom.dart' as dom;
 
 /// Bounds the whole operation as well as individual external calls.
 class ParserFetchPolicy {
+  final bool isBackground;
   final Duration totalTimeout;
   final Duration httpTimeout;
   final Duration webViewTimeout;
@@ -20,6 +21,7 @@ class ParserFetchPolicy {
   final int maxReloads;
 
   const ParserFetchPolicy({
+    this.isBackground = false,
     this.totalTimeout = const Duration(seconds: 85),
     this.httpTimeout = const Duration(seconds: 20),
     this.webViewTimeout = const Duration(seconds: 40),
@@ -37,7 +39,9 @@ class ParserFetchPolicy {
   // FCM only enqueues this work. Allow a bounded WorkManager/widget browser
   // fetch to finish a slow page, without keeping a permanent service alive.
   static const background = ParserFetchPolicy(
-      totalTimeout: Duration(seconds: 45), httpTimeout: Duration(seconds: 8));
+      isBackground: true,
+      totalTimeout: Duration(seconds: 45),
+      httpTimeout: Duration(seconds: 8));
 
   // Preserve the previous connection limit while bounding the whole response.
   Duration get connectionTimeout => httpTimeout < const Duration(seconds: 12)

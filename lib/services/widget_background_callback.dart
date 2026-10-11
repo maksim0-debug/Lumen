@@ -5,6 +5,7 @@ import 'android_fetch_diagnostics.dart';
 import 'schedule_sync_service.dart';
 import 'parser_service.dart';
 import 'widget_service.dart';
+import 'emergency_notification_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> backgroundCallback(Uri? uri) async {
@@ -41,6 +42,8 @@ Future<void> backgroundCallback(Uri? uri) async {
                 level: AppLogLevel.error);
             AppLogger.e("Error refreshing widget", tag: 'Background', error: e);
             await widgetService.clearAllLoadingStates();
+          } finally {
+            await EmergencyNotificationService().notifyLatest();
           }
         });
   }

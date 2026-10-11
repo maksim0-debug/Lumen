@@ -44,6 +44,9 @@ void main() {
       expect(active.viewMode, ScheduleViewMode.history);
       expect(identical(active.currentDisplaySchedule, schedule), true);
       expect(active.hasDisplayData, true);
+      await notifier.refreshEmergencyStatus();
+      expect((await db.query('emergency_status')).single['notified_at'], 0,
+          reason: 'Updating provider state is not proof of a visible banner');
       await statusService
           .observe(EmergencyObservation(false, now + 1, confirmed: true));
       await Future<void>.delayed(Duration.zero);

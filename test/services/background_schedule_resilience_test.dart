@@ -6,6 +6,9 @@ import 'package:lumen/services/background_service.dart';
 import 'package:lumen/services/notification_service.dart';
 import 'package:lumen/services/schedule_change_notification_service.dart';
 import 'package:lumen/services/widget_service.dart';
+import 'package:lumen/models/emergency_status.dart';
+import 'package:lumen/services/emergency_notification_service.dart';
+import 'package:lumen/services/emergency_status_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _Changes implements ScheduleChangeNotificationService {
@@ -65,6 +68,27 @@ class _Widgets implements WidgetService {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeEmergencyStatusService extends Fake
+    implements EmergencyStatusService {
+  final EmergencyStatus status;
+  _FakeEmergencyStatusService(this.status);
+  @override
+  Future<EmergencyStatus> read() async => status;
+}
+
+class _FakeEmergencyNotificationService extends Fake
+    implements EmergencyNotificationService {
+  final List<EmergencyStatus> notified = [];
+  final Object? failure;
+  _FakeEmergencyNotificationService({this.failure});
+  @override
+  Future<void> notifyStatus(EmergencyStatus status,
+      {bool rethrowOnError = false}) async {
+    notified.add(status);
+    if (failure != null) throw failure!;
+  }
 }
 
 void main() {
@@ -296,5 +320,70 @@ void main() {
             widgets: _Widgets(failure: failure)),
         throwsA(same(failure)));
     expect(notifications.attempts, ['GPV2.1', 'GPV1.1']);
+  });
+
+  test('applyBackgroundSchedules delivers fresh emergency status', () async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final status = EmergencyStatus(
+      active: true,
+      observedAt: now - 100,
+      changedAt: now - 100,
+      seenAt: now - 100,
+    );
+    final fakeStatus = _FakeEmergencyStatusService(status);
+    final fakeNotifications = _FakeEmergencyNotificationService();
+    await applyBackgroundSchedules(
+      schedules,
+      changes: _Changes(null),
+      notifications: _Notifications(),
+      widgets: _Widgets(),
+      emergencyStatus: fakeStatus,
+      emergencyNotifications: fakeNotifications,
+    );
+    expect(fakeNotifications.notified, [status]);
+  });
+
+  test('applyBackgroundSchedules ignores stale emergency status', () async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final staleStatus = EmergencyStatus(
+      active: true,
+      observedAt: now - 35 * 60 * 1000,
+      changedAt: now - 35 * 60 * 1000,
+      seenAt: now - 35 * 60 * 1000,
+    );
+    final fakeStatus = _FakeEmergencyStatusService(staleStatus);
+    final fakeNotifications = _FakeEmergencyNotificationService();
+    await applyBackgroundSchedules(
+      schedules,
+      changes: _Changes(null),
+      notifications: _Notifications(),
+      widgets: _Widgets(),
+      emergencyStatus: fakeStatus,
+      emergencyNotifications: fakeNotifications,
+    );
+    expect(fakeNotifications.notified, isEmpty);
+  });
+
+  test('emergency delivery failure preserves widgets and reminder processing',
+      () async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final status = EmergencyStatus(
+        active: true, observedAt: now, changedAt: now, seenAt: now);
+    final failure = StateError('OS notification failed');
+    final reminders = _Notifications();
+    final widgets = _Widgets();
+    await expectLater(
+        applyBackgroundSchedules(
+          schedules,
+          changes: _Changes(null),
+          notifications: reminders,
+          widgets: widgets,
+          emergencyStatus: _FakeEmergencyStatusService(status),
+          emergencyNotifications:
+              _FakeEmergencyNotificationService(failure: failure),
+        ),
+        throwsA(same(failure)));
+    expect(widgets.received, same(schedules));
+    expect(reminders.attempts, ['GPV2.1', 'GPV1.1']);
   });
 }
