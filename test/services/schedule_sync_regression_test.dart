@@ -38,6 +38,12 @@ class RecordingNotifications implements NotificationService {
   }
 
   @override
+  Future<void> scheduleNotificationsForToday(FullSchedule fullSchedule,
+      {String? groupName,
+      bool cancelExisting = true,
+      bool rethrowOnError = false}) async {}
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 

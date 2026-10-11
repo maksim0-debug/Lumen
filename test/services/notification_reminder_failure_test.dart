@@ -9,6 +9,7 @@ class _Plugin extends Fake implements FlutterLocalNotificationsPlugin {
   bool initialized = true;
   Object? scheduleFailure;
   Object? cancelFailure;
+  Object? enumerationFailure;
   final scheduledIds = <int>[];
   @override
   dynamic noSuchMethod(Invocation call) {
@@ -18,6 +19,18 @@ class _Plugin extends Fake implements FlutterLocalNotificationsPlugin {
       return scheduleFailure == null
           ? Future<void>.value()
           : Future<void>.error(scheduleFailure!);
+    }
+    if (call.memberName == #pendingNotificationRequests) {
+      return enumerationFailure == null
+          ? Future<List<PendingNotificationRequest>>.value(cancelFailure == null
+              ? <PendingNotificationRequest>[]
+              : [const PendingNotificationRequest(200001, null, null, null)])
+          : Future<List<PendingNotificationRequest>>.error(enumerationFailure!);
+    }
+    if (call.memberName == #cancel) {
+      return cancelFailure == null
+          ? Future<void>.value()
+          : Future<void>.error(cancelFailure!);
     }
     if (call.memberName == #cancelAll) {
       return cancelFailure == null
@@ -87,5 +100,18 @@ void main() {
     await NotificationService.forTesting(plugin)
         .scheduleNotificationsForToday(schedule, groupName: 'GPV2.1');
     expect(plugin.scheduledIds.length, 2);
+  }, skip: !Platform.isWindows);
+
+  test('failed enumeration cannot blindly add duplicate native reminders',
+      () async {
+    final error = StateError('Cannot enumerate native schedule');
+    final plugin = _Plugin()..enumerationFailure = error;
+    await expectLater(
+        NotificationService.forTesting(plugin).scheduleNotificationsForToday(
+            schedule,
+            groupName: 'GPV2.1',
+            rethrowOnError: true),
+        throwsA(same(error)));
+    expect(plugin.scheduledIds, isEmpty);
   }, skip: !Platform.isWindows);
 }

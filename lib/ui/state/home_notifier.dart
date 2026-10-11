@@ -363,7 +363,8 @@ class HomeNotifier extends Notifier<HomeState> {
       if (!ref.mounted) return;
     }
 
-    updateNotificationsOnly();
+    await updateNotificationsOnly();
+    if (!ref.mounted) return;
     await updateStatusDate();
     if (!ref.mounted) return;
     recalculateDisplayData();
@@ -694,7 +695,8 @@ class HomeNotifier extends Notifier<HomeState> {
       );
     }
 
-    updateNotificationsOnly();
+    await updateNotificationsOnly();
+    if (!ref.mounted) return;
 
     if (state.isHistoryMode) {
       if (groupChanged) {
@@ -1263,7 +1265,7 @@ class HomeNotifier extends Notifier<HomeState> {
   }
 
   // --- UPDATE NOTIFICATIONS ONLY ---
-  void updateNotificationsOnly() =>
+  Future<void> updateNotificationsOnly() =>
       _scheduleNotificationCoordinator.updateNotificationsOnly(
         allSchedules: state.allSchedules,
         currentGroup: state.currentGroup,

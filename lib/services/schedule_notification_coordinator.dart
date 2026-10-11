@@ -14,32 +14,47 @@ import 'schedule_change_notification_service.dart';
 class ScheduleNotificationCoordinator {
   final NotificationService _notifier;
   final WidgetService _widgetService;
+  final bool? _isPlatformSupported;
 
   ScheduleNotificationCoordinator({
     NotificationService? notifier,
     WidgetService? widgetService,
+    bool? isPlatformSupported,
   })  : _notifier = notifier ?? NotificationService(),
-        _widgetService = widgetService ?? WidgetService();
+        _widgetService = widgetService ?? WidgetService(),
+        _isPlatformSupported = isPlatformSupported;
 
   NotificationService get notifier => _notifier;
   WidgetService get widgetService => _widgetService;
 
+  bool get isSupported =>
+      _isPlatformSupported ?? (Platform.isAndroid || Platform.isWindows);
+
   String _formatDateKey(DateTime dt) => AppFormatters.formatDateKey(dt);
 
   static Future<void> _updateTail = Future.value();
+
+  Future<void> _enqueue(Future<void> Function() operation) {
+    final result = _updateTail.then((_) => operation());
+    _updateTail =
+        result.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+      AppLogger.w(
+          'Notification update failed; subsequent updates remain runnable',
+          tag: 'ScheduleNotificationCoordinator',
+          error: error);
+    });
+    return result;
+  }
 
   Future<void> handleScheduleUpdate({
     required Map<String, FullSchedule> allSchedules,
     required String currentGroup,
     Iterable<String>? notificationGroups,
   }) {
-    final result = _updateTail.then((_) => _handleScheduleUpdate(
+    return _enqueue(() => _handleScheduleUpdate(
         allSchedules: allSchedules,
         currentGroup: currentGroup,
         notificationGroups: notificationGroups));
-    _updateTail =
-        result.then<void>((_) {}, onError: (Object error, StackTrace stack) {});
-    return result;
   }
 
   Future<void> _handleScheduleUpdate({
@@ -50,7 +65,7 @@ class ScheduleNotificationCoordinator {
     if (Platform.isAndroid) {
       await ScheduleChangeNotificationService()
           .observeSchedules(allSchedules, deliver: false);
-      await updateNotificationsOnly(
+      await _updateNotificationsOnly(
           allSchedules: allSchedules, currentGroup: currentGroup);
       await _widgetService.updateWidget(allSchedules);
       return;
@@ -102,7 +117,7 @@ class ScheduleNotificationCoordinator {
       AppLogger.e("Error syncing hash", tag: 'Main', error: e);
     }
 
-    await updateNotificationsOnly(
+    await _updateNotificationsOnly(
       allSchedules: allSchedules,
       currentGroup: currentGroup,
     );
@@ -112,8 +127,15 @@ class ScheduleNotificationCoordinator {
   Future<void> updateNotificationsOnly({
     required Map<String, FullSchedule> allSchedules,
     required String currentGroup,
+  }) =>
+      _enqueue(() => _updateNotificationsOnly(
+          allSchedules: allSchedules, currentGroup: currentGroup));
+
+  Future<void> _updateNotificationsOnly({
+    required Map<String, FullSchedule> allSchedules,
+    required String currentGroup,
   }) async {
-    if (!Platform.isAndroid) return;
+    if (!isSupported) return;
 
     SharedPreferences? prefs;
     try {

@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
@@ -9,6 +12,8 @@ import '../models/schedule_status.dart';
 import 'app_logger.dart';
 import 'parser_service.dart';
 import 'preferences_helper.dart';
+import 'schedule_clock.dart';
+import 'schedule_reminder_plan.dart';
 import '../utils/app_formatters.dart';
 
 class NotificationService {
@@ -23,11 +28,14 @@ class NotificationService {
   }
 
   NotificationService._internal()
-      : _notificationsPlugin = FlutterLocalNotificationsPlugin() {
+      : _notificationsPlugin = FlutterLocalNotificationsPlugin(),
+        _now = ScheduleClock.now {
     AppLogger.d("Конструктор викликано", tag: 'NotificationService');
   }
 
-  NotificationService.forTesting(this._notificationsPlugin);
+  NotificationService.forTesting(this._notificationsPlugin,
+      {tz.TZDateTime Function()? now})
+      : _now = now ?? ScheduleClock.now;
 
   /// Базовий ID для миттєвих сповіщень по групах (діапазон 9000000..9000011).
   /// Повністю ізольований від запланованих сповіщень (діапазон 0..1199999).
@@ -35,13 +43,50 @@ class NotificationService {
   static const int emergencyNotificationId =
       immediateGroupNotificationBaseId + 12;
   static const int testNotificationId = immediateGroupNotificationBaseId + 13;
+  static const int _test10SecondId = 99991;
+  static const int _test1MinuteId = 99993;
+  static const String _reminderStateKey = 'scheduled_reminder_state_v1';
 
   final FlutterLocalNotificationsPlugin _notificationsPlugin;
+  final tz.TZDateTime Function() _now;
+  Future<void> _reminderTail = Future.value();
+  bool _reminderStateNeedsWrite = false;
 
   bool _isInitialized = false;
   Future<void>? _initFuture;
   Future<void>? _permissionFuture;
   String? _windowsIconPath;
+
+  @visibleForTesting
+  String? get windowsIconPath => _windowsIconPath;
+  @visibleForTesting
+  set windowsIconPath(String? path) => _windowsIconPath = path;
+
+  /// Мінімальний запас часу перед запланованою подією (захист від race condition
+  /// на Windows, де плагін викидає ArgumentError, якщо scheduledDate <= DateTime.now()).
+  static const Duration minSchedulingLeadTime = Duration(seconds: 5);
+
+  bool _canSchedule(tz.TZDateTime scheduledTime, tz.TZDateTime referenceNow) {
+    return scheduledTime.difference(referenceNow) >= minSchedulingLeadTime;
+  }
+
+  @visibleForTesting
+  bool canScheduleForTesting(
+          tz.TZDateTime scheduledTime, tz.TZDateTime referenceNow) =>
+      _canSchedule(scheduledTime, referenceNow);
+
+  @visibleForTesting
+  static void resetForTesting() {
+    final current = _instance;
+    _instance = null;
+    current?._windowsIconPath = null;
+    current?._isInitialized = false;
+    current?._initFuture = null;
+    current?._permissionFuture = null;
+  }
+
+  @visibleForTesting
+  WindowsNotificationDetails createWindowsDetails() => _createWindowsDetails();
 
   Future<void> init({bool requestPermissions = true}) async {
     if (!_isInitialized) {
@@ -61,24 +106,26 @@ class NotificationService {
     try {
       AppLogger.d("Ініціалізація timezone...", tag: 'NotificationService');
       tz.initializeTimeZones();
-      try {
-        tz.setLocalLocation(tz.getLocation('Europe/Kiev'));
-        AppLogger.i("✅ Timezone: Europe/Kiev", tag: 'NotificationService');
-      } catch (e) {
-        tz.setLocalLocation(tz.local);
-        AppLogger.w("⚠️ Timezone: local", tag: 'NotificationService');
+      tz.setLocalLocation(ScheduleClock.location);
+
+      String? windowsIconPath;
+      if (Platform.isWindows) {
+        AppLogger.d("Платформа: Windows. Підготовка іконки...",
+            tag: 'NotificationService');
+        windowsIconPath = await _prepareWindowsIcon();
       }
 
       const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/launcher_icon');
 
-      const WindowsInitializationSettings windowsSettings =
+      final WindowsInitializationSettings windowsSettings =
           WindowsInitializationSettings(
               appName: 'Lumen',
               appUserModelId: 'Maksim0Debug.Lumen.App',
-              guid: '27042046-8148-4367-9d7a-757877477430');
+              guid: '27042046-8148-4367-9d7a-757877477430',
+              iconPath: windowsIconPath);
 
-      const InitializationSettings settings = InitializationSettings(
+      final InitializationSettings settings = InitializationSettings(
         android: androidSettings,
         windows: windowsSettings,
       );
@@ -101,10 +148,6 @@ class NotificationService {
         AppLogger.d("Платформа: Android. Налаштування каналів...",
             tag: 'NotificationService');
         await _createNotificationChannels();
-      } else if (Platform.isWindows) {
-        AppLogger.d("Платформа: Windows. Підготовка іконки...",
-            tag: 'NotificationService');
-        await _prepareWindowsIcon();
       }
 
       _isInitialized = true;
@@ -116,32 +159,75 @@ class NotificationService {
     }
   }
 
-  Future<void> _prepareWindowsIcon() async {
+  Future<String?> _prepareWindowsIcon() async {
+    _windowsIconPath = null;
+    const assetIcon = 'assets/icon.png';
     try {
-      final directory = await getTemporaryDirectory();
-
-      String assetIcon = 'assets/icon.png';
-
+      final data = await rootBundle.load(assetIcon);
+      final bytes =
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
       try {
-        final byteData = await rootBundle.load(assetIcon);
-
-        final iconFile =
-            File('${directory.path}/windows_notification_icon.png');
-        if (!await iconFile.exists()) {
-          await iconFile.writeAsBytes(byteData.buffer
-              .asUint8List(byteData.offsetInBytes, byteData.lengthInBytes));
-        }
-        _windowsIconPath = iconFile.path;
-        AppLogger.d("Windows icon prepared at: $_windowsIconPath",
-            tag: 'NotificationService');
-      } catch (e) {
-        AppLogger.w("⚠️ Іконка '$assetIcon' не знайдена в асетах. Помилка: $e",
-            tag: 'NotificationService');
+        _windowsIconPath = await _writeWindowsIcon(
+            await getApplicationSupportDirectory(), bytes);
+      } catch (error) {
+        AppLogger.w(
+            'Cannot prepare Windows icon in application support; trying temporary storage',
+            tag: 'NotificationService',
+            error: error);
+        _windowsIconPath =
+            await _writeWindowsIcon(await getTemporaryDirectory(), bytes);
       }
-    } catch (e) {
-      AppLogger.e("Помилка підготовки іконки Windows",
-          tag: 'NotificationService', error: e);
+      return _windowsIconPath;
+    } catch (error, stack) {
+      AppLogger.w('Cannot prepare Windows notification icon from $assetIcon',
+          tag: 'NotificationService', error: error, stackTrace: stack);
+      return null;
     }
+  }
+
+  Future<String> _writeWindowsIcon(Directory directory, List<int> bytes) async {
+    await directory.create(recursive: true);
+    final icon = File(p.join(directory.path, 'windows_notification_icon.png'));
+    if (await icon.exists()) {
+      try {
+        if (listEquals(await icon.readAsBytes(), bytes)) return icon.path;
+      } catch (error) {
+        AppLogger.w('Cannot read existing Windows icon; replacing it',
+            tag: 'NotificationService', error: error);
+      }
+    }
+    // Commit a complete file so queued toasts never read a partially written image.
+    final staging = File('${icon.path}.$pid.tmp');
+    try {
+      await staging.writeAsBytes(bytes, flush: true);
+      await staging.rename(icon.path);
+    } finally {
+      if (await staging.exists()) {
+        try {
+          await staging.delete();
+        } catch (error) {
+          AppLogger.w('Cannot remove Windows icon staging file',
+              tag: 'NotificationService', error: error);
+        }
+      }
+    }
+    return icon.path;
+  }
+
+  WindowsNotificationDetails _createWindowsDetails() {
+    final iconPath = _windowsIconPath;
+    if (iconPath != null && iconPath.isNotEmpty) {
+      return WindowsNotificationDetails(
+        images: [
+          WindowsImage(
+            Uri.file(iconPath, windows: true),
+            altText: 'Lumen',
+            placement: WindowsImagePlacement.appLogoOverride,
+          ),
+        ],
+      );
+    }
+    return const WindowsNotificationDetails();
   }
 
   Future<void> _createNotificationChannels() async {
@@ -285,8 +371,7 @@ class NotificationService {
         onlyAlertOnce: onlyAlertOnce,
       );
 
-      const WindowsNotificationDetails windowsDetails =
-          WindowsNotificationDetails();
+      final WindowsNotificationDetails windowsDetails = _createWindowsDetails();
 
       final NotificationDetails details = NotificationDetails(
         android: androidDetails,
@@ -325,225 +410,189 @@ class NotificationService {
     }
   }
 
+  Future<void> _enqueueReminderWork(Future<void> Function() operation) {
+    final result = _reminderTail.then((_) => operation());
+    // Preserve the caller's error while keeping the next operation runnable.
+    _reminderTail =
+        result.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+      AppLogger.w('Reminder operation failed; subsequent work can retry',
+          tag: 'NotificationService', error: error);
+    });
+    return result;
+  }
+
   Future<void> scheduleNotificationsForToday(FullSchedule fullSchedule,
+          {String? groupName,
+          bool cancelExisting = true,
+          bool rethrowOnError = false}) =>
+      _enqueueReminderWork(() => _reconcileReminders(fullSchedule,
+          groupName: groupName,
+          cancelExisting: cancelExisting,
+          rethrowOnError: rethrowOnError));
+
+  Future<void> _reconcileReminders(FullSchedule fullSchedule,
       {String? groupName,
-      bool cancelExisting = true,
-      bool rethrowOnError = false}) async {
+      required bool cancelExisting,
+      required bool rethrowOnError}) async {
     if (!Platform.isAndroid && !Platform.isWindows) return;
-    if (!_isInitialized) await init(requestPermissions: false);
-    if (rethrowOnError && !_isInitialized) {
-      throw StateError('Notification service could not initialize');
-    }
-    (Object, StackTrace)? failure;
-    void recordFailure(Object error, StackTrace stack) {
-      failure ??= (error, stack);
-    }
-
-    SharedPreferences? prefs;
     try {
-      prefs = await PreferencesHelper.getSafeInstance();
-    } catch (e) {
-      AppLogger.w(
-          "Error getting SharedPreferences in scheduleNotificationsForToday: $e",
-          tag: 'NotificationService');
-      if (rethrowOnError) rethrow;
-    }
+      if (!_isInitialized) await init(requestPermissions: false);
+      if (!_isInitialized) {
+        throw StateError('Notification service could not initialize');
+      }
+      // Never delete working reminders when preferences cannot be loaded.
+      final prefs = await PreferencesHelper.getSafeInstance();
+      final activeGroups = PreferencesHelper.getActiveNotificationGroups(prefs);
+      final index =
+          groupName == null ? 0 : ParserService.allGroups.indexOf(groupName);
+      if (index < 0) {
+        throw ArgumentError.value(groupName, 'groupName', 'Unknown group');
+      }
+      final now = _now();
+      final reminders = ScheduleReminderPlan.build(
+        schedule: fullSchedule,
+        day: now,
+        groupIndex: index,
+        titlePrefix: groupName != null && activeGroups.length > 1
+            ? '${AppFormatters.formatGroupName(groupName)}: '
+            : '',
+        preferences: ReminderPreferences(
+          off1h: prefs.getBool('notify_1h_before_off') ?? true,
+          off30m: prefs.getBool('notify_30m_before_off') ?? true,
+          off5m: prefs.getBool('notify_5m_before_off') ?? true,
+          on1h: prefs.getBool('notify_1h_before_on') ?? true,
+          on30m: prefs.getBool('notify_30m_before_on') ?? true,
+        ),
+      );
+      final desired = {for (final reminder in reminders) reminder.id: reminder};
+      // Enumeration failure must not result in blind duplicate Windows schedules.
+      final pending = await _notificationsPlugin.pendingNotificationRequests();
+      final pendingIds = pending.map((request) => request.id).toSet();
+      final state = _readReminderState(prefs);
+      final activeIndices =
+          activeGroups.map(ParserService.allGroups.indexOf).toSet();
+      (Object, StackTrace)? failure;
+      void recordFailure(Object error, StackTrace stack) {
+        failure ??= (error, stack);
+      }
 
-    final bool fallback = prefs == null ? false : true;
-    final bool notify1hOff = prefs?.getBool('notify_1h_before_off') ?? fallback;
-    final bool notify30mOff =
-        prefs?.getBool('notify_30m_before_off') ?? fallback;
-    final bool notify5mOff = prefs?.getBool('notify_5m_before_off') ?? fallback;
-    final bool notify1hOn = prefs?.getBool('notify_1h_before_on') ?? fallback;
-    final bool notify30mOn = prefs?.getBool('notify_30m_before_on') ?? fallback;
-    final List<String> notificationGroups = prefs != null
-        ? PreferencesHelper.getActiveNotificationGroups(prefs)
-        : [];
-
-    AppLogger.d("========== ПЛАНУВАННЯ НА ДЕНЬ ($groupName) ==========",
-        tag: 'NotificationService');
-
-    if (cancelExisting) {
-      if (Platform.isAndroid) {
-        try {
-          final List<PendingNotificationRequest> pending =
-              await _notificationsPlugin.pendingNotificationRequests();
-          AppLogger.d("Знайдено ${pending.length} запланованих. Скасовуємо...",
-              tag: 'NotificationService');
-          for (var p in pending) {
-            await _notificationsPlugin.cancel(p.id);
-          }
-        } catch (e, stack) {
-          recordFailure(e, stack);
-          AppLogger.e("Помилка скасування",
-              tag: 'NotificationService', error: e);
+      final blockedIds = <int>{};
+      for (final request in pending) {
+        // Test reminders and other channels have separate ownership.
+        if (!_isScheduleReminderId(request.id)) continue;
+        final owner = request.id ~/ 100000;
+        final belongsToGroup = owner == index;
+        final inactiveGroup = cancelExisting && !activeIndices.contains(owner);
+        if (!belongsToGroup && !inactiveGroup) continue;
+        final reminder = belongsToGroup ? desired[request.id] : null;
+        if (reminder != null &&
+            state['${request.id}'] == 'pending:${reminder.identity}') {
+          continue;
         }
-      } else {
         try {
-          await _notificationsPlugin.cancelAll();
+          await _notificationsPlugin.cancel(request.id);
+          pendingIds.remove(request.id);
+          state.remove('${request.id}');
         } catch (error, stack) {
+          blockedIds.add(request.id);
           recordFailure(error, stack);
-          AppLogger.e('Cannot cancel previous reminders',
+          AppLogger.e('Cannot cancel stale reminder ${request.id}',
               tag: 'NotificationService', error: error);
         }
       }
-    }
-
-    final now = tz.TZDateTime.now(tz.local);
-    AppLogger.d("Поточний час: $now", tag: 'NotificationService');
-
-    final periods = _calculateOutagePeriods(fullSchedule.today,
-        nextDaySchedule: fullSchedule.tomorrow);
-    AppLogger.d(
-        "Знайдено об'єднаних періодів відключення для $groupName: ${periods.length}",
-        tag: 'NotificationService');
-
-    final groupIdx = groupName != null ? _getGroupIndex(groupName) : 0;
-    final idPrefix = groupIdx * 100000;
-
-    for (var period in periods) {
-      final startHour = period['startHour']!;
-      final startMinute = period['startMinute']!;
-      final endHour = period['endHour']!;
-      final endMinute = period['endMinute']!;
-
-      final startTimeStr =
-          "${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')}";
-
-      String endTimeStr;
-      if (endHour >= 24) {
-        final nextDayHour = endHour - 24;
-        endTimeStr =
-            "${nextDayHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')} (завтра)";
-      } else {
-        endTimeStr =
-            "${endHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')}";
-      }
-
-      String titlePrefix = "";
-      if (groupName != null && notificationGroups.length > 1) {
-        titlePrefix = "${groupName.replaceAll("GPV", "Гр. ")}: ";
-      }
-
-      if (notify1hOff) {
-        var dueTime1h = tz.TZDateTime(
-                tz.local, now.year, now.month, now.day, startHour, startMinute)
-            .subtract(const Duration(hours: 1));
-
-        if (dueTime1h.isAfter(now)) {
-          await _scheduleOne(
-            id: idPrefix + startHour * 1000 + startMinute * 10 + 1,
-            title: "$titlePrefixСкоро відключення",
-            body: "О $startTimeStr світла не буде (до $endTimeStr)",
-            time: dueTime1h,
-            onError: recordFailure,
-          );
+      // Bound persisted state and remove obsolete/delivered records for this group.
+      state.removeWhere((key, value) {
+        final id = int.tryParse(key);
+        if (id == null || !_isScheduleReminderId(id)) return true;
+        if (blockedIds.contains(id)) return false;
+        final owner = id ~/ 100000;
+        if (cancelExisting && !activeIndices.contains(owner)) return true;
+        if (owner != index) return false;
+        final reminder = desired[id];
+        return reminder == null ||
+            (!pendingIds.contains(id) && !reminder.time.isAfter(now));
+      });
+      for (final reminder in reminders) {
+        if (blockedIds.contains(reminder.id)) continue;
+        final key = '${reminder.id}';
+        final identity = reminder.identity;
+        if (pendingIds.contains(reminder.id) &&
+            state[key] == 'pending:$identity') {
+          continue;
         }
-      }
-
-      if (notify30mOff) {
-        var dueTime30m = tz.TZDateTime(
-                tz.local, now.year, now.month, now.day, startHour, startMinute)
-            .subtract(const Duration(minutes: 30));
-
-        if (dueTime30m.isAfter(now)) {
-          await _scheduleOne(
-            id: idPrefix + startHour * 1000 + startMinute * 10 + 4,
-            title: "$titlePrefixСкоро відключення",
-            body:
-                "Через 30 хвилин ($startTimeStr) вимкнуть світло (до $endTimeStr)",
-            time: dueTime30m,
-            onError: recordFailure,
-          );
-        }
-      }
-
-      if (notify5mOff) {
-        var dueTime5m = tz.TZDateTime(
-                tz.local, now.year, now.month, now.day, startHour, startMinute)
-            .subtract(const Duration(minutes: 5));
-
-        if (dueTime5m.isAfter(now)) {
-          await _scheduleOne(
-            id: idPrefix + startHour * 1000 + startMinute * 10 + 2,
-            title: "$titlePrefixУвага!",
-            body: "Відключення через 5 хв ($startTimeStr) до $endTimeStr",
-            time: dueTime5m,
-            onError: recordFailure,
-          );
-        }
-      }
-
-      var endDateTime =
-          tz.TZDateTime(tz.local, now.year, now.month, now.day, 0, 0)
-              .add(Duration(hours: endHour, minutes: endMinute));
-
-      String onUntilStr = "";
-      for (var p in periods) {
-        if (p['startHour']! > endHour ||
-            (p['startHour'] == endHour && p['startMinute']! > endMinute)) {
-          final nextStartHour = p['startHour']!;
-          final nextStartMinute = p['startMinute']!;
-
-          if (nextStartHour >= 24) {
-            final h = nextStartHour - 24;
-            onUntilStr =
-                " (до $h:${nextStartMinute.toString().padLeft(2, '0')} завтра)";
+        if (state[key] == 'shown:$identity') continue;
+        final currentTime = _now();
+        if (!reminder.time.isAfter(now)) continue;
+        try {
+          // A new/changed imminent reminder is delivered now, never silently lost.
+          // Existing identical pending reminders retain their original delivery time.
+          if (!_canSchedule(reminder.time, currentTime)) {
+            await _showReminder(
+                reminder.id, reminder.title, reminder.body, reminder.time);
+            state[key] = 'shown:$identity';
           } else {
-            onUntilStr =
-                " (до $nextStartHour:${nextStartMinute.toString().padLeft(2, '0')})";
+            final scheduled = await _scheduleOne(
+                id: reminder.id,
+                title: reminder.title,
+                body: reminder.body,
+                time: reminder.time);
+            state[key] = '${scheduled ? 'pending' : 'shown'}:$identity';
           }
-          break;
+        } catch (error, stack) {
+          recordFailure(error, stack);
+          AppLogger.e('Cannot apply reminder ${reminder.id}',
+              tag: 'NotificationService', error: error);
         }
       }
-
-      if (notify1hOn) {
-        try {
-          var dueTimeOn1h = endDateTime.subtract(const Duration(hours: 1));
-          if (dueTimeOn1h.isAfter(now)) {
-            await _scheduleOne(
-              id: idPrefix + endHour * 1000 + endMinute * 10 + 3,
-              title: "$titlePrefixСкоро ввімкнення",
-              body: "О $endTimeStr світло мають увімкнути$onUntilStr",
-              time: dueTimeOn1h,
-              onError: recordFailure,
-            );
+      try {
+        final encodedState = jsonEncode(state);
+        if (_reminderStateNeedsWrite ||
+            prefs.getString(_reminderStateKey) != encodedState) {
+          // SharedPreferences changes its cache even if the platform write fails.
+          // Keep the dirty flag until a write succeeds so retries reach storage.
+          _reminderStateNeedsWrite = true;
+          if (!await prefs.setString(_reminderStateKey, encodedState)) {
+            throw StateError('Cannot persist reminder delivery state');
           }
-        } catch (e, stack) {
-          AppLogger.w("⚠️ Помилка планування включення 1h: $e",
-              tag: 'NotificationService');
-          recordFailure(e, stack);
+          _reminderStateNeedsWrite = false;
         }
+      } catch (error, stack) {
+        recordFailure(error, stack);
       }
-
-      if (notify30mOn) {
-        try {
-          var dueTimeOn30m = endDateTime.subtract(const Duration(minutes: 30));
-          if (dueTimeOn30m.isAfter(now)) {
-            await _scheduleOne(
-              id: idPrefix + endHour * 1000 + endMinute * 10 + 5,
-              title: "$titlePrefixСкоро ввімкнення",
-              body:
-                  "Через 30 хвилин ($endTimeStr) світло мають увімкнути$onUntilStr",
-              time: dueTimeOn30m,
-              onError: recordFailure,
-            );
-          }
-        } catch (e, stack) {
-          AppLogger.w("⚠️ Помилка планування включення 30m: $e",
-              tag: 'NotificationService');
-          recordFailure(e, stack);
-        }
-      }
-    }
-
-    AppLogger.i("Планування для $groupName завершено",
-        tag: 'NotificationService');
-    if (rethrowOnError) {
       if (failure case final captured?) {
         Error.throwWithStackTrace(captured.$1, captured.$2);
       }
+    } catch (error, stack) {
+      AppLogger.e('Reminder reconciliation failed',
+          tag: 'NotificationService', error: error, stackTrace: stack);
+      if (rethrowOnError) rethrow;
     }
+  }
+
+  Map<String, String> _readReminderState(SharedPreferences prefs) {
+    final encoded = prefs.getString(_reminderStateKey);
+    if (encoded == null) return {};
+    try {
+      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      return decoded.map((key, value) => MapEntry(key, value as String));
+    } catch (error) {
+      AppLogger.w(
+          'Invalid reminder state; reconcile against the system schedule',
+          tag: 'NotificationService',
+          error: error);
+      return {};
+    }
+  }
+
+  static bool _isScheduleReminderId(int id) {
+    if (id < 0 || id >= ParserService.allGroups.length * 100000) return false;
+    final localId = id % 100000;
+    final kind = localId % 10;
+    final minuteComponent = localId % 1000 - kind;
+    return localId ~/ 1000 <= 48 &&
+        kind >= 1 &&
+        kind <= 5 &&
+        (minuteComponent == 0 || minuteComponent == 300);
   }
 
   /// Отримати числовий індекс групи (0..11) для детермінованих ID сповіщень.
@@ -552,127 +601,65 @@ class NotificationService {
     return idx >= 0 ? idx : 0;
   }
 
-  int _getGroupIndex(String groupName) => getGroupIndex(groupName);
+  NotificationDetails _reminderDetails(tz.TZDateTime time) =>
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'schedule_channel',
+          'Заплановані сповіщення',
+          channelDescription: 'Сповіщення про відключення світла',
+          importance: Importance.max,
+          priority: Priority.high,
+          icon: '@mipmap/launcher_icon',
+          when: time.millisecondsSinceEpoch,
+          showWhen: true,
+          usesChronometer: false,
+          autoCancel: true,
+        ),
+        windows: _createWindowsDetails(),
+      );
 
-  List<Map<String, int>> _calculateOutagePeriods(DailySchedule schedule,
-      {DailySchedule? nextDaySchedule}) {
-    final periods = <Map<String, int>>[];
-    bool inOutage = false;
-    int startIndex = -1;
+  Future<void> _showReminder(
+          int id, String title, String body, tz.TZDateTime time) =>
+      _notificationsPlugin.show(id, title, body, _reminderDetails(time));
 
-    for (int i = 0; i < 48; i++) {
-      int hour = i ~/ 2;
-      bool isSecondHalf = (i % 2) == 1;
-      LightStatus status = schedule.hours[hour];
-
-      bool isStrict = false;
-      if (status == LightStatus.off) {
-        isStrict = true;
-      } else if (status == LightStatus.semiOn && !isSecondHalf) {
-        isStrict = true;
-      } else if (status == LightStatus.semiOff && isSecondHalf) {
-        isStrict = true;
-      }
-
-      bool isContinuity = isStrict || (status == LightStatus.maybe);
-
-      if (!inOutage) {
-        if (isStrict) {
-          inOutage = true;
-          startIndex = i;
-        }
-      } else {
-        if (!isContinuity) {
-          inOutage = false;
-          periods.add({
-            'startHour': startIndex ~/ 2,
-            'startMinute': (startIndex % 2) * 30,
-            'endHour': i ~/ 2,
-            'endMinute': (i % 2) * 30,
-          });
-        }
-      }
-    }
-
-    if (inOutage) {
-      int endSlot = 48;
-
-      if (nextDaySchedule != null) {
-        for (int j = 0; j < 48; j++) {
-          int hour = j ~/ 2;
-          bool isSecondHalf = (j % 2) == 1;
-          LightStatus status = nextDaySchedule.hours[hour];
-
-          bool isStrict = false;
-          if (status == LightStatus.off) {
-            isStrict = true;
-          } else if (status == LightStatus.semiOn && !isSecondHalf) {
-            isStrict = true;
-          } else if (status == LightStatus.semiOff && isSecondHalf) {
-            isStrict = true;
-          }
-
-          bool isContinuity = isStrict || (status == LightStatus.maybe);
-
-          if (isContinuity) {
-            endSlot++;
-          } else {
-            break;
-          }
-        }
-      }
-
-      periods.add({
-        'startHour': startIndex ~/ 2,
-        'startMinute': (startIndex % 2) * 30,
-        'endHour': endSlot ~/ 2,
-        'endMinute': (endSlot % 2) * 30,
-      });
-    }
-
-    return periods;
-  }
-
-  Future<void> _scheduleOne({
+  Future<bool> _scheduleOne({
     required int id,
     required String title,
     required String body,
     required tz.TZDateTime time,
-    void Function(Object, StackTrace)? onError,
   }) async {
+    if (!_canSchedule(time, _now())) {
+      await _showReminder(id, title, body, time);
+      return false;
+    }
     try {
       await _notificationsPlugin.zonedSchedule(
         id,
         title,
         body,
         time,
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            'schedule_channel',
-            'Заплановані сповіщення',
-            channelDescription: 'Сповіщення про відключення світла',
-            importance: Importance.max,
-            priority: Priority.high,
-            icon: '@mipmap/launcher_icon',
-            when: time.millisecondsSinceEpoch,
-            showWhen: true,
-            usesChronometer: false,
-            autoCancel: true,
-          ),
-          windows: const WindowsNotificationDetails(),
-        ),
+        _reminderDetails(time),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       );
       AppLogger.d("✅ Заплановано: ID=$id, time=$time",
           tag: 'NotificationService');
+      return true;
+    } on ArgumentError {
+      if (Platform.isWindows && !time.isAfter(_now())) {
+        await _showReminder(id, title, body, time);
+        return false;
+      }
+      rethrow;
     } catch (e, stack) {
       AppLogger.e("Помилка планування ID=$id",
           tag: 'NotificationService', error: e);
-      onError?.call(e, stack);
+      Error.throwWithStackTrace(e, stack);
     }
   }
 
-  Future<void> testNotifications() async {
+  Future<void> testNotifications() => _enqueueReminderWork(_testNotifications);
+
+  Future<void> _testNotifications() async {
     AppLogger.d("========================================",
         tag: 'NotificationService');
     AppLogger.d("========== ТЕСТ СПОВІЩЕНЬ ==========",
@@ -690,7 +677,11 @@ class NotificationService {
 
     AppLogger.d("[1/4] Відправка миттєвого сповіщення...",
         tag: 'NotificationService');
-    await showImmediate("Тест", "Миттєве сповіщення працює!");
+    if (!_isInitialized) {
+      throw StateError('Notification service could not initialize');
+    }
+    await showImmediate("Тест", "Миттєве сповіщення працює!",
+        notificationId: testNotificationId, rethrowOnError: true);
     AppLogger.d("[1/4] ✅ Миттєве відправлено", tag: 'NotificationService');
 
     if (Platform.isWindows) {
@@ -700,21 +691,30 @@ class NotificationService {
     if (Platform.isAndroid || Platform.isWindows) {
       AppLogger.d("[2/4] Очистка старих тестових сповіщень...",
           tag: 'NotificationService');
+      try {
+        await _notificationsPlugin.cancel(_test10SecondId);
+        await _notificationsPlugin.cancel(_test1MinuteId);
+        AppLogger.d("[2/4] ✅ Очищено", tag: 'NotificationService');
+      } catch (e) {
+        AppLogger.w("Не вдалося скасувати старі тестові сповіщення: $e",
+            tag: 'NotificationService');
+        rethrow;
+      }
 
-      AppLogger.d("[2/4] ✅ Очищено", tag: 'NotificationService');
-
-      final now = tz.TZDateTime.now(tz.local);
+      final now = _now();
       AppLogger.d("Поточний час: $now", tag: 'NotificationService');
 
       AppLogger.d("[3/4] Планування: через 10 сек...",
           tag: 'NotificationService');
       final in10sec = now.add(const Duration(seconds: 10));
-      await _scheduleTest(99991, "Тест 10 сек", "Минуло 10 секунд!", in10sec);
+      await _scheduleTest(
+          _test10SecondId, "Тест 10 сек", "Минуло 10 секунд!", in10sec);
 
-      AppLogger.d("[3/4] Планування: через 1 мин...",
+      AppLogger.d("[3/4] Планування: через 1 хв...",
           tag: 'NotificationService');
-      final in1min = now.add(const Duration(minutes: 1));
-      await _scheduleTest(99993, "Тест 1 хв", "Минула 1 хвилина!", in1min);
+      final in1min = _now().add(const Duration(minutes: 1));
+      await _scheduleTest(
+          _test1MinuteId, "Тест 1 хв", "Минула 1 хвилина!", in1min);
 
       AppLogger.d("[3/4] ✅ Все заплановано", tag: 'NotificationService');
     }
@@ -744,7 +744,7 @@ class NotificationService {
 
   Future<void> _scheduleTest(
       int id, String title, String body, tz.TZDateTime time) async {
-    final diffSec = time.difference(tz.TZDateTime.now(tz.local)).inSeconds;
+    final diffSec = time.difference(_now()).inSeconds;
     AppLogger.d("  Планування ID=$id на $time (через $diffSec сек)",
         tag: 'NotificationService');
 
@@ -767,7 +767,7 @@ class NotificationService {
             usesChronometer: false,
             autoCancel: true,
           ),
-          windows: const WindowsNotificationDetails(),
+          windows: _createWindowsDetails(),
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       );
@@ -775,16 +775,24 @@ class NotificationService {
     } catch (e, stackTrace) {
       AppLogger.e("ID=$id помилка",
           tag: 'NotificationService', error: e, stackTrace: stackTrace);
+      rethrow;
     }
   }
 
-  Future<void> cancelAllScheduled() async {
-    if (Platform.isAndroid) {
+  Future<void> cancelAllScheduled() =>
+      _enqueueReminderWork(_cancelAllScheduled);
+
+  Future<void> _cancelAllScheduled() async {
+    if (Platform.isAndroid || Platform.isWindows) {
       try {
         final pending =
             await _notificationsPlugin.pendingNotificationRequests();
-        for (var p in pending) {
-          await _notificationsPlugin.cancel(p.id);
+        for (var request in pending) {
+          await _notificationsPlugin.cancel(request.id);
+        }
+        final prefs = await PreferencesHelper.getSafeInstance();
+        if (!await prefs.remove(_reminderStateKey)) {
+          throw StateError('Cannot clear reminder delivery state');
         }
       } catch (e) {
         AppLogger.e("Помилка cancelAllScheduled",
