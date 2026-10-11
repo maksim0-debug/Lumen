@@ -215,18 +215,8 @@ class NotificationService {
   }
 
   WindowsNotificationDetails _createWindowsDetails() {
-    final iconPath = _windowsIconPath;
-    if (iconPath != null && iconPath.isNotEmpty) {
-      return WindowsNotificationDetails(
-        images: [
-          WindowsImage(
-            Uri.file(iconPath, windows: true),
-            altText: 'Lumen',
-            placement: WindowsImagePlacement.appLogoOverride,
-          ),
-        ],
-      );
-    }
+    // Keep the app identity icon configured during initialization; reserve the
+    // toast body for reminder text instead of repeating the app logo.
     return const WindowsNotificationDetails();
   }
 

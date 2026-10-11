@@ -67,14 +67,7 @@ void main() {
           p.join(root.path, 'support', 'windows_notification_icon.png');
       expect(plugin.settings?.windows?.iconPath, expected);
       expect(await File(expected).readAsBytes(), assetBytes);
-      expect(
-          service
-              .createWindowsDetails()
-              .images
-              .single
-              .uri
-              .toFilePath(windows: true),
-          expected);
+      expect(service.createWindowsDetails().images, isEmpty);
       expect(await Directory(p.join(root.path, 'support')).list().length, 1);
     });
 

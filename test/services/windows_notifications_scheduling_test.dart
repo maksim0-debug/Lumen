@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:lumen/models/schedule_status.dart';
@@ -110,18 +109,13 @@ void main() {
     });
 
     test(
-        'NotificationService createWindowsDetails attaches appLogoOverride image when iconPath is set',
+        'NotificationService keeps the toast body free of images when iconPath is set',
         () {
       final service = NotificationService();
       service.windowsIconPath = 'C:\\test\\icon.png';
 
       final details = service.createWindowsDetails();
-      expect(details.images.length, 1);
-      expect(details.images.first.placement,
-          WindowsImagePlacement.appLogoOverride);
-      expect(details.images.first.altText, 'Lumen');
-      expect(details.images.first.uri.toFilePath(windows: true),
-          'C:\\test\\icon.png');
+      expect(details.images, isEmpty);
     });
 
     test(
