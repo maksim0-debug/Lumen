@@ -62,8 +62,7 @@ class _Effects extends Fake implements ScheduleNotificationCoordinator {
   @override
   Future<void> handleScheduleUpdate(
       {required Map<String, FullSchedule> allSchedules,
-      required String currentGroup,
-      Iterable<String>? notificationGroups}) async {
+      required String currentGroup}) async {
     applied++;
   }
 

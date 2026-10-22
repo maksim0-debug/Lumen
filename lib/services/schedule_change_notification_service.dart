@@ -45,15 +45,12 @@ class ScheduleChangeNotificationService {
 
         try {
           if (selectedGroup != null) {
-            final previous = prefs.getString('selected_group') ?? 'GPV2.1';
             final currentGroups =
                 prefs.getStringList('notification_groups') ?? [];
-            if (savedGroups == null &&
-                (currentGroups.isEmpty ||
-                    (currentGroups.length == 1 &&
-                        currentGroups.contains(previous)))) {
-              await write(
-                  prefs.setStringList('notification_groups', [selectedGroup]));
+            if (savedGroups == null && currentGroups.isEmpty) {
+              // Freeze the legacy fallback before changing the viewed group.
+              await write(prefs.setStringList('notification_groups',
+                  PreferencesHelper.getActiveNotificationGroups(prefs)));
             }
             await write(prefs.setString('selected_group', selectedGroup));
           }

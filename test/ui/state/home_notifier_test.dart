@@ -141,6 +141,48 @@ void main() {
       expect(state.historyVersions, isEmpty);
     });
 
+    for (final groups in <List<String>?>[
+      ['GPV2.1'],
+      ['GPV1.2'],
+      ['GPV2.1', 'GPV1.2'],
+      [],
+      null,
+    ]) {
+      test('view changes preserve notification groups $groups', () async {
+        SharedPreferences.setMockInitialValues({
+          'selected_group': 'GPV2.1',
+          if (groups != null) 'notification_groups': groups,
+        });
+        final expected = groups == null || groups.isEmpty ? ['GPV2.1'] : groups;
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(homeNotifierProvider.notifier);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('prev_hash_GPV1.1_today', '0' * 24);
+        notifier.state = notifier.state.copyWith(allSchedules: {
+          'GPV1.1': FullSchedule(
+            today: DailySchedule.fromEncodedString('1' * 24),
+            tomorrow: DailySchedule.empty(),
+          ),
+        });
+
+        for (final viewed in ['GPV1.1', 'GPV3.2', 'GPV2.1']) {
+          await notifier.changeGroup(viewed);
+          expect(container.read(homeNotifierProvider).currentGroup, viewed);
+          expect(container.read(homeNotifierProvider).notificationGroups,
+              expected);
+          expect(prefs.getString('selected_group'), viewed);
+          expect(prefs.getStringList('notification_groups'), expected);
+          expect(prefs.getString('prev_hash_GPV1.1_today'), '0' * 24,
+              reason: 'Viewing a schedule must not acknowledge its changes');
+        }
+
+        await notifier.loadPreferencesAndData(refreshSchedules: false);
+        expect(
+            container.read(homeNotifierProvider).notificationGroups, expected);
+      });
+    }
+
     test('switchMode toggles DataSourceMode when enabled', () async {
       final container = ProviderContainer();
       addTearDown(container.dispose);

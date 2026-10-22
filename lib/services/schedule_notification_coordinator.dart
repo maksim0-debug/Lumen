@@ -49,18 +49,14 @@ class ScheduleNotificationCoordinator {
   Future<void> handleScheduleUpdate({
     required Map<String, FullSchedule> allSchedules,
     required String currentGroup,
-    Iterable<String>? notificationGroups,
   }) {
     return _enqueue(() => _handleScheduleUpdate(
-        allSchedules: allSchedules,
-        currentGroup: currentGroup,
-        notificationGroups: notificationGroups));
+        allSchedules: allSchedules, currentGroup: currentGroup));
   }
 
   Future<void> _handleScheduleUpdate({
     required Map<String, FullSchedule> allSchedules,
     required String currentGroup,
-    Iterable<String>? notificationGroups,
   }) async {
     if (Platform.isAndroid) {
       await ScheduleChangeNotificationService()
@@ -75,10 +71,8 @@ class ScheduleNotificationCoordinator {
       final notifyChange = prefs.getBool('notify_schedule_change') ?? true;
       final now = ScheduleClock.now();
 
-      final groupsToCheck = <String>{
-        ...?notificationGroups,
-        currentGroup,
-      };
+      final groupsToCheck =
+          PreferencesHelper.getActiveNotificationGroups(prefs).toSet();
 
       for (final group in groupsToCheck) {
         if (!allSchedules.containsKey(group)) continue;
@@ -147,12 +141,8 @@ class ScheduleNotificationCoordinator {
       return;
     }
 
-    List<String> notificationGroups =
-        prefs.getStringList('notification_groups') ?? [];
-
-    if (notificationGroups.isEmpty) {
-      notificationGroups = [currentGroup];
-    }
+    final notificationGroups =
+        PreferencesHelper.getActiveNotificationGroups(prefs);
 
     bool first = true;
     for (String group in notificationGroups) {

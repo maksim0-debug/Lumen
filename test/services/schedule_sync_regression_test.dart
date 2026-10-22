@@ -81,6 +81,7 @@ void main() {
       'prev_date_GPV1.1_today':
           AppFormatters.formatDateKey(ScheduleClock.now()),
       'notify_schedule_change': true,
+      'notification_groups': ['GPV1.1'],
     });
     final notifier = RecordingNotifications();
     final first = ScheduleNotificationCoordinator(notifier: notifier);

@@ -107,4 +107,4 @@ scratch/
 lumen_admin.json
 *admin*.json
 !lumen_admin.example.json
-
+prototypes

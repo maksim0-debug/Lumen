@@ -9,6 +9,7 @@ import 'package:lumen/utils/app_formatters.dart';
 
 class RecordingNotifications extends Fake implements NotificationService {
   final messages = <({String title, String body, String? group})>[];
+  final scheduledGroups = <String?>[];
 
   @override
   Future<void> showImmediate(String title, String body,
@@ -25,7 +26,9 @@ class RecordingNotifications extends Fake implements NotificationService {
   Future<void> scheduleNotificationsForToday(FullSchedule schedule,
       {String? groupName,
       bool cancelExisting = true,
-      bool rethrowOnError = false}) async {}
+      bool rethrowOnError = false}) async {
+    scheduledGroups.add(groupName);
+  }
 }
 
 void main() {
@@ -68,24 +71,68 @@ void main() {
   }
 
   test('other-group changes do not notify unchanged selected group', () async {
-    SharedPreferences.setMockInitialValues({'notify_schedule_change': true});
+    SharedPreferences.setMockInitialValues({
+      'notify_schedule_change': true,
+      'notification_groups': ['GPV1.1'],
+    });
     final notifications = RecordingNotifications();
     final coordinator =
         ScheduleNotificationCoordinator(notifier: notifications);
     await coordinator.handleScheduleUpdate(
       allSchedules: {'GPV2.1': schedule(a), 'GPV1.1': schedule(a)},
       currentGroup: 'GPV2.1',
-      notificationGroups: ['GPV1.1'],
     );
     await coordinator.handleScheduleUpdate(
       allSchedules: {'GPV2.1': schedule(a), 'GPV1.1': schedule(b)},
       currentGroup: 'GPV2.1',
-      notificationGroups: ['GPV1.1'],
     );
     if (Platform.isWindows) {
       expect(notifications.messages, hasLength(1));
       expect(notifications.messages.single.group, 'GPV1.1');
     }
+  });
+
+  for (final groups in [
+    ['GPV1.1'],
+    ['GPV1.1', 'GPV3.2'],
+  ]) {
+    test('viewed group cannot receive change alerts or reminders: $groups',
+        () async {
+      SharedPreferences.setMockInitialValues({
+        'selected_group': 'GPV2.1',
+        'notification_groups': groups,
+        'notify_schedule_change': true,
+      });
+      final notifications = RecordingNotifications();
+      final coordinator = ScheduleNotificationCoordinator(
+          notifier: notifications, isPlatformSupported: true);
+      for (final code in [a, b]) {
+        await coordinator.handleScheduleUpdate(
+          allSchedules: {
+            for (final group in ['GPV2.1', ...groups]) group: schedule(code),
+          },
+          currentGroup: 'GPV2.1',
+        );
+      }
+      if (Platform.isWindows) {
+        expect(notifications.messages.map((m) => m.group), groups);
+      }
+      expect(notifications.scheduledGroups, [...groups, ...groups]);
+    });
+  }
+
+  test(
+      'legacy reminder fallback uses saved preferences instead of viewed group',
+      () async {
+    SharedPreferences.setMockInitialValues({'selected_group': 'GPV1.1'});
+    final notifications = RecordingNotifications();
+    await ScheduleNotificationCoordinator(
+            notifier: notifications, isPlatformSupported: true)
+        .updateNotificationsOnly(
+      allSchedules: {'GPV1.1': schedule(a), 'GPV2.1': schedule(b)},
+      currentGroup: 'GPV2.1',
+    );
+    expect(notifications.scheduledGroups, ['GPV1.1']);
   });
 
   test(

@@ -8,6 +8,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:lumen/models/schedule_status.dart';
 import 'package:lumen/models/schedule_change_event.dart';
 import 'package:lumen/services/history_service.dart';
+import 'package:lumen/services/fcm_service.dart';
 import 'package:lumen/services/schedule_change_notification_service.dart';
 import 'package:lumen/services/schedule_change_notification_store.dart';
 import 'package:lumen/services/schedule_clock.dart';
@@ -190,21 +191,51 @@ void main() {
     expect(shown.single.event.hash, b);
   });
 
-  test(
-      'selected group switch and empty group fallback initialize the effective group',
+  test('view changes preserve notification policy, pending changes and topics',
       () async {
     await initializeToday();
+    final pending = snapshot(b, '10.10.2026 07:38');
+    await persist(pending);
+    await service.observeSchedules(pending, deliver: false);
+    final policies = await db.query('schedule_notification_policy');
+    final topics = FcmService.topicsForPreferences(prefs);
     await service.updatePreferences(selectedGroup: 'GPV2.1');
     expect(prefs.getString('selected_group'), 'GPV2.1');
-    expect(prefs.getStringList('notification_groups'), ['GPV2.1']);
-    await service.observeSchedules(snapshot(a, '10.10.2026 07:37'));
-    await service.updatePreferences(groups: []);
-    await service.observeSchedules(snapshot(b, '10.10.2026 07:38'));
-    expect(shown.map((c) => c.event.group), ['GPV2.1']);
+    expect(prefs.getStringList('notification_groups'), ['GPV1.2']);
+    expect(await db.query('schedule_notification_policy'), policies);
+    expect(FcmService.topicsForPreferences(prefs), topics);
+    await service.observeSchedules(pending);
+    expect(shown.map((c) => c.event.group), ['GPV1.2']);
+    final unselected = ScheduleChangeEvent.fromSchedule(
+        'GPV2.1', pending['GPV2.1']!, 'today', now);
+    await service.handlePush(push(unselected));
+    expect(shown, hasLength(1));
+
     await service.updatePreferences(groups: ['GPV1.2', 'GPV2.1']);
     await service.updatePreferences(selectedGroup: 'GPV3.1');
     expect(prefs.getStringList('notification_groups'), ['GPV1.2', 'GPV2.1']);
   });
+
+  for (final legacyGroups in <List<String>?>[null, []]) {
+    test('legacy groups $legacyGroups are frozen before switching the view',
+        () async {
+      if (legacyGroups == null) {
+        await prefs.remove('notification_groups');
+      } else {
+        await prefs.setStringList('notification_groups', legacyGroups);
+      }
+      await initializeToday();
+      final topics = FcmService.topicsForPreferences(prefs);
+      for (final viewed in ['GPV2.1', 'GPV3.1', 'GPV1.2']) {
+        await service.updatePreferences(selectedGroup: viewed);
+        expect(prefs.getString('selected_group'), viewed);
+        expect(prefs.getStringList('notification_groups'), ['GPV1.2']);
+        expect(FcmService.topicsForPreferences(prefs), topics);
+      }
+      await service.observeSchedules(snapshot(b, '10.10.2026 07:38'));
+      expect(shown.map((c) => c.event.group), ['GPV1.2']);
+    });
+  }
 
   test(
       'late completion from the previous activation cannot acknowledge a new claim',

@@ -302,25 +302,20 @@ class HomeNotifier extends Notifier<HomeState> {
             .updatePreferences(selectedGroup: newGroup);
         await prefs.reload();
       } else {
-        await prefs.setString('selected_group', newGroup);
-      }
-
-      List<String> notifGroups =
-          prefs.getStringList('notification_groups') ?? [];
-      if (notifGroups.isEmpty ||
-          (notifGroups.length == 1 &&
-              notifGroups.contains(state.currentGroup))) {
-        if (!Platform.isAndroid) {
-          await prefs.setStringList('notification_groups', [newGroup]);
+        if ((prefs.getStringList('notification_groups') ?? []).isEmpty) {
+          // Preserve the effective notification choice for legacy preferences.
+          if (!await prefs.setStringList('notification_groups',
+              PreferencesHelper.getActiveNotificationGroups(prefs))) {
+            throw StateError('Cannot persist schedule notification groups');
+          }
         }
-        state = state.copyWith(notificationGroups: [newGroup]);
+        if (!await prefs.setString('selected_group', newGroup)) {
+          throw StateError('Cannot persist viewed schedule group');
+        }
       }
-      if (Platform.isAndroid) {
-        state = state.copyWith(
-            notificationGroups:
-                PreferencesHelper.getActiveNotificationGroups(prefs));
-      }
-      unawaited(FcmService().syncTopicSubscriptions());
+      state = state.copyWith(
+          notificationGroups:
+              PreferencesHelper.getActiveNotificationGroups(prefs));
     } catch (e) {
       AppLogger.e("Error saving group preference", tag: 'Main', error: e);
     }
@@ -340,24 +335,8 @@ class HomeNotifier extends Notifier<HomeState> {
 
     if (state.viewMode == ScheduleViewMode.today ||
         state.viewMode == ScheduleViewMode.tomorrow) {
-      final now = ScheduleClock.now();
       await refreshVersionsForCurrentMode();
       if (!ref.mounted) return;
-
-      try {
-        final prefs = await PreferencesHelper.getSafeInstance();
-        if (state.allSchedules.containsKey(newGroup)) {
-          final schedule = state.allSchedules[newGroup]!;
-          final keyHash = "prev_hash_${newGroup}_today";
-          final keyDate = "prev_date_${newGroup}_today";
-          final todayStr = AppFormatters.formatDateKey(now);
-
-          await prefs.setString(keyHash, schedule.today.scheduleHash);
-          await prefs.setString(keyDate, todayStr);
-        }
-      } catch (e) {
-        AppLogger.e("Error syncing hash", tag: 'Main', error: e);
-      }
     } else if (state.isHistoryMode) {
       final targetDate = state.displayDate;
       await loadHistoryData(targetDate);
@@ -703,7 +682,8 @@ class HomeNotifier extends Notifier<HomeState> {
 
     if (prefs != null) {
       final savedGroup = prefs.getString('selected_group') ?? "GPV2.1";
-      final savedNotifGroups = prefs.getStringList('notification_groups') ?? [];
+      final savedNotifGroups =
+          PreferencesHelper.getActiveNotificationGroups(prefs);
       groupChanged = savedGroup != previousGroup;
 
       state = state.copyWith(
@@ -864,7 +844,6 @@ class HomeNotifier extends Notifier<HomeState> {
     await _scheduleNotificationCoordinator.handleScheduleUpdate(
       allSchedules: allData,
       currentGroup: state.currentGroup,
-      notificationGroups: state.notificationGroups,
     );
     if (!ref.mounted) return;
     _achievementService.checkAll(
