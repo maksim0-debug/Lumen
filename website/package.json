@@ -1,0 +1,15 @@
+{
+  "name": "lumen-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static Ukrainian product website for Lumen.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check.mjs && node --test scripts/serve.test.mjs",
+    "check:live": "node scripts/check-live.mjs",
+    "start": "node scripts/serve.mjs",
+    "submit:indexnow": "node scripts/submit-indexnow.mjs"
+  }
+}

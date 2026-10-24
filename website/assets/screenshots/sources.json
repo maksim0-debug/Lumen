@@ -1,0 +1,45 @@
+{
+  "sourceDocument": "User-provided home screenshot and application README.md",
+  "transformation": "None. Original screenshot bytes are preserved. The social preview is composed separately from the home screenshot.",
+  "contentNote": "These are application screenshots with historical example data, not live outage information.",
+  "screenshots": [
+    {
+      "file": "home.png",
+      "sourceType": "user-provided screenshot",
+      "sourceFile": "Photos_vYhGGAH6Be.png",
+      "originalWidth": 426,
+      "originalHeight": 921,
+      "bytes": 148372,
+      "sha256": "3bbb6bf1546295dbd3ba2228cdbd542bee6764db6f814c7da51dd29ef9ca8deb",
+      "content": "User-provided main schedule screen with group 2.1, example outage intervals, countdown and emergency notice. The obsolete lightning marker in the hourly grid has been removed by the user.",
+      "publicUseAssessment": "No visible credentials, address, name or other identifying personal data. Ukrainian UI text is appropriate for a public product demonstration. Label as an application screenshot because the schedule and countdown are historical."
+    },
+    {
+      "file": "history.png",
+      "sourceUrl": "https://github.com/user-attachments/assets/507cbab0-0108-49cf-a359-e366717ec4ab",
+      "originalWidth": 360,
+      "originalHeight": 273,
+      "bytes": 29419,
+      "content": "Version selection dialog for group 2.1 on 8 October 2026.",
+      "publicUseAssessment": "No visible private or sensitive data. Ukrainian UI text and historical version timestamps are appropriate for a public feature demonstration."
+    },
+    {
+      "file": "notifications.png",
+      "sourceUrl": "https://github.com/user-attachments/assets/d350b489-5b2a-441b-a9ae-5bc33fe26e27",
+      "originalWidth": 663,
+      "originalHeight": 626,
+      "bytes": 52137,
+      "content": "Notification settings with group selection, reminder intervals, schedule changes, tomorrow's schedule and emergency notifications.",
+      "publicUseAssessment": "No visible private or sensitive data. Ukrainian UI text is appropriate for public product documentation."
+    },
+    {
+      "file": "analytics.png",
+      "sourceUrl": "https://github.com/user-attachments/assets/e3e1be2c-7101-4f8f-9b2e-2e6c715981d5",
+      "originalWidth": 414,
+      "originalHeight": 905,
+      "bytes": 90545,
+      "content": "Accuracy analytics screen comparing example observed power with the planned schedule for group 2.1.",
+      "publicUseAssessment": "No visible address, identity, credentials or other identifying personal data. Example power observations and statistics are already public in the README. Ukrainian UI text is appropriate for a public feature demonstration and should not be presented as a live status or a universal performance claim."
+    }
+  ]
+}

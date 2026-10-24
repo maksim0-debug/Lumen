@@ -1,0 +1,11 @@
+{
+  "name": "Lumen — графіки відключень Київщини",
+  "short_name": "Lumen",
+  "lang": "uk",
+  "start_url": "/Lumen/",
+  "scope": "/Lumen/",
+  "display": "browser",
+  "theme_color": "#f7f6f2",
+  "background_color": "#f7f6f2",
+  "icons": [{ "src": "/Lumen/assets/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}

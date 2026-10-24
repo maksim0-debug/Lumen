@@ -3,6 +3,8 @@
 Сучасний і швидкий додаток для моніторингу графіків та фактичної наявності електроенергії (ДТЕК Київські регіональні електромережі).  
 Доступний для **Android** та **Windows**.
 
+**[Website and downloads](https://maksim0-debug.github.io/Lumen/)** · [Website source](website/README.md)
+
 <img width="421" height="921" alt="Головний екран застосунку Lumen з погодинним графіком відключень та таймером" src="https://github.com/user-attachments/assets/571d1220-b500-4ad2-9654-99b5e19a6228" />
 
 ---

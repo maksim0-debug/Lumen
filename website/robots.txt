@@ -1,0 +1,6 @@
+# Project-local reference; not a host-wide robots.txt.
+# Crawlers read /robots.txt at the host root. Submit this sitemap directly.
+User-agent: *
+Allow: /
+
+Sitemap: https://maksim0-debug.github.io/Lumen/sitemap.xml

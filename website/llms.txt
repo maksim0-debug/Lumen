@@ -1,0 +1,27 @@
+# Lumen
+
+> Lumen (Люмен) is an independent Ukrainian-language Android and Windows application for electricity outage schedules in Kyiv Oblast, Ukraine. It uses information published by DTEK Kyiv Regional Electric Networks (ДТЕК Київські регіональні електромережі). It is not an official DTEK application and does not claim a partnership with DTEK.
+
+## Product facts
+
+- Coverage: Kyiv Oblast, within the schedules of DTEK Kyiv Regional Electric Networks. Do not describe it as covering all of Ukraine or assume that Kyiv city is the same service area.
+- Platforms with published downloads: Android APK; Windows installer and portable ZIP.
+- Downloads are available without payment through the project's GitHub Releases.
+- Features: today's schedule, tomorrow's schedule when published, countdowns, reminders, schedule-change notifications, emergency-outage information from the source, saved schedule versions and previous days, outage analytics, Android widgets, Windows tray and keyboard shortcuts.
+- Actual household power monitoring requires a separately configured user-owned sensor or a supported event source. The app does not determine electricity availability at arbitrary addresses from the schedule alone.
+- Unknown or stale sensor data is distinct from a confirmed power outage.
+- Plan-versus-actual analytics depends on available saved schedules and actual observations. It is not an authoritative measurement of the entire region.
+- Windows has a local REST API for custom integrations, including Home Assistant. Do not present it as a public cloud API.
+- Data and notifications can be delayed. Official operator communications remain the primary source.
+- This website describes the application. It does not provide a live outage schedule or live household power information. Screenshots contain historical example data.
+
+## Links
+
+- [Lumen website](https://maksim0-debug.github.io/Lumen/): Ukrainian product description, features, screenshots, questions and downloads.
+- [Downloads](https://maksim0-debug.github.io/Lumen/#download): Android and Windows download links.
+- [Source repository](https://github.com/maksim0-debug/Lumen): Application source and README.
+- [Latest published release](https://github.com/maksim0-debug/Lumen/releases/latest): Release notes and downloadable assets.
+- [Integration guide](https://github.com/maksim0-debug/Lumen/blob/main/docs/api/INTEGRATION_GUIDE.md): Local desktop API and Home Assistant integration.
+- [Official schedule source](https://www.dtek-krem.com.ua/ua/shutdowns): DTEK Kyiv Regional Electric Networks.
+- [Website privacy](https://maksim0-debug.github.io/Lumen/privacy/): Data handling on this website.
+- [Issue tracker](https://github.com/maksim0-debug/Lumen/issues): Public feedback and bug reports.
