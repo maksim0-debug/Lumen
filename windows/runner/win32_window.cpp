@@ -208,7 +208,8 @@ Win32Window::MessageHandler(HWND hwnd,
     }
 
     case WM_ACTIVATE:
-      if (child_content_ != nullptr) {
+      if (LOWORD(wparam) != WA_INACTIVE && child_content_ != nullptr &&
+          ::IsWindowVisible(hwnd) && !::IsIconic(hwnd)) {
         SetFocus(child_content_);
       }
       return 0;
@@ -246,7 +247,11 @@ void Win32Window::SetChildContent(HWND content) {
   MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
              frame.bottom - frame.top, true);
 
-  SetFocus(child_content_);
+  // Hidden and minimized startup must not take keyboard focus. WM_ACTIVATE
+  // transfers focus to Flutter when the user opens the window.
+  if (::IsWindowVisible(window_handle_) && !::IsIconic(window_handle_)) {
+    SetFocus(child_content_);
+  }
 }
 
 RECT Win32Window::GetClientArea() {

@@ -73,7 +73,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _desktopTrayCoordinator.init();
     unawaited(DesktopSyncService().init());
     _initAchievements();
     _ticker = VisibleScheduleTicker(

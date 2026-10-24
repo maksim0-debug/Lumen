@@ -5,13 +5,21 @@ import 'package:window_manager/window_manager.dart';
 
 import 'api/local_api_service.dart';
 import 'desktop_sync_service.dart';
+import 'app_logger.dart';
 
 class DesktopTrayCoordinator with WindowListener, TrayListener {
+  DesktopTrayCoordinator._();
+  static final _instance = DesktopTrayCoordinator._();
+  factory DesktopTrayCoordinator() => _instance;
+
+  bool _initialized = false;
+
   Future<void> init() async {
-    if (Platform.isWindows) {
+    if (Platform.isWindows && !_initialized) {
+      await _initTray();
       windowManager.addListener(this);
       trayManager.addListener(this);
-      await _initTray();
+      _initialized = true;
     }
   }
 
@@ -20,6 +28,7 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
     if (Platform.isWindows) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
+      _initialized = false;
     }
     LocalApiService().stop();
   }
@@ -40,7 +49,17 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
   }
 
   @override
-  void onTrayIconMouseDown() => windowManager.show();
+  void onTrayIconMouseDown() => _showWindow();
+
+  Future<void> _showWindow() async {
+    try {
+      await windowManager.show();
+      await windowManager.focus();
+    } catch (error, stack) {
+      AppLogger.e('Cannot restore the window from the tray',
+          tag: 'WindowsTray', error: error, stackTrace: stack);
+    }
+  }
 
   @override
   void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
@@ -48,8 +67,7 @@ class DesktopTrayCoordinator with WindowListener, TrayListener {
   @override
   void onTrayMenuItemClick(MenuItem menuItem) async {
     if (menuItem.key == 'show_window') {
-      windowManager.show();
-      windowManager.focus();
+      await _showWindow();
     } else if (menuItem.key == 'exit_app') {
       DesktopSyncService().dispose();
       await LocalApiService().stop();

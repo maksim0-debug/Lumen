@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:launch_at_startup/launch_at_startup.dart';
 import '../services/android_diagnostic_settings.dart';
 import '../services/api/local_api_service.dart';
 import '../services/app_info_service.dart';
@@ -28,6 +28,7 @@ import 'shortcuts/shortcut_registry.dart';
 import '../services/history_service.dart';
 import 'widgets/schedule_version_filter_tile.dart';
 import 'widgets/settings_card.dart';
+import 'widgets/windows_startup_settings.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dialogs/app_update_dialog.dart';
 import 'state/app_update_notifier.dart';
@@ -53,7 +54,6 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _notifyEmergencyOutages = true;
   bool _isDarkMode = true;
   bool _animationsEnabled = true;
-  bool _launchAtStartup = false;
   bool _isLoading = true;
   bool _enableLogging = true;
   bool _verboseAndroidDiagnostics = false;
@@ -92,16 +92,6 @@ class _SettingsPageState extends State<SettingsPage> {
             tag: 'SettingsPage');
       }
 
-      bool launchOnStart = false;
-      if (Platform.isWindows) {
-        try {
-          launchOnStart = await launchAtStartup.isEnabled();
-        } catch (e) {
-          AppLogger.e("Error checking launchAtStartup",
-              tag: 'SettingsPage', error: e);
-        }
-      }
-
       String appVersion = '';
       try {
         appVersion = await AppInfoService.getAppVersion();
@@ -113,7 +103,6 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
 
       setState(() {
-        _launchAtStartup = launchOnStart;
         _appVersion = appVersion;
         if (prefs != null) {
           _notify1hBeforeOff = prefs.getBool('notify_1h_before_off') ?? true;
@@ -326,7 +315,8 @@ class _SettingsPageState extends State<SettingsPage> {
             : ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  if (Platform.isWindows) _buildWindowsStartupCard(),
+                  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
+                    const WindowsStartupSettings(),
                   _buildAppearanceCard(),
                   _buildNotificationsCard(),
                   _buildPowerMonitorCard(),
@@ -343,36 +333,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
       ),
-    );
-  }
-
-  Widget _buildWindowsStartupCard() {
-    return SettingsCard(
-      key: const ValueKey('card_launch'),
-      title: "Запуск застосунку",
-      icon: Icons.power_settings_new,
-      collapsible: false,
-      initiallyExpanded: true,
-      children: [
-        _buildSwitchTile(
-          "Автозапуск разом із Windows",
-          "Запускати застосунок автоматично під час входу в систему",
-          _launchAtStartup,
-          (val) async {
-            setState(() => _launchAtStartup = val);
-            try {
-              if (val) {
-                await launchAtStartup.enable();
-              } else {
-                await launchAtStartup.disable();
-              }
-            } catch (e) {
-              AppLogger.e("Error toggling launchAtStartup",
-                  tag: 'SettingsPage', error: e);
-            }
-          },
-        ),
-      ],
     );
   }
 

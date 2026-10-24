@@ -85,8 +85,7 @@ msix_config:
   store_logo_path: assets/icon.png
   capabilities: internetClient
   execution_alias: lumen
-  extensions:
-    - |
-      <desktop:Extension Category="windows.startupTask" Executable="Lumen.exe" EntryPoint="Windows.FullTrustApplication">
-        <desktop:StartupTask TaskId="LumenStartup" Enabled="true" DisplayName="Lumen" />
-      </desktop:Extension>
+  startup_task:
+    task_id: LumenStartup
+    enabled: false
+    parameters: --autostart

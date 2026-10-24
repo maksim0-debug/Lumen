@@ -7,7 +7,7 @@ import 'services/android_fetch_diagnostics.dart';
 import 'services/platform_init_service.dart';
 import 'app.dart';
 
-void main() async {
+void main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   AndroidFetchDiagnostics.instance.startLifecycleLogging();
 
@@ -18,7 +18,7 @@ void main() async {
     AppLogger.i("========================================", tag: 'MAIN');
   }));
 
-  await PlatformInitService.init();
+  await PlatformInitService.init(arguments);
 
   // Не блокуємо рендеринг інтерфейсу запуском повільних нативних сервісів
   unawaited(PlatformInitService.initBackgroundServices());
