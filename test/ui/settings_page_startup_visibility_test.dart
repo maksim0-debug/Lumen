@@ -17,8 +17,8 @@ void main() {
     AppInfoService.setMockPackageInfo(PackageInfo(
       appName: 'Lumen',
       packageName: 'lumen',
-      version: '1.3.2',
-      buildNumber: '14',
+      version: '1.4.0',
+      buildNumber: '15',
     ));
     binding.defaultBinaryMessenger.setMockMethodCallHandler(
         WindowsStartupService.channel, (_) async => 'disabled');

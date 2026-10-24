@@ -19,14 +19,14 @@ void main() {
         PackageInfo(
           appName: 'Lumen',
           packageName: 'lumen',
-          version: '1.3.2',
-          buildNumber: '14',
+          version: '1.4.0',
+          buildNumber: '15',
           buildSignature: '',
         ),
       );
 
       final version = await AppInfoService.getAppVersion();
-      expect(version, equals('1.3.2+14'));
+      expect(version, equals('1.4.0+15'));
     });
 
     test('returns version string without build number if build number is empty',
@@ -35,14 +35,14 @@ void main() {
         PackageInfo(
           appName: 'Lumen',
           packageName: 'lumen',
-          version: '1.3.2',
+          version: '1.4.0',
           buildNumber: '',
           buildSignature: '',
         ),
       );
 
       final version = await AppInfoService.getAppVersion();
-      expect(version, equals('1.3.2'));
+      expect(version, equals('1.4.0'));
     });
 
     test(
@@ -52,22 +52,22 @@ void main() {
         PackageInfo(
           appName: 'Lumen',
           packageName: 'lumen',
-          version: '1.3.2+14',
-          buildNumber: '14',
+          version: '1.4.0+15',
+          buildNumber: '15',
           buildSignature: '',
         ),
       );
 
       final version = await AppInfoService.getAppVersion();
-      expect(version, equals('1.3.2+14'));
+      expect(version, equals('1.4.0+15'));
     });
 
     test('caches package info on repeated calls', () async {
       final info = PackageInfo(
         appName: 'Lumen',
         packageName: 'lumen',
-        version: '1.3.2',
-        buildNumber: '14',
+        version: '1.4.0',
+        buildNumber: '15',
         buildSignature: '',
       );
       AppInfoService.setMockPackageInfo(info);
