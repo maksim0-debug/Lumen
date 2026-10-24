@@ -61,8 +61,9 @@ verify((await stat(join(root, 'assets/social.png'))).size > 1000, 'Social previe
 const manifest = JSON.parse(await read('site.webmanifest'));
 verify(manifest.start_url === basePath && manifest.scope === basePath, 'Manifest must remain inside the project path');
 for (const icon of manifest.icons) {
-  verify(icon.src.startsWith(basePath), 'Manifest icon escapes project path');
-  verify((await stat(join(root, fileFor(icon.src)))).isFile(), 'Manifest icon missing');
+  const iconUrl = new URL(icon.src, siteUrl);
+  verify(iconUrl.origin === siteUrl.origin && iconUrl.pathname.startsWith(basePath), 'Manifest icon escapes project path');
+  verify((await stat(join(root, fileFor(iconUrl.pathname)))).isFile(), 'Manifest icon missing');
 }
 JSON.parse(await read('assets/screenshots/sources.json'));
 

@@ -6,7 +6,7 @@ import { contentPaths, siteUrl } from './site-config.mjs';
 
 const root = resolve(import.meta.dirname, '..', 'dist');
 const ownershipFiles = (await readdir(root)).filter(name => /^google[a-f0-9]+\.html$/i.test(name) || name === 'BingSiteAuth.xml' || /^[a-f0-9]{32}\.txt$/i.test(name));
-const paths = [...contentPaths, '404.html', 'robots.txt', 'sitemap.xml', 'llms.txt', 'site.webmanifest', 'assets/favicon.svg', 'assets/icon.png', 'assets/styles.css', 'assets/site.js', 'assets/social.png', 'assets/screenshots/home.png', 'assets/screenshots/analytics.png', 'assets/screenshots/history.png', 'assets/screenshots/notifications.png', 'assets/screenshots/sources.json', ...ownershipFiles];
+const paths = [...contentPaths, '404.html', 'robots.txt', 'sitemap.xml', 'llms.txt', 'site.webmanifest', 'assets/favicon.svg', 'assets/favicon-48.png', 'assets/icon.png', 'assets/styles.css', 'assets/site.js', 'assets/social.png', 'assets/screenshots/home.png', 'assets/screenshots/analytics.png', 'assets/screenshots/history.png', 'assets/screenshots/notifications.png', 'assets/screenshots/sources.json', ...ownershipFiles];
 const results = await Promise.all(paths.map(async path => {
   const response = await fetch(new URL(path, siteUrl), { signal: AbortSignal.timeout(20000) });
   assert.equal(response.status, 200, `${path}: expected HTTP 200`);

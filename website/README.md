@@ -31,6 +31,7 @@ After a successful deployment, run `npm run check:live` from `website/` to compa
 
 ## Content maintenance
 
+- `assets/favicon.svg` is the website icon source. Keep its internal padding when changing the artwork; regenerate the 48px favicon and 512px PNG from the same SVG and refresh their content-hash query parameters in HTML, JSON-LD and the manifest.
 - All download buttons use verified `releases/latest/download/` asset names from the application repository. They follow the latest release without hardcoding a version.
 - Keep claims, visible descriptions, JSON-LD and `llms.txt` aligned. Actual power monitoring requires a user-configured sensor; local desktop API access is not a public cloud API.
 - The main screenshot is the user-provided replacement with the obsolete lightning marker removed. Other screenshots come from the application README. Their origins and dimensions are recorded in `assets/screenshots/sources.json`. All contain historical example data.
